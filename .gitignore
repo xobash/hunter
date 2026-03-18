@@ -1,0 +1,5 @@
+# Local working files — not part of Hunter
+INSTRUCTIONS.md
+debloating windows.txt
+*.ux-backup
+audit-report.json
