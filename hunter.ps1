@@ -402,7 +402,9 @@ function global:Invoke-WingetWithMutex {
         if ($hasHandle) {
             try {
                 [void]$mutex.ReleaseMutex()
-            } catch { }
+            } catch {
+                Write-Log "Warning: failed to release winget mutex: $_" 'WARN'
+            }
         }
 
         if ($null -ne $mutex) {
@@ -436,7 +438,9 @@ function global:Invoke-DirectInstallerWithMutex {
         if ($hasHandle) {
             try {
                 [void]$mutex.ReleaseMutex()
-            } catch { }
+            } catch {
+                Write-Log "Warning: failed to release direct installer mutex: $_" 'WARN'
+            }
         }
 
         if ($null -ne $mutex) {
@@ -495,8 +499,10 @@ function Set-RegistryValue {
 
         Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type $Type -Force
         Write-Log "Registry set: $Path\$Name = $Value ($Type)"
+        return $true
     } catch {
         Write-Log "Failed to set registry $Path\$Name : $_" 'ERROR'
+        return $false
     }
 }
 
@@ -585,7 +591,13 @@ function Remove-RegistryValueForAllUsers {
 
     $defaultHiveLoaded = $false
     try {
-        $defaultHive = Join-Path $env:SystemDrive 'Users\Default\NTUSER.DAT'
+        $profileListDefault = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -Name Default -ErrorAction SilentlyContinue).Default
+        if ($profileListDefault) {
+            $defaultHive = Join-Path $profileListDefault 'NTUSER.DAT'
+        }
+        if ([string]::IsNullOrEmpty($defaultHive) -or -not (Test-Path $defaultHive)) {
+            $defaultHive = Join-Path $env:SystemDrive 'Users\Default\NTUSER.DAT'
+        }
         if (Test-Path $defaultHive) {
             $defaultHiveLoaded = Invoke-RegHiveCommandWithRetry -Action Load -HiveName 'HKU\HunterDefault' -HivePath $defaultHive
             if (-not $defaultHiveLoaded) {
@@ -663,7 +675,13 @@ function Set-RegistryValueForAllUsers {
 
     $defaultHiveLoaded = $false
     try {
-        $defaultHive = Join-Path $env:SystemDrive 'Users\Default\NTUSER.DAT'
+        $profileListDefault = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -Name Default -ErrorAction SilentlyContinue).Default
+        if ($profileListDefault) {
+            $defaultHive = Join-Path $profileListDefault 'NTUSER.DAT'
+        }
+        if ([string]::IsNullOrEmpty($defaultHive) -or -not (Test-Path $defaultHive)) {
+            $defaultHive = Join-Path $env:SystemDrive 'Users\Default\NTUSER.DAT'
+        }
         if (Test-Path $defaultHive) {
             $defaultHiveLoaded = Invoke-RegHiveCommandWithRetry -Action Load -HiveName 'HKU\HunterDefault' -HivePath $defaultHive
             if (-not $defaultHiveLoaded) {
@@ -725,7 +743,13 @@ function Set-DwordBatchForAllUsers {
     # Load Default hive once, apply all settings, unload once
     $defaultHiveLoaded = $false
     try {
-        $defaultHive = Join-Path $env:SystemDrive 'Users\Default\NTUSER.DAT'
+        $profileListDefault = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -Name Default -ErrorAction SilentlyContinue).Default
+        if ($profileListDefault) {
+            $defaultHive = Join-Path $profileListDefault 'NTUSER.DAT'
+        }
+        if ([string]::IsNullOrEmpty($defaultHive) -or -not (Test-Path $defaultHive)) {
+            $defaultHive = Join-Path $env:SystemDrive 'Users\Default\NTUSER.DAT'
+        }
         if (Test-Path $defaultHive) {
             $defaultHiveLoaded = Invoke-RegHiveCommandWithRetry -Action Load -HiveName 'HKU\HunterDefault' -HivePath $defaultHive
             if (-not $defaultHiveLoaded) {
@@ -943,19 +967,6 @@ function Test-ShouldDisablePrintSpooler {
     }
 }
 
-function Test-HasWirelessAdapter {
-    try {
-        $adapters = @(Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -match 'wi-?fi|wlan|wireless|802\.11' -or
-            $_.InterfaceDescription -match 'wi-?fi|wlan|wireless|802\.11'
-        })
-
-        return ($adapters.Count -gt 0)
-    } catch {
-        Write-Log "Failed to enumerate wireless adapters: $($_.Exception.Message)" 'WARN'
-        return $false
-    }
-}
 
 function Disable-ScheduledTaskIfPresent {
     param(
@@ -5042,6 +5053,15 @@ function Invoke-DisableWidgets {
     try {
         Stop-Process -Name Widgets -Force -ErrorAction SilentlyContinue
         Remove-AppxPatterns -Patterns @('Microsoft.WidgetsPlatformRuntime*', 'MicrosoftWindows.Client.WebExperience*')
+
+        # WinUtil parity: registry keys to fully disable Widgets
+        Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarDa' -Value 0 -Type 'DWord'
+        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' -Name 'AllowNewsAndInterests' -Value 0 -Type 'DWord'
+        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\NewsAndInterests\AllowNewsAndInterests' -Name 'value' -Value 0 -Type 'DWord'
+        Set-DwordBatchForAllUsers -Settings @(
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'TaskbarDa'; Value = 0 }
+        )
+
         Request-ExplorerRestart
         return $true
     } catch {
@@ -5338,6 +5358,18 @@ function Invoke-RemoveEdgeKeepWebView2 {
         }
 
         Write-Log -Message "Edge removal complete." -Level 'INFO'
+
+        # Verify WebView2 runtime survived Edge removal
+        $webView2RegPath = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+        $webView2Exists = (Test-Path $webView2RegPath) -or
+            (Test-Path 'C:\Program Files (x86)\Microsoft\EdgeWebView') -or
+            (Test-Path 'C:\Program Files\Microsoft\EdgeWebView')
+        if (-not $webView2Exists) {
+            Write-Log -Message "WARNING: WebView2 runtime may have been removed alongside Edge. Some apps may not function correctly." -Level 'WARN'
+        } else {
+            Write-Log -Message "WebView2 runtime verified intact after Edge removal." -Level 'INFO'
+        }
+
         return $true
     }
     catch {
@@ -5747,13 +5779,26 @@ function Invoke-DisableConsumerFeatures {
         Set-RegistryValue -Path $cloudPath -Name 'DisableSoftLanding' -Value 1 -Type 'DWord'
         Set-RegistryValue -Path $cloudPath -Name 'DisableWindowsSpotlightFeatures' -Value 1 -Type 'DWord'
         Set-DwordBatchForAllUsers -Settings @(
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'ContentDeliveryAllowed'; Value = 0 },
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'FeatureManagementEnabled'; Value = 0 },
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'OEMPreInstalledAppsEnabled'; Value = 0 },
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'PreInstalledAppsEnabled'; Value = 0 },
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'PreInstalledAppsEverEnabled'; Value = 0 },
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'RotatingLockScreenEnabled'; Value = 0 },
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'RotatingLockScreenOverlayEnabled'; Value = 0 },
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SilentInstalledAppsEnabled'; Value = 0 },
             @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SoftLandingEnabled'; Value = 0 },
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SystemPaneSuggestionsEnabled'; Value = 0 },
             @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SubscribedContent-310093Enabled'; Value = 0 },
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SubscribedContent-314563Enabled'; Value = 0 },
             @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SubscribedContent-338388Enabled'; Value = 0 },
             @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SubscribedContent-338389Enabled'; Value = 0 },
             @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SubscribedContent-338393Enabled'; Value = 0 },
             @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SubscribedContent-353694Enabled'; Value = 0 },
-            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SystemPaneSuggestionsEnabled'; Value = 0 }
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SubscribedContent-353695Enabled'; Value = 0 },
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SubscribedContent-353696Enabled'; Value = 0 },
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SubscribedContent-353698Enabled'; Value = 0 },
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SubscribedContent-88000326Enabled'; Value = 0 }
         )
 
         Write-Log -Message "Windows consumer features disabled." -Level 'INFO'
@@ -5873,8 +5918,10 @@ function Invoke-DisableTelemetry {
 
         Write-Log -Message "Disabling telemetry services..." -Level 'INFO'
         Set-ServiceStartType -Name 'diagtrack' -StartType 'Disabled'
+        Set-ServiceStartType -Name 'dmwappushservice' -StartType 'Disabled'
         Set-ServiceStartType -Name 'WerSvc' -StartType 'Disabled'
         Stop-ServiceIfPresent -Name 'DiagTrack'
+        Stop-ServiceIfPresent -Name 'dmwappushservice'
         Stop-ServiceIfPresent -Name 'WerSvc'
 
         Write-Log -Message "Disabling Defender telemetry..." -Level 'INFO'
@@ -7405,7 +7452,9 @@ function Receive-ParallelInstallerJobResult {
                     if ($JobInfo.Target.PackageId -eq 'cinebench-r23' -and (Test-IsLegacyHunterCinebenchPath -Path $verifiedExecutablePath)) {
                         $verifiedExecutablePath = $null
                     }
-                } catch { }
+                } catch {
+                    Write-Log "Executable verification failed for $($JobInfo.Target.PackageName): $_" 'WARN'
+                }
             }
 
             if (-not [string]::IsNullOrWhiteSpace($verifiedExecutablePath) -and (Test-Path $verifiedExecutablePath)) {
@@ -7464,7 +7513,9 @@ function Receive-ParallelInstallerJobResult {
                 if ($JobInfo.Target.PackageId -eq 'cinebench-r23' -and (Test-IsLegacyHunterCinebenchPath -Path $existingExecutablePath)) {
                     $existingExecutablePath = $null
                 }
-            } catch { }
+            } catch {
+                Write-Log "Pre-install executable check failed for $($JobInfo.Target.PackageName): $_" 'WARN'
+            }
 
             if (-not [string]::IsNullOrWhiteSpace($existingExecutablePath) -and (Test-Path $existingExecutablePath)) {
                 $JobInfo.Target['ExistingExecutablePath'] = $existingExecutablePath
@@ -7591,7 +7642,19 @@ function Invoke-ParallelInstalls {
                 $script:ParallelInstallTargets += $resolvedTarget
 
                 if (-not $LaunchOnly) {
+                    $slotWaitStart = [datetime]::UtcNow
+                    $slotWaitMaxMinutes = 30
                     while (@($script:ParallelInstallJobs | Where-Object { $_.Job.State -notin @('Completed', 'Failed', 'Stopped') }).Count -ge $maxParallelJobs) {
+                        if (([datetime]::UtcNow - $slotWaitStart).TotalMinutes -ge $slotWaitMaxMinutes) {
+                            Write-Log "Timed out waiting for a parallel install slot after $slotWaitMaxMinutes minutes. Forcing collection." 'WARN'
+                            $stuckJobs = @($script:ParallelInstallJobs | Where-Object { $_.Job.State -notin @('Completed', 'Failed', 'Stopped') })
+                            foreach ($sj in $stuckJobs) {
+                                Stop-Job -Job $sj.Job -ErrorAction SilentlyContinue
+                                Write-Log "Force-stopped hung install job for $($sj.PackageName)" 'WARN'
+                            }
+                            Invoke-CollectCompletedParallelInstallJobs
+                            break
+                        }
                         Wait-Job -Job @($script:ParallelInstallJobs | ForEach-Object { $_.Job }) -Any -Timeout 5 | Out-Null
                         Invoke-CollectCompletedParallelInstallJobs
                     }
@@ -7840,7 +7903,7 @@ function Invoke-ParallelInstalls {
                                     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
                                 } catch { }
 
-                                Invoke-WebRequest -Uri $Target.DownloadUrl -OutFile $downloadPath -UseBasicParsing -MaximumRedirection 10 -ErrorAction Stop -Headers @{ 'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+                                Invoke-WebRequest -Uri $Target.DownloadUrl -OutFile $downloadPath -UseBasicParsing -MaximumRedirection 10 -TimeoutSec 300 -ErrorAction Stop -Headers @{ 'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
                             }
 
                             try {
@@ -8736,7 +8799,7 @@ function Test-TaskHandlerReturnedFailure {
 
     $resultItems = @($TaskResult | Where-Object { $null -ne $_ })
     if ($resultItems.Count -eq 0) {
-        return $false
+        return $LoggedError
     }
 
     $booleanItems = @($resultItems | Where-Object { $_ -is [bool] })
