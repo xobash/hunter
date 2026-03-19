@@ -18,9 +18,9 @@ $script:HunterRoot        = Join-Path $script:ProgramDataRoot 'Hunter'
 $script:DownloadDir        = Join-Path $script:HunterRoot 'Downloads'
 $script:LogPath            = Join-Path $script:HunterRoot 'hunter.log'
 $script:CheckpointPath     = Join-Path $script:HunterRoot 'checkpoint.json'
-$script:ProgressStatePath  = Join-Path $script:HunterRoot 'progress.json'
 $script:ResumeScriptPath   = Join-Path $script:HunterRoot 'Resume\hunter.ps1'
-$script:StartPinsLayoutPath = Join-Path $script:HunterRoot 'LayoutModification.json'
+$script:SecretsRoot        = Join-Path $script:HunterRoot 'Secrets'
+$script:LocalUserSecretPath = Join-Path $script:SecretsRoot 'local-user.secret'
 $script:AllUsersStartMenuProgramsPath = Join-Path $script:ProgramDataRoot 'Microsoft\Windows\Start Menu\Programs'
 $script:HostsFilePath      = Join-Path $script:WindowsRoot 'System32\drivers\etc\hosts'
 $script:TaskbarPinVerbPatterns = @('*Pin to taskbar*', '*taskbarpin*')
@@ -40,13 +40,19 @@ $script:ParallelInstallResults = @{}
 $script:PrefetchedExternalAssets = @{}
 $script:ExternalAssetPrefetchJobs = @()
 $script:AppShortcutSetCache = @{}
+$script:ExecutableResolverCache = @{}
+$script:ExecutableResolverNextAttemptAt = @{}
 $script:IsAutomationRun = $false
-$script:TaskbarPolicyPending = $false
-$script:TaskbarPolicyDirty = $false
+$script:TaskbarReconcilePending = $false
 $script:DefaultTaskbarPinsRemoved = $false
 $script:EdgeShortcutsRemoved = $false
 $script:PostInstallCompletion = @{}
 $script:RunStopwatch = $null
+$script:RunInfrastructureIssues = @()
+$script:CheckpointLoadFailed = $false
+$script:CheckpointSaveFailed = $false
+$script:PendingRebootCheckFailed = $false
+$script:ProgressUiIssueLogged = $false
 $script:CurrentTaskLoggedError = $false
 $script:CurrentTaskLoggedWarning = $false
 $script:UiSync        = $null
@@ -59,20 +65,14 @@ $script:TaskResults        = @{}
 $script:TaskList          = @()
 $script:CheckpointAliases  = @{
     'phase1-restore-point'        = 'preflight-restore-point'
-    'phase1-pre-download'         = 'preflight-predownload'
-    'phase2-local-user'           = 'core-local-user'
-    'phase2-autologin'            = 'core-autologin'
     'phase2-dark-mode'            = 'core-dark-mode'
     'phase3-bing-search'          = 'startui-bing-search'
-    'phase3-start-recommendations'= 'startui-start-recommendations'
     'phase3-taskbar-search'       = 'startui-search-box'
     'phase3-taskview-button'      = 'startui-task-view'
     'phase3-widgets'              = 'startui-widgets'
     'phase3-end-task'             = 'startui-end-task'
     'phase3-notifications'        = 'startui-notifications'
     'phase4-explorer-home'        = 'explorer-home-thispc'
-    'phase4-explorer-home-tab'    = 'explorer-remove-home'
-    'phase4-explorer-gallery'     = 'explorer-remove-gallery'
     'phase4-explorer-onedrive'    = 'explorer-remove-onedrive'
     'phase4-explorer-autodiscovery'= 'explorer-auto-discovery'
 }
@@ -131,6 +131,24 @@ function Write-Log {
     }
 }
 
+function Add-RunInfrastructureIssue {
+    param(
+        [Parameter(Mandatory)][string]$Message,
+        [ValidateSet('WARN','ERROR')]
+        [string]$Level = 'ERROR'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Message)) {
+        return
+    }
+
+    if ($script:RunInfrastructureIssues -notcontains $Message) {
+        $script:RunInfrastructureIssues += $Message
+    }
+
+    Write-Log $Message $Level
+}
+
 # ==============================================================================
 # DIRECTORY HELPER
 # ==============================================================================
@@ -139,6 +157,118 @@ function Ensure-Directory {
     param([string]$Path)
     if (-not (Test-Path $Path)) {
         New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    }
+}
+
+function Protect-StringForLocalMachine {
+    param([Parameter(Mandatory)][string]$Value)
+
+    $plainBytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
+    $protectedBytes = [System.Security.Cryptography.ProtectedData]::Protect(
+        $plainBytes,
+        $null,
+        [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+    )
+
+    return [Convert]::ToBase64String($protectedBytes)
+}
+
+function Unprotect-StringForLocalMachine {
+    param([Parameter(Mandatory)][string]$Value)
+
+    $protectedBytes = [Convert]::FromBase64String($Value)
+    $plainBytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
+        $protectedBytes,
+        $null,
+        [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+    )
+
+    return [System.Text.Encoding]::UTF8.GetString($plainBytes)
+}
+
+function New-HunterRandomPassword {
+    param([int]$Length = 24)
+
+    $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@$%&*?'
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $chars = New-Object 'System.Collections.Generic.List[char]'
+        for ($i = 0; $i -lt [Math]::Max($Length, 16); $i++) {
+            $bytes = New-Object byte[] 4
+            $rng.GetBytes($bytes)
+            $index = [Math]::Abs([BitConverter]::ToUInt32($bytes, 0) % $alphabet.Length)
+            [void]$chars.Add($alphabet[$index])
+        }
+
+        return (-join $chars)
+    } finally {
+        $rng.Dispose()
+    }
+}
+
+function Set-HunterManagedLocalUserPassword {
+    param([Parameter(Mandatory)][string]$Password)
+
+    Ensure-Directory $script:SecretsRoot
+    $payload = [ordered]@{
+        Version   = 1
+        UserName  = 'user'
+        Password  = (Protect-StringForLocalMachine -Value $Password)
+        UpdatedAt = (Get-Date).ToString('o')
+    }
+
+    $payload | ConvertTo-Json -Depth 2 | Set-Content -Path $script:LocalUserSecretPath -Encoding UTF8 -Force
+}
+
+function Get-HunterManagedLocalUserPassword {
+    if (-not [string]::IsNullOrWhiteSpace($env:HUNTER_LOCAL_USER_PASSWORD)) {
+        Set-HunterManagedLocalUserPassword -Password $env:HUNTER_LOCAL_USER_PASSWORD
+        return $env:HUNTER_LOCAL_USER_PASSWORD
+    }
+
+    if (-not (Test-Path $script:LocalUserSecretPath)) {
+        return $null
+    }
+
+    try {
+        $payload = Get-Content -Path $script:LocalUserSecretPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($null -eq $payload -or [string]::IsNullOrWhiteSpace([string]$payload.Password)) {
+            throw 'Managed local-user secret file does not contain a password payload.'
+        }
+
+        return (Unprotect-StringForLocalMachine -Value ([string]$payload.Password))
+    } catch {
+        Add-RunInfrastructureIssue -Message "Failed to load the managed local-user credential: $($_.Exception.Message)" -Level 'ERROR'
+        return $null
+    }
+}
+
+function Resolve-HunterLocalUserPassword {
+    param([bool]$UserExists)
+
+    $storedPassword = Get-HunterManagedLocalUserPassword
+    if (-not [string]::IsNullOrWhiteSpace($storedPassword)) {
+        return [pscustomobject]@{
+            Password     = $storedPassword
+            WasGenerated = $false
+            IsManaged    = $true
+            Source       = if (-not [string]::IsNullOrWhiteSpace($env:HUNTER_LOCAL_USER_PASSWORD)) { 'Environment' } else { 'Stored' }
+        }
+    }
+
+    if ($UserExists) {
+        return $null
+    }
+
+    $generatedPassword = New-HunterRandomPassword
+    Set-HunterManagedLocalUserPassword -Password $generatedPassword
+    Write-Log "Generated and stored a machine-protected password for the managed local user." 'INFO'
+
+    return [pscustomobject]@{
+        Password     = $generatedPassword
+        WasGenerated = $true
+        IsManaged    = $true
+        Source       = 'Generated'
     }
 }
 
@@ -1851,33 +1981,71 @@ function Get-YtDlpExecutablePath {
     ))
 }
 
+function Resolve-CachedExecutablePath {
+    param(
+        [Parameter(Mandatory)][string]$CacheKey,
+        [Parameter(Mandatory)][scriptblock]$Resolver,
+        [int]$RetryDelaySeconds = 10
+    )
+
+    if ($script:ExecutableResolverCache.ContainsKey($CacheKey)) {
+        $cachedPath = [string]$script:ExecutableResolverCache[$CacheKey]
+        if (-not [string]::IsNullOrWhiteSpace($cachedPath) -and (Test-Path $cachedPath)) {
+            return $cachedPath
+        }
+
+        $script:ExecutableResolverCache.Remove($CacheKey) | Out-Null
+    }
+
+    if ($script:ExecutableResolverNextAttemptAt.ContainsKey($CacheKey)) {
+        $nextAttemptAt = $script:ExecutableResolverNextAttemptAt[$CacheKey]
+        if ($nextAttemptAt -is [datetime] -and (Get-Date) -lt $nextAttemptAt) {
+            return $null
+        }
+    }
+
+    $resolvedPath = & $Resolver
+    if (-not [string]::IsNullOrWhiteSpace($resolvedPath) -and (Test-Path $resolvedPath)) {
+        $script:ExecutableResolverCache[$CacheKey] = $resolvedPath
+        $script:ExecutableResolverNextAttemptAt.Remove($CacheKey) | Out-Null
+        return $resolvedPath
+    }
+
+    $script:ExecutableResolverNextAttemptAt[$CacheKey] = (Get-Date).AddSeconds([Math]::Max($RetryDelaySeconds, 2))
+    return $null
+}
+
 function Get-CrystalDiskMarkExecutablePath {
-    return (Find-FirstExistingPath -CandidatePaths @(
-        'C:\Program Files\CrystalDiskMark\DiskMark64.exe',
-        'C:\Program Files\CrystalDiskMark\CrystalDiskMark.exe',
-        'C:\Program Files\CrystalDiskMark8\DiskMark64.exe',
-        'C:\Program Files\CrystalDiskMark8\CrystalDiskMark.exe',
-        'C:\Program Files\CrystalDiskMark9\DiskMark64.exe',
-        'C:\Program Files\CrystalDiskMark9\CrystalDiskMark.exe',
-        'C:\Program Files (x86)\CrystalDiskMark\DiskMark64.exe',
-        'C:\Program Files (x86)\CrystalDiskMark\CrystalDiskMark.exe',
-        (Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' -Recurse -File -Filter 'DiskMark64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName)
-    ))
+    return (Resolve-CachedExecutablePath -CacheKey 'crystaldiskmark' -RetryDelaySeconds 10 -Resolver {
+        Find-FirstExistingPath -CandidatePaths @(
+            'C:\Program Files\CrystalDiskMark\DiskMark64.exe',
+            'C:\Program Files\CrystalDiskMark\CrystalDiskMark.exe',
+            'C:\Program Files\CrystalDiskMark8\DiskMark64.exe',
+            'C:\Program Files\CrystalDiskMark8\CrystalDiskMark.exe',
+            'C:\Program Files\CrystalDiskMark9\DiskMark64.exe',
+            'C:\Program Files\CrystalDiskMark9\CrystalDiskMark.exe',
+            'C:\Program Files (x86)\CrystalDiskMark\DiskMark64.exe',
+            'C:\Program Files (x86)\CrystalDiskMark\CrystalDiskMark.exe',
+            (Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' -Recurse -File -Filter 'DiskMark64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName)
+        )
+    })
 }
 
 function Get-CinebenchR23ExecutablePath {
-    $candidatePaths = @(
-        (Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps') -File -Filter 'Cinebench*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName),
-        (Get-ChildItem -Path 'C:\Program Files\WindowsApps' -Directory -Filter 'Maxon.Cinebench*' -ErrorAction SilentlyContinue |
-            ForEach-Object { Get-ChildItem -Path $_.FullName -Recurse -File -Filter 'Cinebench*.exe' -ErrorAction SilentlyContinue } |
-            Select-Object -First 1 -ExpandProperty FullName),
-        (Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages') -Recurse -File -Filter 'Cinebench*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName),
-        'C:\Program Files\Maxon Cinema 4D\Cinebench.exe',
-        'C:\Program Files\Maxon Cinema 4D\CinebenchR23\Cinebench.exe',
-        'C:\Program Files\Maxon\CinebenchR23\Cinebench.exe'
-    )
+    return (Resolve-CachedExecutablePath -CacheKey 'cinebench-r23' -RetryDelaySeconds 10 -Resolver {
+        $candidatePaths = @(
+            (Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps') -File -Filter 'Cinebench*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName),
+            (Get-ChildItem -Path 'C:\Program Files\WindowsApps' -Directory -Filter 'Maxon.Cinebench*' -ErrorAction SilentlyContinue |
+                ForEach-Object { Get-ChildItem -Path $_.FullName -Recurse -File -Filter 'Cinebench*.exe' -ErrorAction SilentlyContinue } |
+                Select-Object -First 1 -ExpandProperty FullName),
+            (Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages') -Recurse -File -Filter 'Cinebench*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName),
+            'C:\Program Files\Maxon Cinema 4D\Cinebench.exe',
+            'C:\Program Files\Maxon Cinema 4D\CinebenchR23\Cinebench.exe',
+            'C:\Program Files\Maxon\CinebenchR23\Cinebench.exe'
+        )
 
-    return (Find-FirstExistingPath -CandidatePaths $candidatePaths)
+        return (Find-FirstExistingPath -CandidatePaths $candidatePaths)
+    })
 }
 
 function Test-IsLegacyHunterCinebenchPath {
@@ -1906,24 +2074,26 @@ function Remove-LegacyHunterCinebenchPayload {
 }
 
 function Get-FurMarkExecutablePath {
-    return (Find-FirstExistingPath -CandidatePaths @(
-        'C:\Program Files (x86)\Geeks3D\Benchmarks\FurMark\FurMark.exe',
-        'C:\Program Files\Geeks3D\Benchmarks\FurMark\FurMark.exe',
-        'C:\Program Files (x86)\Geeks3D\FurMark 2\FurMark.exe',
-        'C:\Program Files\Geeks3D\FurMark 2\FurMark.exe',
-        'C:\Program Files (x86)\Geeks3D\FurMark\FurMark.exe',
-        'C:\Program Files\Geeks3D\FurMark\FurMark.exe',
-        (Get-ShortcutTargetPath -ShortcutPath (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\FurMark.lnk')),
-        (Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages') -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -like 'FurMark*.exe' -and $_.FullName -match 'FurMark|Geeks3D' } |
-            Select-Object -First 1 -ExpandProperty FullName),
-        (Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -like 'FurMark*.exe' -and $_.FullName -match 'FurMark|Geeks3D' } |
-            Select-Object -First 1 -ExpandProperty FullName),
-        (Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' -Recurse -File -Filter 'FurMark.exe' -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match 'FurMark|Geeks3D' } |
-            Select-Object -First 1 -ExpandProperty FullName)
-    ))
+    return (Resolve-CachedExecutablePath -CacheKey 'furmark' -RetryDelaySeconds 10 -Resolver {
+        Find-FirstExistingPath -CandidatePaths @(
+            'C:\Program Files (x86)\Geeks3D\Benchmarks\FurMark\FurMark.exe',
+            'C:\Program Files\Geeks3D\Benchmarks\FurMark\FurMark.exe',
+            'C:\Program Files (x86)\Geeks3D\FurMark 2\FurMark.exe',
+            'C:\Program Files\Geeks3D\FurMark 2\FurMark.exe',
+            'C:\Program Files (x86)\Geeks3D\FurMark\FurMark.exe',
+            'C:\Program Files\Geeks3D\FurMark\FurMark.exe',
+            (Get-ShortcutTargetPath -ShortcutPath (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\FurMark.lnk')),
+            (Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages') -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like 'FurMark*.exe' -and $_.FullName -match 'FurMark|Geeks3D' } |
+                Select-Object -First 1 -ExpandProperty FullName),
+            (Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like 'FurMark*.exe' -and $_.FullName -match 'FurMark|Geeks3D' } |
+                Select-Object -First 1 -ExpandProperty FullName),
+            (Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' -Recurse -File -Filter 'FurMark.exe' -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -match 'FurMark|Geeks3D' } |
+                Select-Object -First 1 -ExpandProperty FullName)
+        )
+    })
 }
 
 function Get-PeaZipExecutablePath {
@@ -2321,13 +2491,11 @@ function Complete-InstalledApp {
         }
 
         $pinCandidatePaths = @($ExecutablePath) + @($shortcutPaths)
-        if ($script:TaskbarPolicyPending) {
-            $script:TaskbarPolicyDirty = $true
+        if ($script:TaskbarReconcilePending) {
             Write-Log "$PackageName taskbar pin queued for deferred taskbar pin reconciliation." 'INFO'
         } elseif (-not (Invoke-EnsureTaskbarAction -Action Pin -DisplayPatterns $displayPatterns -Paths $pinCandidatePaths)) {
             Write-Log "$PackageName taskbar pin shell verb was unavailable or ignored by Windows. Falling back to deferred taskbar pin reconciliation." 'INFO'
-            $script:TaskbarPolicyPending = $true
-            $script:TaskbarPolicyDirty = $true
+            $script:TaskbarReconcilePending = $true
             Write-Log "$PackageName taskbar pin queued for deferred taskbar pin reconciliation." 'INFO'
         }
     }
@@ -2792,166 +2960,93 @@ function Invoke-RemoveDefaultTaskbarSurfaceArtifacts {
     return $cleanupDefinition
 }
 
-function Convert-ToPowerShellSingleQuotedLiteral {
-    param([string]$Value)
-
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    return ($Value -replace "'", "''")
-}
-
-function Invoke-SystemScheduledPowerShellTask {
-    param(
-        [string]$TaskName,
-        [string]$ScriptPath,
-        [string]$ScriptContent,
-        [string]$ResultPath,
-        [int]$TimeoutSec = 45
-    )
-
-    try {
-        Ensure-Directory (Split-Path -Parent $ScriptPath)
-        Ensure-Directory (Split-Path -Parent $ResultPath)
-        Remove-Item -Path $ResultPath -Force -ErrorAction SilentlyContinue
-        Set-Content -Path $ScriptPath -Value $ScriptContent -Encoding UTF8 -Force
-
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-            -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
-        $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(5))
-        $settings = New-ScheduledTaskSettingsSet `
-            -AllowStartIfOnBatteries `
-            -DontStopIfGoingOnBatteries
-        $principal = New-ScheduledTaskPrincipal `
-            -UserId 'SYSTEM' `
-            -LogonType ServiceAccount `
-            -RunLevel Highest
-
-        Register-ScheduledTask `
-            -TaskName $TaskName `
-            -Action $action `
-            -Trigger $trigger `
-            -Settings $settings `
-            -Principal $principal `
-            -Force | Out-Null
-
-        Start-ScheduledTask -TaskName $TaskName
-
-        $deadline = (Get-Date).AddSeconds($TimeoutSec)
-        do {
-            if (Test-Path $ResultPath) {
-                try {
-                    $result = Get-Content -Path $ResultPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-                    return $result
-                } catch {
-                    Write-Log "Failed to parse scheduled task result for $TaskName : $_" 'WARN'
-                }
-            }
-
-            Start-Sleep -Seconds 1
-        } while ((Get-Date) -lt $deadline)
-
-        return [pscustomobject]@{
-            Success = $false
-            Message = "Timed out waiting for scheduled task $TaskName to finish."
-        }
-    } catch {
-        return [pscustomobject]@{
-            Success = $false
-            Message = "Failed to run scheduled task $TaskName : $_"
-        }
-    } finally {
-        try {
-            Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
-        } catch {
-        }
-    }
-}
-
-function Clear-ManagedStartCustomizationPolicies {
+function Clear-StaleStartCustomizationPolicies {
     try {
         $policyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer'
         $currentUserPolicyPath = 'HKCU:\Software\Policies\Microsoft\Windows\Explorer'
-        $cleanupScriptPath = Join-Path $script:HunterRoot 'StartPolicyCleanup.ps1'
-        $cleanupResultPath = Join-Path $script:HunterRoot 'StartPolicyCleanupResult.json'
-        $escapedResultPath = Convert-ToPowerShellSingleQuotedLiteral $cleanupResultPath
-        $cleanupScript = @"
-`$ErrorActionPreference = 'Stop'
-`$resultPath = '$escapedResultPath'
-`$namespace = 'root\cimv2\mdm\dmmap'
-`$className = 'MDM_Policy_Config01_Start02'
-`$filter = "ParentID='./Vendor/MSFT/Policy/Config' AND InstanceID='Start'"
-
-try {
-    `$instance = Get-CimInstance -Namespace `$namespace -ClassName `$className -Filter `$filter -ErrorAction SilentlyContinue
-    if (`$null -eq `$instance) {
-        [pscustomobject]@{
-            Success = `$true
-            Message = 'No managed Start policy instance was present in the WMI bridge.'
-        } | ConvertTo-Json -Compress | Set-Content -Path `$resultPath -Encoding UTF8 -Force
-        return
-    }
-
-    `$changed = `$false
-    if ((`$instance.PSObject.Properties.Name -contains 'ConfigureStartPins') -and -not [string]::IsNullOrWhiteSpace([string]`$instance.ConfigureStartPins)) {
-        `$instance.ConfigureStartPins = ''
-        `$changed = `$true
-    }
-
-    if ((`$instance.PSObject.Properties.Name -contains 'StartLayout') -and -not [string]::IsNullOrWhiteSpace([string]`$instance.StartLayout)) {
-        `$instance.StartLayout = ''
-        `$changed = `$true
-    }
-
-    if ((`$instance.PSObject.Properties.Name -contains 'NoPinningToTaskbar') -and ([int]`$instance.NoPinningToTaskbar -ne 0)) {
-        `$instance.NoPinningToTaskbar = 0
-        `$changed = `$true
-    }
-
-    if (`$changed) {
-        Set-CimInstance -CimInstance `$instance | Out-Null
-        [pscustomobject]@{
-            Success = `$true
-            Message = 'Cleared managed Start policy values through the WMI bridge.'
-        } | ConvertTo-Json -Compress | Set-Content -Path `$resultPath -Encoding UTF8 -Force
-    } else {
-        [pscustomobject]@{
-            Success = `$true
-            Message = 'No managed Start policy values were set in the WMI bridge.'
-        } | ConvertTo-Json -Compress | Set-Content -Path `$resultPath -Encoding UTF8 -Force
-    }
-} catch {
-    [pscustomobject]@{
-        Success = `$false
-        Message = [string]`$_
-    } | ConvertTo-Json -Compress | Set-Content -Path `$resultPath -Encoding UTF8 -Force
-}
-"@
+        $hadFailure = $false
 
         Remove-RegistryValueIfPresent -Path $policyPath -Name 'ConfigureStartPins'
         Remove-RegistryValueIfPresent -Path $currentUserPolicyPath -Name 'ConfigureStartPins'
         Remove-RegistryValueIfPresent -Path $policyPath -Name 'StartLayoutFile'
         Remove-RegistryValueIfPresent -Path $policyPath -Name 'LockedStartLayout'
-        Remove-Item -LiteralPath $script:StartPinsLayoutPath -Force -ErrorAction SilentlyContinue
-        Unregister-ScheduledTask -TaskName 'Hunter-TaskbarPolicyCleanup' -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
 
-        $cleanupResult = Invoke-SystemScheduledPowerShellTask `
-            -TaskName 'Hunter-StartPolicyCleanup' `
-            -ScriptPath $cleanupScriptPath `
-            -ScriptContent $cleanupScript `
-            -ResultPath $cleanupResultPath
-
-        if ($null -ne $cleanupResult -and -not [string]::IsNullOrWhiteSpace($cleanupResult.Message)) {
-            $cleanupResultLevel = if ($cleanupResult.Success) { 'INFO' } else { 'WARN' }
-            Write-Log $cleanupResult.Message $cleanupResultLevel
+        try {
+            $cleanupTask = Get-ScheduledTask -TaskName 'Hunter-TaskbarPolicyCleanup' -ErrorAction SilentlyContinue
+            if ($null -ne $cleanupTask) {
+                Unregister-ScheduledTask -TaskName 'Hunter-TaskbarPolicyCleanup' -Confirm:$false -ErrorAction Stop | Out-Null
+                Write-Log "Removed stale scheduled task 'Hunter-TaskbarPolicyCleanup'." 'INFO'
+            }
+        } catch {
+            $hadFailure = $true
+            Write-Log "Failed to remove stale taskbar cleanup task: $($_.Exception.Message)" 'ERROR'
         }
 
-        $script:TaskbarPolicyPending = $false
-        $script:TaskbarPolicyDirty = $false
+        try {
+            $instance = Get-CimInstance `
+                -Namespace 'root\cimv2\mdm\dmmap' `
+                -ClassName 'MDM_Policy_Config01_Start02' `
+                -Filter "ParentID='./Vendor/MSFT/Policy/Config' AND InstanceID='Start'" `
+                -ErrorAction Stop
+
+            if ($null -ne $instance) {
+                $changed = $false
+
+                if (($instance.PSObject.Properties.Name -contains 'ConfigureStartPins') -and
+                    -not [string]::IsNullOrWhiteSpace([string]$instance.ConfigureStartPins)) {
+                    $instance.ConfigureStartPins = ''
+                    $changed = $true
+                }
+
+                if (($instance.PSObject.Properties.Name -contains 'StartLayout') -and
+                    -not [string]::IsNullOrWhiteSpace([string]$instance.StartLayout)) {
+                    $instance.StartLayout = ''
+                    $changed = $true
+                }
+
+                if (($instance.PSObject.Properties.Name -contains 'NoPinningToTaskbar') -and
+                    ([int]$instance.NoPinningToTaskbar -ne 0)) {
+                    $instance.NoPinningToTaskbar = 0
+                    $changed = $true
+                }
+
+                if ($changed) {
+                    Set-CimInstance -CimInstance $instance -ErrorAction Stop | Out-Null
+                    Write-Log 'Cleared stale managed Start policy values from the WMI bridge.' 'INFO'
+                }
+            }
+        } catch {
+            Write-Log "Managed Start policy WMI cleanup was not available: $($_.Exception.Message)" 'WARN'
+        }
+
+        foreach ($leftoverValue in @(
+                @{ Path = $policyPath; Name = 'ConfigureStartPins' },
+                @{ Path = $currentUserPolicyPath; Name = 'ConfigureStartPins' },
+                @{ Path = $policyPath; Name = 'StartLayoutFile' },
+                @{ Path = $policyPath; Name = 'LockedStartLayout' }
+            )) {
+            if (Test-Path $leftoverValue.Path) {
+                try {
+                    $currentValue = Get-ItemProperty -Path $leftoverValue.Path -Name $leftoverValue.Name -ErrorAction Stop
+                    if ($null -ne $currentValue) {
+                        $hadFailure = $true
+                        Write-Log "Stale Start customization policy is still present: $($leftoverValue.Path)\$($leftoverValue.Name)" 'ERROR'
+                    }
+                } catch [System.Management.Automation.ItemNotFoundException] {
+                } catch {
+                    $hadFailure = $true
+                    Write-Log "Failed to verify Start customization policy cleanup for $($leftoverValue.Path)\$($leftoverValue.Name): $($_.Exception.Message)" 'ERROR'
+                }
+            }
+        }
+
+        if ($hadFailure) {
+            return $false
+        }
+
         return $true
     } catch {
-        Write-Log "Failed to clear managed Start customization policies: $_" 'WARN'
+        Write-Log "Failed to clear stale Start customization policies: $_" 'ERROR'
         return $false
     }
 }
@@ -3169,7 +3264,7 @@ function Invoke-EnsureTaskbarAction {
         [string[]]$Paths
     )
 
-    if ($Action -eq 'Pin' -and $script:TaskbarPolicyPending) {
+    if ($Action -eq 'Pin' -and $script:TaskbarReconcilePending) {
         return $false
     }
 
@@ -3213,35 +3308,56 @@ function Invoke-AppsFolderActionByPatterns {
         [string]$FailureMessagePrefix
     )
 
-    if ($null -eq $Patterns -or $Patterns.Count -eq 0) { return }
+    if ($null -eq $Patterns -or $Patterns.Count -eq 0) {
+        return [pscustomobject]@{
+            MatchedCount     = 0
+            SucceededCount   = 0
+            UnavailableCount = 0
+            FailureCount     = 0
+        }
+    }
 
     $shell = $null
     $appsFolder = $null
+    $matchedCount = 0
+    $succeededCount = 0
+    $unavailableCount = 0
+    $failureCount = 0
 
     try {
         $shell = New-Object -ComObject Shell.Application
         $appsFolder = $shell.NameSpace("shell:AppsFolder")
+        if ($null -eq $appsFolder) {
+            throw 'shell:AppsFolder was unavailable.'
+        }
 
-        if ($null -ne $appsFolder) {
-            foreach ($item in @($appsFolder.Items())) {
-                foreach ($pattern in $Patterns) {
-                    if ($item.Name -like $pattern) {
-                        try {
-                            $verb = Find-ShellVerbByPattern -Item $item -Patterns $VerbPatterns
-                            if ($null -ne $verb) {
-                                $verb.DoIt()
-                                Write-Log "${SuccessMessagePrefix}: $($item.Name)"
-                            } else {
-                                Write-Log "${UnavailableMessagePrefix}: $($item.Name)" 'WARN'
-                            }
-                        } catch {
-                            Write-Log "$FailureMessagePrefix $($item.Name) : $_" 'ERROR'
-                        }
-                    }
+        foreach ($item in @($appsFolder.Items())) {
+            foreach ($pattern in $Patterns) {
+                if ($item.Name -notlike $pattern) {
+                    continue
                 }
+
+                $matchedCount++
+                try {
+                    $verb = Find-ShellVerbByPattern -Item $item -Patterns $VerbPatterns
+                    if ($null -ne $verb) {
+                        $verb.DoIt()
+                        $succeededCount++
+                        Write-Log "${SuccessMessagePrefix}: $($item.Name)"
+                    } else {
+                        $unavailableCount++
+                        Write-Log "${UnavailableMessagePrefix}: $($item.Name)" 'WARN'
+                    }
+                } catch {
+                    $failureCount++
+                    Write-Log "$FailureMessagePrefix $($item.Name) : $_" 'ERROR'
+                }
+
+                break
             }
         }
     } catch {
+        $failureCount++
         Write-Log "Failed to process AppsFolder action: $_" 'ERROR'
     } finally {
         if ($null -ne $appsFolder -and [System.Runtime.InteropServices.Marshal]::IsComObject($appsFolder)) {
@@ -3251,6 +3367,13 @@ function Invoke-AppsFolderActionByPatterns {
         if ($null -ne $shell -and [System.Runtime.InteropServices.Marshal]::IsComObject($shell)) {
             [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
         }
+    }
+
+    return [pscustomobject]@{
+        MatchedCount     = $matchedCount
+        SucceededCount   = $succeededCount
+        UnavailableCount = $unavailableCount
+        FailureCount     = $failureCount
     }
 }
 
@@ -3316,12 +3439,33 @@ function Invoke-ApplyLiveStartPinCleanup {
     param([string[]]$BlockedPatterns)
 
     if ($null -eq $BlockedPatterns -or $BlockedPatterns.Count -eq 0) {
+        return (New-TaskSkipResult -Reason 'No blocked Start-pin patterns were provided')
+    }
+
+    $cleanupResult = Invoke-StartMenuUnpinByPatterns -Patterns $BlockedPatterns
+    if ($null -eq $cleanupResult) {
         return $false
     }
 
-    Invoke-StartMenuUnpinByPatterns -Patterns $BlockedPatterns
+    if ([int]$cleanupResult.FailureCount -gt 0) {
+        return $false
+    }
+
     Request-StartSurfaceRestart
-    Write-Log 'Applied live Start pin cleanup without staging managed Start pin policy.' 'INFO'
+    Write-Log ("Applied live Start pin cleanup without staging managed Start pin policy. " +
+        "Matched={0}, Unpinned={1}, Unavailable={2}" -f
+        [int]$cleanupResult.MatchedCount,
+        [int]$cleanupResult.SucceededCount,
+        [int]$cleanupResult.UnavailableCount) 'INFO'
+
+    if ([int]$cleanupResult.UnavailableCount -gt 0) {
+        return @{
+            Success = $true
+            Status  = 'CompletedWithWarnings'
+            Reason  = 'Some blocked Start items did not expose an unpin verb'
+        }
+    }
+
     return $true
 }
 
@@ -3363,28 +3507,43 @@ function Add-HostsEntries {
 # ==============================================================================
 
 function Test-IsHyperVGuest {
+    $probeFailures = New-Object 'System.Collections.Generic.List[string]'
+
     try {
-        $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+        $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
         if ($null -ne $cs -and $cs.Model -eq 'Virtual Machine' -and $cs.Manufacturer -eq 'Microsoft Corporation') {
             return $true
         }
+    } catch {
+        [void]$probeFailures.Add("Win32_ComputerSystem probe failed: $($_.Exception.Message)")
+    }
 
+    try {
         # Fallback: check for Hyper-V integration services or VMBUS
-        $hyperVService = Get-Service -Name 'vmicheartbeat' -ErrorAction SilentlyContinue
+        $hyperVService = Get-Service -Name 'vmicheartbeat' -ErrorAction Stop
         if ($null -ne $hyperVService) {
             return $true
         }
+    } catch [Microsoft.PowerShell.Commands.ServiceCommandException] {
+    } catch {
+        [void]$probeFailures.Add("vmicheartbeat service probe failed: $($_.Exception.Message)")
+    }
 
+    try {
         # Fallback: check for Hyper-V BIOS string
-        $bios = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue
+        $bios = Get-CimInstance Win32_BIOS -ErrorAction Stop
         if ($null -ne $bios -and $bios.Version -like '*VRTUAL*') {
             return $true
         }
-
-        return $false
     } catch {
-        return $false
+        [void]$probeFailures.Add("Win32_BIOS probe failed: $($_.Exception.Message)")
     }
+
+    if ($probeFailures.Count -gt 0) {
+        Write-Log ("Hyper-V guest detection completed with probe warnings: {0}" -f ($probeFailures -join ' | ')) 'WARN'
+    }
+
+    return $false
 }
 
 function Initialize-HyperVDetection {
@@ -3401,7 +3560,7 @@ function Initialize-HyperVDetection {
 function Load-Checkpoint {
     try {
         if (Test-Path $script:CheckpointPath) {
-            $checkpointData = Get-Content -Path $script:CheckpointPath -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
+            $checkpointData = Get-Content -Path $script:CheckpointPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
             if ($null -ne $checkpointData -and $checkpointData -is [System.Collections.IEnumerable] -and $checkpointData -isnot [string]) {
                 $normalizedCheckpointTasks = New-Object 'System.Collections.Generic.List[string]'
                 foreach ($checkpointTaskId in @($checkpointData)) {
@@ -3417,17 +3576,20 @@ function Load-Checkpoint {
                 }
 
                 $script:CompletedTasks = @($normalizedCheckpointTasks.ToArray())
-            } else {
-                $script:CompletedTasks = @()
+                Write-Log "Checkpoint loaded: $($script:CompletedTasks.Count) tasks completed"
+                return
             }
-            Write-Log "Checkpoint loaded: $($script:CompletedTasks.Count) tasks completed"
+
+            throw 'Checkpoint content was not a JSON task-id array.'
         } else {
             $script:CompletedTasks = @()
             Write-Log "No checkpoint found, starting fresh"
+            return
         }
     } catch {
-        Write-Log "Failed to load checkpoint : $_" 'ERROR'
         $script:CompletedTasks = @()
+        $script:CheckpointLoadFailed = $true
+        Add-RunInfrastructureIssue -Message "Failed to load checkpoint state; starting without resume data: $($_.Exception.Message)" -Level 'ERROR'
     }
 }
 
@@ -3437,7 +3599,8 @@ function Save-Checkpoint {
         $script:CompletedTasks | ConvertTo-Json -Depth 1 | Set-Content -Path $script:CheckpointPath -Force
         Write-Log "Checkpoint saved: $($script:CompletedTasks.Count) tasks"
     } catch {
-        Write-Log "Failed to save checkpoint : $_" 'ERROR'
+        $script:CheckpointSaveFailed = $true
+        Add-RunInfrastructureIssue -Message "Failed to persist checkpoint state: $($_.Exception.Message)" -Level 'ERROR'
     }
 }
 
@@ -3468,7 +3631,6 @@ function Add-CompletedTask {
     $resolvedTaskId = Resolve-TaskCheckpointId -TaskId $TaskId
     if (-not (Test-TaskCompleted -TaskId $resolvedTaskId)) {
         $script:CompletedTasks = @($script:CompletedTasks) + @($resolvedTaskId)
-        Save-Checkpoint
         Write-Log "Task marked completed: $resolvedTaskId"
     }
 }
@@ -3484,9 +3646,9 @@ function Start-ProgressWindow {
     }
 
     try {
-        Add-Type -AssemblyName PresentationFramework  -ErrorAction SilentlyContinue
-        Add-Type -AssemblyName PresentationCore       -ErrorAction SilentlyContinue
-        Add-Type -AssemblyName WindowsBase            -ErrorAction SilentlyContinue
+        Add-Type -AssemblyName PresentationFramework  -ErrorAction Stop
+        Add-Type -AssemblyName PresentationCore       -ErrorAction Stop
+        Add-Type -AssemblyName WindowsBase            -ErrorAction Stop
 
         # Synchronized hashtable for cross-thread communication
         $script:UiSync = [hashtable]::Synchronized(@{
@@ -3514,9 +3676,9 @@ function Start-ProgressWindow {
         $script:UiPipeline.AddScript({
             param($Sync)
 
-            Add-Type -AssemblyName PresentationFramework  -ErrorAction SilentlyContinue
-            Add-Type -AssemblyName PresentationCore       -ErrorAction SilentlyContinue
-            Add-Type -AssemblyName WindowsBase            -ErrorAction SilentlyContinue
+            Add-Type -AssemblyName PresentationFramework  -ErrorAction Stop
+            Add-Type -AssemblyName PresentationCore       -ErrorAction Stop
+            Add-Type -AssemblyName WindowsBase            -ErrorAction Stop
 
             # ---------------------------------------------------------------
             # Helper functions (must live inside the runspace scope)
@@ -4073,7 +4235,12 @@ function Start-ProgressWindow {
         while (-not $script:UiSync.Ready) {
             Start-Sleep -Milliseconds 50
             if (([DateTime]::UtcNow - $waitStart).TotalSeconds -gt 10) {
-                Write-Log 'Progress UI thread did not signal ready within 10s' 'WARN'
+                if ($null -ne $script:UiPipeline -and $script:UiPipeline.Streams.Error.Count -gt 0) {
+                    $uiError = $script:UiPipeline.Streams.Error[0]
+                    Write-Log "Progress UI thread did not signal ready within 10s: $uiError" 'WARN'
+                } else {
+                    Write-Log 'Progress UI thread did not signal ready within 10s' 'WARN'
+                }
                 break
             }
         }
@@ -4128,11 +4295,6 @@ function Close-ProgressWindow {
     }
 }
 
-# Helper stubs — animation functions now live inside the UI runspace.
-# These are kept as no-ops so any stray calls from the main thread don't throw.
-function Start-GlassAnimation { }
-function Start-GlassColorAnimation { }
-
 function Update-ProgressUI {
     <#
     .SYNOPSIS
@@ -4159,54 +4321,15 @@ function Update-ProgressUI {
         }
         $script:UiSync.TaskData = ($snapshot | ConvertTo-Json -Depth 4 -Compress)
     } catch {
-        # Non-fatal: UI update failure should never block task execution
-    }
-}
-
-# Legacy stub — remove external script reference
-# (no longer spawns a separate window)
-function Get-ProgressStateSnapshot {
-    param([object[]]$Tasks)
-
-    $snapshot = @()
-    foreach ($task in @($Tasks)) {
-        if ($null -eq $task) { continue }
-
-        $snapshot += [ordered]@{
-            TaskId      = [string]$task.TaskId
-            Phase       = [string]$task.Phase
-            Description = [string]$task.Description
-            Status      = [string]$task.Status
-            Error       = if ($null -ne $task.Error) { [string]$task.Error } else { $null }
+        if (-not $script:ProgressUiIssueLogged) {
+            $script:ProgressUiIssueLogged = $true
+            Add-RunInfrastructureIssue -Message "Progress overlay updates failed; task execution continued without reliable UI refreshes: $($_.Exception.Message)" -Level 'WARN'
         }
     }
-
-    return $snapshot
 }
 
 function Update-ProgressState {
     param([object[]]$Tasks)
-    try {
-        Ensure-Directory (Split-Path -Parent $script:ProgressStatePath)
-        $progressJson = (Get-ProgressStateSnapshot -Tasks $Tasks) | ConvertTo-Json -Depth 4
-        $maxAttempts = 5
-        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-            try {
-                Set-Content -Path $script:ProgressStatePath -Value $progressJson -Force
-                break
-            } catch {
-                if ($attempt -ge $maxAttempts) {
-                    throw
-                }
-
-                Start-Sleep -Milliseconds (100 * $attempt)
-            }
-        }
-    } catch {
-        Write-Log "Failed to update progress state : $_" 'ERROR'
-    }
-
-    # Refresh the inline WPF overlay
     Update-ProgressUI -Tasks $Tasks
 }
 
@@ -4233,26 +4356,31 @@ function Request-StartSurfaceRestart {
 }
 
 function Invoke-DeferredExplorerRestart {
-    $requiresTaskbarReconcile = $script:TaskbarPolicyPending -and $script:TaskbarPolicyDirty
+    try {
+        $reconcileSucceeded = $true
+        if ($script:TaskbarReconcilePending) {
+            $reconcileSucceeded = Invoke-ReconcileTaskbarPins
+        }
 
-    if ($script:ExplorerRestartPending) {
-        if ($requiresTaskbarReconcile) {
-            Invoke-ReconcileTaskbarPins
+        if ($script:ExplorerRestartPending) {
+            Write-Log "Restarting Explorer..."
+            Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            $null = Start-Process explorer.exe -ErrorAction Stop
+            $script:ExplorerRestartPending = $false
+            $script:StartSurfaceRestartPending = $false
+            Write-Log "Explorer restarted"
+            return $reconcileSucceeded
         }
-        Write-Log "Restarting Explorer..."
-        Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
-        Start-Process explorer.exe
-        $script:ExplorerRestartPending = $false
-        $script:StartSurfaceRestartPending = $false
-        Write-Log "Explorer restarted"
-    } elseif ($script:StartSurfaceRestartPending) {
-        if ($requiresTaskbarReconcile) {
-            Invoke-ReconcileTaskbarPins
+
+        if ($script:StartSurfaceRestartPending) {
+            return ((Restart-StartSurface) -and $reconcileSucceeded)
         }
-        Restart-StartSurface
-    } elseif ($requiresTaskbarReconcile) {
-        Invoke-ReconcileTaskbarPins
+
+        return $reconcileSucceeded
+    } catch {
+        Write-Log "Failed to apply deferred Explorer restart actions: $_" 'ERROR'
+        return $false
     }
 }
 
@@ -4262,8 +4390,10 @@ function Restart-StartSurface {
             Stop-Process -Force -ErrorAction SilentlyContinue
         $script:StartSurfaceRestartPending = $false
         Write-Log "Start surface restarted"
+        return $true
     } catch {
-        Write-Log "Failed to restart Start surface : $_" 'WARN'
+        Write-Log "Failed to restart Start surface : $_" 'ERROR'
+        return $false
     }
 }
 
@@ -4273,7 +4403,9 @@ function Invoke-ReconcileTaskbarPins {
 
         $taskbarPinPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
 
-        Restart-StartSurface
+        if (-not (Restart-StartSurface)) {
+            throw 'Failed to restart the Start surface before deferred taskbar reconciliation.'
+        }
         $null = Invoke-RemoveDefaultTaskbarSurfaceArtifacts
 
         # Ensure shortcuts exist for all apps that need pinning (required for both
@@ -4285,7 +4417,9 @@ function Invoke-ReconcileTaskbarPins {
             # Place .lnk in the Quick Launch pin folder (works on Win10, best-effort on Win11)
             $pinLnkPath = Join-Path $taskbarPinPath "$($pinSpec.ShortcutName).lnk"
             if (-not (Test-Path $pinLnkPath)) {
-                New-WindowsShortcut -ShortcutPath $pinLnkPath -TargetPath $preparedPin.ExecutablePath -Description $pinSpec.PackageName | Out-Null
+                if (-not (New-WindowsShortcut -ShortcutPath $pinLnkPath -TargetPath $preparedPin.ExecutablePath -Description $pinSpec.PackageName)) {
+                    throw "Failed to prepare taskbar shortcut for $($pinSpec.PackageName)."
+                }
             }
         }
 
@@ -4300,18 +4434,18 @@ function Invoke-ReconcileTaskbarPins {
             Write-Log "Failed to clear Taskband cache: $_" 'WARN'
         }
 
-        # Clear any stale managed taskbar policy state, but rely on shell verbs and the
-        # logon retry task for actual pinning because the managed layout path is disabled.
-        if ($script:TaskbarPolicyPending -and $script:TaskbarPolicyDirty) {
-            Update-ManagedTaskbarLayoutPolicy | Out-Null
-        }
-
         # Register a logon script that retries pinning via shell verbs at fresh logon.
         # At fresh logon the shell:AppsFolder is properly initialized and pin verbs are
         # available on Win10 and some Win11 builds where they fail mid-session.
-        Register-TaskbarPinAtLogonTask
+        if (-not (Register-TaskbarPinAtLogonTask)) {
+            throw 'Failed to register the deferred taskbar pin retry task.'
+        }
+
+        $script:TaskbarReconcilePending = $false
+        return $true
     } catch {
-        Write-Log "Failed to reconcile taskbar pins : $_" 'WARN'
+        Write-Log "Failed to reconcile taskbar pins : $_" 'ERROR'
+        return $false
     }
 }
 
@@ -4319,6 +4453,7 @@ function Register-TaskbarPinAtLogonTask {
     try {
         $taskName = 'Hunter-TaskbarPinAtLogon'
         $scriptPath = Join-Path $script:HunterRoot 'TaskbarPinAtLogon.ps1'
+        $logPath = Join-Path $script:HunterRoot 'taskbar-pin-at-logon.log'
 
         # Build the pin spec list as literal PowerShell that the logon script can use.
         $pinSpecLines = @()
@@ -4334,7 +4469,23 @@ function Register-TaskbarPinAtLogonTask {
         $pinSpecArray = $pinSpecLines -join "`n"
 
         $logonScript = @"
-`$ErrorActionPreference = 'SilentlyContinue'
+        `$ErrorActionPreference = 'Stop'
+        `$logPath = '$($logPath -replace "'","''")'
+
+        function Write-RetryLog {
+            param(
+                [string]`$Message,
+                [string]`$Level = 'INFO'
+            )
+
+            `$line = "[{0}] [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), `$Level, `$Message
+            try {
+                Add-Content -Path `$logPath -Value `$line -ErrorAction Stop
+            } catch {
+            }
+        }
+
+        `$hadFailure = `$false
 
 # Wait for Explorer shell to fully initialise after logon.
 Start-Sleep -Seconds 12
@@ -4346,9 +4497,16 @@ $pinSpecArray
 )
 `$appsToUnpin = @('*Edge*', '*Microsoft Edge*', '*Microsoft Store*')
 
-`$shell = New-Object -ComObject Shell.Application
-`$appsFolder = `$shell.NameSpace('shell:AppsFolder')
-if (`$null -eq `$appsFolder) { exit }
+try {
+    `$shell = New-Object -ComObject Shell.Application
+    `$appsFolder = `$shell.NameSpace('shell:AppsFolder')
+    if (`$null -eq `$appsFolder) {
+        throw 'shell:AppsFolder was unavailable at logon.'
+    }
+} catch {
+    Write-RetryLog -Message "Failed to initialize shell: $($_.Exception.Message)" -Level 'ERROR'
+    exit 1
+}
 
 # Unpin Edge and Store
 foreach (`$item in `$appsFolder.Items()) {
@@ -4356,7 +4514,15 @@ foreach (`$item in `$appsFolder.Items()) {
         if (`$item.Name -like `$pattern) {
             foreach (`$verb in `$item.Verbs()) {
                 foreach (`$vp in `$unpinVerbPatterns) {
-                    if (`$verb.Name -like `$vp) { `$verb.DoIt(); break }
+                    if (`$verb.Name -like `$vp) {
+                        try {
+                            `$verb.DoIt()
+                        } catch {
+                            `$hadFailure = `$true
+                            Write-RetryLog -Message "Failed to unpin $(`$item.Name): $($_.Exception.Message)" -Level 'WARN'
+                        }
+                        break
+                    }
                 }
             }
         }
@@ -4373,8 +4539,13 @@ foreach (`$app in `$appsToPin) {
                 foreach (`$verb in `$item.Verbs()) {
                     foreach (`$vp in `$pinVerbPatterns) {
                         if (`$verb.Name -like `$vp) {
-                            `$verb.DoIt()
-                            `$pinned = `$true
+                            try {
+                                `$verb.DoIt()
+                                `$pinned = `$true
+                            } catch {
+                                `$hadFailure = `$true
+                                Write-RetryLog -Message "Failed to pin $(`$item.Name): $($_.Exception.Message)" -Level 'WARN'
+                            }
                             break
                         }
                     }
@@ -4383,6 +4554,11 @@ foreach (`$app in `$appsToPin) {
             }
             if (`$pinned) { break }
         }
+    }
+
+    if (-not `$pinned) {
+        `$hadFailure = `$true
+        Write-RetryLog -Message "No pin verb succeeded for $(`$app.Name)." -Level 'WARN'
     }
 }
 
@@ -4394,8 +4570,20 @@ if (`$null -ne `$shell -and [System.Runtime.InteropServices.Marshal]::IsComObjec
 }
 
 # Self-cleanup
-Unregister-ScheduledTask -TaskName '$($taskName -replace "'","''")' -Confirm:`$false -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath '$($scriptPath -replace "'","''")' -Force -ErrorAction SilentlyContinue
+try {
+    Unregister-ScheduledTask -TaskName '$($taskName -replace "'","''")' -Confirm:`$false -ErrorAction Stop
+} catch {
+    Write-RetryLog -Message "Failed to unregister retry task during self-cleanup: $($_.Exception.Message)" -Level 'WARN'
+}
+try {
+    Remove-Item -LiteralPath '$($scriptPath -replace "'","''")' -Force -ErrorAction Stop
+} catch {
+    Write-RetryLog -Message "Failed to delete retry script during self-cleanup: $($_.Exception.Message)" -Level 'WARN'
+}
+
+if (`$hadFailure) {
+    exit 1
+}
 "@
 
         Ensure-Directory (Split-Path -Parent $scriptPath)
@@ -4416,18 +4604,9 @@ Remove-Item -LiteralPath '$($scriptPath -replace "'","''")' -Force -ErrorAction 
             -Force | Out-Null
 
         Write-Log "Registered logon task '$taskName' to retry taskbar pinning via shell verbs at next logon." 'INFO'
+        return $true
     } catch {
-        Write-Log "Failed to register taskbar pin logon task: $_" 'WARN'
-    }
-}
-
-function Update-ManagedTaskbarLayoutPolicy {
-    try {
-        Clear-ManagedStartCustomizationPolicies | Out-Null
-        Write-Log 'Skipping managed taskbar layout policy because it locks Start customization; relying on shell and logon taskbar pinning instead.' 'INFO'
-        return $false
-    } catch {
-        Write-Log "Failed to disable managed taskbar layout policy: $_" 'WARN'
+        Write-Log "Failed to register taskbar pin logon task: $_" 'ERROR'
         return $false
     }
 }
@@ -4542,25 +4721,87 @@ function Invoke-CreateRestorePoint {
         return (New-TaskSkipResult -Reason 'Restore point creation was skipped by the user')
     }
 
+    $restorePointJob = $null
+    $restorePointTimeoutSeconds = 300
+    $systemRestorePath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
+    $originalFrequencyExists = $false
+    $originalFrequencyValue = $null
+
     try {
-        $systemRestorePath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
+        if (Test-Path $systemRestorePath) {
+            try {
+                $existingFrequency = Get-ItemProperty -Path $systemRestorePath -Name 'SystemRestorePointCreationFrequency' -ErrorAction Stop
+                $originalFrequencyValue = [int]$existingFrequency.SystemRestorePointCreationFrequency
+                $originalFrequencyExists = $true
+            } catch [System.Management.Automation.ItemNotFoundException] {
+            }
+        }
+
         Set-RegistryValue -Path $systemRestorePath -Name 'SystemRestorePointCreationFrequency' -Value 0 -Type 'DWord'
         if (-not (Test-RegistryValue -Path $systemRestorePath -Name 'SystemRestorePointCreationFrequency' -ExpectedValue 0)) {
             throw 'SystemRestorePointCreationFrequency was not persisted.'
         }
 
-        if (-not @(Get-ComputerRestorePoint -ErrorAction SilentlyContinue).Count) {
-            Enable-ComputerRestore -Drive $env:SystemDrive -ErrorAction Stop
-        } else {
-            Enable-ComputerRestore -Drive $env:SystemDrive -ErrorAction Stop
+        $restorePointJob = Start-Job -ScriptBlock {
+            param($Drive)
+
+            $ErrorActionPreference = 'Stop'
+            Enable-ComputerRestore -Drive $Drive -ErrorAction Stop
+            Checkpoint-Computer -Description 'Hunter Pre-Install' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
+
+            return @{
+                Success = $true
+            }
+        } -ArgumentList ('{0}\' -f $env:SystemDrive.TrimEnd('\'))
+
+        if (-not (Wait-Job -Job $restorePointJob -Timeout $restorePointTimeoutSeconds)) {
+            try {
+                Stop-Job -Job $restorePointJob -ErrorAction Stop | Out-Null
+            } catch {
+                Write-Log "Failed to stop timed-out restore-point job cleanly: $($_.Exception.Message)" 'WARN'
+            }
+
+            throw "Restore point creation timed out after $restorePointTimeoutSeconds seconds."
         }
 
-        Checkpoint-Computer -Description 'Hunter Pre-Install' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
+        $restorePointResult = Receive-Job -Job $restorePointJob -ErrorAction Stop
+        if ($null -eq $restorePointResult -or
+            ($restorePointResult -is [hashtable] -and $restorePointResult.ContainsKey('Success') -and -not [bool]$restorePointResult.Success)) {
+            throw 'Restore point job did not report success.'
+        }
+
         Write-Log "Restore point created successfully"
         return $true
     } catch {
         Write-Log "Failed to create restore point : $_" 'ERROR'
         return $false
+    } finally {
+        if ($null -ne $restorePointJob) {
+            try {
+                Remove-Job -Job $restorePointJob -Force -ErrorAction Stop | Out-Null
+            } catch {
+                Write-Log "Failed to remove restore-point background job: $($_.Exception.Message)" 'WARN'
+            }
+        }
+
+        if ($originalFrequencyExists) {
+            if (-not (Set-RegistryValue -Path $systemRestorePath -Name 'SystemRestorePointCreationFrequency' -Value $originalFrequencyValue -Type 'DWord')) {
+                Write-Log 'Failed to restore the original SystemRestorePointCreationFrequency value.' 'ERROR'
+            }
+        } else {
+            Remove-RegistryValueIfPresent -Path $systemRestorePath -Name 'SystemRestorePointCreationFrequency'
+            if (Test-Path $systemRestorePath) {
+                try {
+                    $leftoverFrequency = Get-ItemProperty -Path $systemRestorePath -Name 'SystemRestorePointCreationFrequency' -ErrorAction Stop
+                    if ($null -ne $leftoverFrequency) {
+                        Write-Log 'Failed to remove the temporary SystemRestorePointCreationFrequency override.' 'ERROR'
+                    }
+                } catch [System.Management.Automation.ItemNotFoundException] {
+                } catch {
+                    Write-Log "Failed to verify cleanup of SystemRestorePointCreationFrequency: $($_.Exception.Message)" 'ERROR'
+                }
+            }
+        }
     }
 }
 
@@ -4628,7 +4869,7 @@ function Invoke-PreDownloadInstallers {
 # ==============================================================================
 
 function Invoke-EnsureLocalStandardUser {
-    if (Test-TaskCompleted -TaskId 'core-local-user') {
+    if (Test-TaskCompleted -TaskId 'core-local-user-v2') {
         Write-Log "Local user already ensured, skipping"
         return $true
     }
@@ -4645,27 +4886,40 @@ function Invoke-EnsureLocalStandardUser {
         $canUseLocalAccountsModule = @($localAccountsCommands | Where-Object {
             $null -ne (Get-Command -Name $_ -ErrorAction SilentlyContinue)
         }).Count -eq $localAccountsCommands.Count
+        $passwordContext = $null
 
         if ($canUseLocalAccountsModule) {
-            $password = ConvertTo-SecureString 'Password123!' -AsPlainText -Force
             $user = Get-LocalUser -Name 'user' -ErrorAction SilentlyContinue
+            $passwordContext = Resolve-HunterLocalUserPassword -UserExists:($null -ne $user)
 
             if ($null -eq $user) {
+                if ($null -eq $passwordContext -or [string]::IsNullOrWhiteSpace($passwordContext.Password)) {
+                    throw "Hunter could not resolve a managed password for local user 'user'."
+                }
+
+                $password = ConvertTo-SecureString $passwordContext.Password -AsPlainText -Force
                 New-LocalUser -Name 'user' -Password $password -FullName 'Standard User' -ErrorAction Stop
                 Write-Log "Local user 'user' created"
             } else {
-                Set-LocalUser -Name 'user' -Password $password -FullName 'Standard User' -ErrorAction Stop
+                if ($null -ne $passwordContext -and -not [string]::IsNullOrWhiteSpace($passwordContext.Password)) {
+                    $password = ConvertTo-SecureString $passwordContext.Password -AsPlainText -Force
+                    Set-LocalUser -Name 'user' -Password $password -FullName 'Standard User' -ErrorAction Stop
+                } else {
+                    Set-LocalUser -Name 'user' -FullName 'Standard User' -ErrorAction Stop
+                    Write-Log "Existing local user 'user' retained its current password because Hunter has no managed credential for it." 'WARN'
+                }
+
                 if (-not $user.Enabled) {
-                    Enable-LocalUser -Name 'user' -ErrorAction SilentlyContinue
+                    Enable-LocalUser -Name 'user' -ErrorAction Stop
                 }
                 Write-Log "Local user 'user' normalized"
             }
 
-            $adminGroup = @(Get-LocalGroupMember -Group 'Administrators' -ErrorAction SilentlyContinue |
+            $adminGroup = @(Get-LocalGroupMember -Group 'Administrators' -ErrorAction Stop |
                 Where-Object { $_.Name -match '(^|\\)user$' })
 
             if ($adminGroup.Count -gt 0) {
-                Remove-LocalGroupMember -Group 'Administrators' -Member 'user' -ErrorAction SilentlyContinue
+                Remove-LocalGroupMember -Group 'Administrators' -Member 'user' -ErrorAction Stop
                 Write-Log "Local user 'user' removed from Administrators"
             }
         } else {
@@ -4731,11 +4985,17 @@ function Invoke-EnsureLocalStandardUser {
                 }
             }
 
-            $passwordText = 'Password123!'
             $userExists = & $testLocalUserExists
+            $passwordContext = Resolve-HunterLocalUserPassword -UserExists:$userExists
             $userEntry = if ($userExists) { & $resolveLocalUserEntry } else { $null }
 
-            $netUserArgs = @('user', 'user', $passwordText)
+            $netUserArgs = @('user', 'user')
+            if ($null -ne $passwordContext -and -not [string]::IsNullOrWhiteSpace($passwordContext.Password)) {
+                $netUserArgs += $passwordContext.Password
+            } elseif (-not $userExists) {
+                throw "Hunter could not resolve a managed password for local user 'user'."
+            }
+
             if (-not $userExists) {
                 $netUserArgs += '/add'
             }
@@ -4770,7 +5030,12 @@ function Invoke-EnsureLocalStandardUser {
                         $userEntry = $computerEntry.Create('user', 'user')
                     }
 
-                    $userEntry.SetPassword($passwordText)
+                    if ($null -ne $passwordContext -and -not [string]::IsNullOrWhiteSpace($passwordContext.Password)) {
+                        $userEntry.SetPassword($passwordContext.Password)
+                    } elseif (-not $userExists) {
+                        throw "ADSI fallback could not create local user 'user' without a managed password."
+                    }
+
                     $userEntry.Put('FullName', 'Standard User')
                     $userEntry.SetInfo()
 
@@ -4815,6 +5080,10 @@ function Invoke-EnsureLocalStandardUser {
             }
         }
 
+        if ($null -ne $passwordContext -and -not [string]::IsNullOrWhiteSpace($passwordContext.Source)) {
+            Write-Log "Managed local-user credential source: $($passwordContext.Source)" 'INFO'
+        }
+
         return $true
     } catch {
         Write-Log "Failed to ensure local user : $_" 'ERROR'
@@ -4823,7 +5092,7 @@ function Invoke-EnsureLocalStandardUser {
 }
 
 function Invoke-ConfigureAutologin {
-    if (Test-TaskCompleted -TaskId 'core-autologin') {
+    if (Test-TaskCompleted -TaskId 'core-autologin-v2') {
         Write-Log "Autologin already configured, skipping"
         return (New-TaskSkipResult -Reason 'Autologin already configured')
     }
@@ -4834,11 +5103,19 @@ function Invoke-ConfigureAutologin {
     }
 
     try {
+        $passwordContext = Resolve-HunterLocalUserPassword -UserExists:$true
+        if ($null -eq $passwordContext -or [string]::IsNullOrWhiteSpace($passwordContext.Password)) {
+            Write-Log "Autologin was not configured because Hunter does not have a managed credential for local user 'user'." 'WARN'
+            return (New-TaskSkipResult -Reason 'Autologin requires a managed local-user credential')
+        }
+
         $autologonPath = Join-Path $script:DownloadDir 'Autologon64.exe'
         Download-File -Url 'https://live.sysinternals.com/Autologon64.exe' -Destination $autologonPath
 
         if (Test-Path $autologonPath) {
-            Invoke-NativeCommandChecked -FilePath $autologonPath -ArgumentList @('/accepteula', 'user', '.', 'Password123!') | Out-Null
+            Ensure-InstallerHelpersLoaded
+            $validatedAutologonPath = Confirm-InstallerSignature -PackageName 'Autologon' -Path $autologonPath
+            Invoke-NativeCommandChecked -FilePath $validatedAutologonPath -ArgumentList @('/accepteula', 'user', '.', $passwordContext.Password) | Out-Null
             Write-Log "Autologin configured"
             return $true
         } else {
@@ -4956,7 +5233,9 @@ function Invoke-DisableStartRecommendations {
         $policyManagerEducationPath = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Education'
         $blockedStartPinsPatterns = Get-DefaultBlockedStartPinsPatterns
 
-        Clear-ManagedStartCustomizationPolicies | Out-Null
+        if (-not (Clear-StaleStartCustomizationPolicies)) {
+            return $false
+        }
 
         # HKLM policy writes (WinUtil-aligned: 3 machine-level keys)
         Set-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer" -Name 'HideRecommendedSection' -Value 1 -Type DWord
@@ -5001,9 +5280,12 @@ function Invoke-DisableStartRecommendations {
             return $false
         }
 
-        Invoke-ApplyLiveStartPinCleanup -BlockedPatterns $blockedStartPinsPatterns | Out-Null
+        $liveCleanupResult = Invoke-ApplyLiveStartPinCleanup -BlockedPatterns $blockedStartPinsPatterns
+        if (Test-TaskHandlerReturnedFailure -TaskResult $liveCleanupResult) {
+            return $false
+        }
         Request-ExplorerRestart
-        return $true
+        return $liveCleanupResult
     } catch {
         Write-Log "Failed to disable Start recommendations : $_" 'ERROR'
         return $false
@@ -5665,8 +5947,14 @@ function Invoke-NukeBlockApps {
         Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Teams\' -TaskName 'TeamsStartupTask' -DisplayName 'Teams startup task' | Out-Null
 
         # Start pins policy
-        Clear-ManagedStartCustomizationPolicies | Out-Null
-        Invoke-ApplyLiveStartPinCleanup -BlockedPatterns $blockedStartPinsPatterns | Out-Null
+        if (-not (Clear-StaleStartCustomizationPolicies)) {
+            return $false
+        }
+
+        $liveCleanupResult = Invoke-ApplyLiveStartPinCleanup -BlockedPatterns $blockedStartPinsPatterns
+        if (Test-TaskHandlerReturnedFailure -TaskResult $liveCleanupResult) {
+            return $false
+        }
 
         # Explorer/Start restart
         Request-ExplorerRestart
@@ -5687,7 +5975,7 @@ function Invoke-NukeBlockApps {
         }
 
         Write-Log -Message "App NUKE+BLOCK removal complete." -Level 'INFO'
-        return $true
+        return $liveCleanupResult
     }
     catch {
         Write-Log -Message "Error in Invoke-NukeBlockApps: $_" -Level 'ERROR'
@@ -6993,8 +7281,27 @@ function Invoke-ExhaustivePowerTuning {
 
         # ---- Wait for device bus enumerations to complete ----
         $busEnumJobs | Wait-Job -Timeout 120 | Out-Null
-        $busResults = @($busEnumJobs | ForEach-Object { Receive-Job -Job $_ -ErrorAction SilentlyContinue })
-        $busEnumJobs | Remove-Job -Force -ErrorAction SilentlyContinue
+        $busResults = @()
+        foreach ($busJob in @($busEnumJobs)) {
+            if ($busJob.State -ne 'Completed') {
+                Write-Log "Device bus enumeration job '$($busJob.Name)' finished in state $($busJob.State)." 'WARN'
+            }
+
+            try {
+                $receivedResult = Receive-Job -Job $busJob -ErrorAction Stop
+                if ($null -ne $receivedResult) {
+                    $busResults += @($receivedResult)
+                }
+            } catch {
+                Write-Log "Failed to collect device bus enumeration job '$($busJob.Name)': $($_.Exception.Message)" 'WARN'
+            }
+
+            try {
+                Remove-Job -Job $busJob -Force -ErrorAction Stop
+            } catch {
+                Write-Log "Failed to remove device bus enumeration job '$($busJob.Name)': $($_.Exception.Message)" 'WARN'
+            }
+        }
 
         # ---- Build combined .reg file (NIC + device buses) and import once ----
         $regContent = [System.Text.StringBuilder]::new()
@@ -7068,8 +7375,30 @@ function Invoke-InstallTimerResolutionService {
         $displayName = 'Set Timer Resolution Service'
         $serviceDir = Join-Path $script:ProgramFilesRoot $serviceName
         $exePath = Join-Path $serviceDir "$serviceName.exe"
+        $existingSvc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 
         Ensure-Directory $serviceDir
+
+        if ($null -ne $existingSvc -and (Test-Path $exePath)) {
+            Ensure-GlobalTimerResolutionRequestsEnabled | Out-Null
+
+            if ($existingSvc.Status -ne 'Running') {
+                try {
+                    Start-Service -Name $serviceName -ErrorAction Stop
+                    Start-Sleep -Milliseconds 500
+                    $existingSvc = Get-Service -Name $serviceName -ErrorAction Stop
+                } catch {
+                    Write-Log "Existing timer resolution service could not be started cleanly and will be reinstalled: $($_.Exception.Message)" 'WARN'
+                }
+            }
+
+            if ($null -ne $existingSvc -and $existingSvc.Status -eq 'Running') {
+                Write-Log "Timer resolution service already installed and running ($exePath)." 'INFO'
+                return (New-TaskSkipResult -Reason 'Timer resolution service already installed and running')
+            }
+        } elseif ($null -ne $existingSvc) {
+            Write-Log 'Timer resolution service exists but its binary is missing; reinstalling it.' 'WARN'
+        }
 
         # Compile the process-aware WinSux timer resolution service.
         $csSource = @'
@@ -7326,7 +7655,6 @@ namespace HunterTimerResolution
         Write-Log 'Timer resolution service compiled successfully.' 'INFO'
         Remove-Item -Path $csFilePath -Force -ErrorAction SilentlyContinue
 
-        $existingSvc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
         if ($null -ne $existingSvc) {
             if ($existingSvc.Status -ne 'Stopped') {
                 Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
@@ -8701,20 +9029,38 @@ function Invoke-DeleteTempFiles {
         )
 
         $totalRemoved = 0
+        $totalFailed = 0
 
         foreach ($path in $tempPaths) {
             if (Test-Path $path) {
                 try {
-                    $items = Get-ChildItem -Path $path -Recurse -Force -ErrorAction SilentlyContinue
-                    $removed = ($items | Measure-Object).Count
+                    $items = @(Get-ChildItem -Path $path -Recurse -Force -ErrorAction SilentlyContinue)
+                    $removeErrors = @()
+                    $items | Remove-Item -Recurse -Force -ErrorAction Continue -ErrorVariable +removeErrors
 
-                    $items | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+                    $failed = @($removeErrors).Count
+                    $removed = [Math]::Max(0, $items.Count - $failed)
 
                     $totalRemoved += $removed
-                    Write-Log "Cleaned $removed items from $path" 'INFO'
+                    $totalFailed += $failed
+
+                    if ($failed -gt 0) {
+                        Write-Log "Temporary cleanup removed $removed items from $path and skipped $failed locked or inaccessible item(s)." 'WARN'
+                    } else {
+                        Write-Log "Cleaned $removed items from $path" 'INFO'
+                    }
                 } catch {
                     Write-Log "Warning cleaning $path : $_" 'WARN'
                 }
+            }
+        }
+
+        if ($totalFailed -gt 0) {
+            Write-Log "Temporary file cleanup completed with warnings: $totalRemoved removed, $totalFailed skipped" 'WARN'
+            return @{
+                Success = $true
+                Status  = 'CompletedWithWarnings'
+                Reason  = "Skipped $totalFailed temporary item(s) that could not be removed"
             }
         }
 
@@ -8834,12 +9180,12 @@ function Invoke-RetryFailedTasks {
 
         if (@($Tasks).Count -eq 0) {
             Write-Log 'No task list available for retry processing' 'WARN'
-            return
+            return $false
         }
 
         if (@($script:FailedTasks).Count -eq 0) {
             Write-Log "No failed tasks to retry" 'INFO'
-            return
+            return (New-TaskSkipResult -Reason 'No failed tasks required retry')
         }
 
         Write-Log "Retrying $(@($script:FailedTasks).Count) failed task(s)..." 'INFO'
@@ -8902,6 +9248,7 @@ function Invoke-RetryFailedTasks {
         }
 
         Write-Log "Task retry complete: $(@($script:FailedTasks).Count) still failing" 'INFO'
+        return (@($script:FailedTasks).Count -eq 0)
 
     } catch {
         Write-Log "Error retrying failed tasks: $_" 'ERROR'
@@ -8979,7 +9326,7 @@ function Invoke-ExportDesktopOperationLog {
             "Failed:           $failedCount",
             "Success Rate:     $([math]::Round(($completedCount / [math]::Max($totalTasks, 1)) * 100, 1))%",
             "",
-            "Pending Reboot:   $(if ($rebootPending) { 'YES' } else { 'NO' })",
+            "Pending Reboot:   $(if ($null -eq $rebootPending) { 'UNKNOWN (check failed)' } elseif ($rebootPending) { 'YES' } else { 'NO' })",
             ""
         )
 
@@ -9040,6 +9387,16 @@ function Invoke-ExportDesktopOperationLog {
             }
 
             $reportContent += ""
+        }
+
+        if (@($script:RunInfrastructureIssues).Count -gt 0) {
+            $reportContent += @(
+                '---- INFRASTRUCTURE ISSUES ----'
+            )
+            $reportContent += @($script:RunInfrastructureIssues | ForEach-Object { "  [!] $_" })
+            $reportContent += @(
+                ""
+            )
         }
 
         $reportContent += @(
@@ -9191,7 +9548,9 @@ function Invoke-TaskExecution {
                 if (-not $script:FailedTasks) {
                     $script:FailedTasks = @()
                 }
-                $script:FailedTasks = @($script:FailedTasks) + @($task.TaskId)
+                if ($script:FailedTasks -notcontains $task.TaskId) {
+                    $script:FailedTasks = @($script:FailedTasks) + @($task.TaskId)
+                }
 
                 Write-Log "Task failed: $($task.TaskId) - $($task.Error)" 'ERROR'
 
@@ -9218,7 +9577,11 @@ function Invoke-TaskExecution {
             }
         }
 
-        Write-Log "Task execution engine complete" 'SUCCESS'
+        if (@($script:FailedTasks).Count -gt 0) {
+            Write-Log "Task execution engine complete with $(@($script:FailedTasks).Count) failed task(s)" 'WARN'
+        } else {
+            Write-Log "Task execution engine complete" 'SUCCESS'
+        }
 
     } catch {
         Write-Log "Critical error in task execution engine: $_" 'ERROR'
@@ -9279,13 +9642,13 @@ function Build-Tasks {
     # -------------------------------------------------------------------------
 
     $tasks += New-Task `
-        -TaskId 'core-local-user' `
+        -TaskId 'core-local-user-v2' `
         -Phase '2' `
         -ApplyHandler { Invoke-EnsureLocalStandardUser } `
         -Description 'Ensure standard local user exists'
 
     $tasks += New-Task `
-        -TaskId 'core-autologin' `
+        -TaskId 'core-autologin-v2' `
         -Phase '2' `
         -ApplyHandler { Invoke-ConfigureAutologin } `
         -Description 'Configure autologin for standard user'
@@ -9313,7 +9676,7 @@ function Build-Tasks {
         -Description 'Disable Bing search in Start Menu'
 
     $tasks += New-Task `
-        -TaskId 'startui-start-recommendations-v3' `
+        -TaskId 'startui-start-recommendations-v4' `
         -Phase '3' `
         -ApplyHandler { Invoke-DisableStartRecommendations } `
         -Description 'Disable Start Menu recommendations'
@@ -9738,15 +10101,28 @@ function Unregister-ResumeTask {
             return
         }
 
+        $existingTask = Get-ScheduledTask -TaskName 'Hunter-Resume' -ErrorAction SilentlyContinue
+        if ($null -eq $existingTask) {
+            Write-Log "Resume scheduled task was already absent" 'INFO'
+            return $true
+        }
+
         Unregister-ScheduledTask -TaskName 'Hunter-Resume' `
             -Confirm:$false `
-            -ErrorAction SilentlyContinue
+            -ErrorAction Stop
+
+        $remainingTask = Get-ScheduledTask -TaskName 'Hunter-Resume' -ErrorAction SilentlyContinue
+        if ($null -ne $remainingTask) {
+            Add-RunInfrastructureIssue -Message 'Hunter-Resume scheduled task still exists after cleanup was requested.' -Level 'ERROR'
+            return $false
+        }
 
         Write-Log "Resume scheduled task unregistered" 'INFO'
+        return $true
 
     } catch {
-        Write-Log "Error unregistering resume task: $_" 'ERROR'
-        throw
+        Add-RunInfrastructureIssue -Message "Error unregistering resume task: $($_.Exception.Message)" -Level 'ERROR'
+        return $false
     }
 }
 
@@ -9772,8 +10148,9 @@ function Test-PendingReboot {
         return ($cbs -or $wuau)
 
     } catch {
-        Write-Log "Error checking pending reboot status: $_" 'WARN'
-        return $false
+        $script:PendingRebootCheckFailed = $true
+        Add-RunInfrastructureIssue -Message "Failed to determine whether Windows is pending reboot: $($_.Exception.Message)" -Level 'WARN'
+        return $null
     }
 }
 
@@ -9916,7 +10293,7 @@ function Invoke-Main {
         # --------------------------------------------------------------------
 
         # Unregister resume task (success path)
-        Unregister-ResumeTask
+        Unregister-ResumeTask | Out-Null
 
         # Stop the run stopwatch
         if ($null -ne $script:RunStopwatch) { $script:RunStopwatch.Stop() }
@@ -9929,6 +10306,8 @@ function Invoke-Main {
         $failedCount = @($tasks | Where-Object { $_.Status -eq 'Failed' }).Count
         $totalCount = $tasks.Count
         $successRate = if ($totalCount -gt 0) { [math]::Round(($completedCount / $totalCount) * 100, 1) } else { 0 }
+        $infrastructureIssueCount = @($script:RunInfrastructureIssues).Count
+        $runHadIssues = ($failedCount -gt 0) -or ($infrastructureIssueCount -gt 0)
 
         Write-Log "FINAL SUMMARY:" 'INFO'
         Write-Log "  Elapsed Time:   $elapsedTime" 'INFO'
@@ -9937,18 +10316,30 @@ function Invoke-Main {
         Write-Log "  Warnings:       $warningCount" 'INFO'
         Write-Log "  Skipped:        $skippedCount" 'INFO'
         Write-Log "  Failed:         $failedCount" 'INFO'
+        Write-Log "  Infra Issues:   $infrastructureIssueCount" 'INFO'
         Write-Log "  Success Rate:   $successRate%" 'INFO'
+
+        if ($infrastructureIssueCount -gt 0) {
+            foreach ($issue in @($script:RunInfrastructureIssues)) {
+                Write-Log "  Infra Detail:   $issue" 'WARN'
+            }
+        }
 
         Write-Log ""
         Save-Checkpoint
         Close-ProgressWindow
 
         # Check for pending reboot
-        if (Test-PendingReboot) {
-            if ($script:IsAutomationRun) {
+        $pendingReboot = Test-PendingReboot
+        if ($null -eq $pendingReboot) {
+            Write-Log "Pending reboot state could not be determined." 'WARN'
+        } elseif ($pendingReboot) {
+            if ($runHadIssues) {
+                Write-Log "Pending reboot was detected, but Hunter completed with issues. Automatic reboot is being skipped so you can review the report first." 'WARN'
+            } elseif ($script:IsAutomationRun) {
                 Write-Log "Pending reboot detected, but automation-safe mode is active; skipping reboot." 'WARN'
             } else {
-                Write-Log "Pending reboot detected - system will restart in 30 seconds..." 'WARN'
+                Write-Log "Pending reboot detected - system will restart in 5 seconds..." 'WARN'
                 Write-Log ""
                 Start-Sleep -Seconds 5
                 Start-Process -FilePath shutdown.exe -ArgumentList '/r', '/t', '0', '/f' -WindowStyle Hidden
@@ -9960,11 +10351,16 @@ function Invoke-Main {
 
         Write-Log ""
         Write-Log "===========================================================" 'INFO'
-        Write-Log "                    HUNTER COMPLETED" 'INFO'
+        Write-Log ("                    HUNTER {0}" -f $(if ($runHadIssues) { 'COMPLETED WITH ISSUES' } else { 'COMPLETED' })) 'INFO'
         Write-Log "===========================================================" 'INFO'
         Write-Log "" 'INFO'
+        if ($runHadIssues) {
+            Write-Log 'Autonomous run completed, but one or more tasks or run-infrastructure checks reported issues. Review the summary and report before trusting the system state.' 'WARN'
+            return $false
+        }
+
         Write-Log 'Autonomous run complete. Exiting without waiting for user input.' 'INFO'
-        return
+        return $true
 
     } catch {
         Write-Log ""
