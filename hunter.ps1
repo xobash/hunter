@@ -28,7 +28,6 @@ $script:TaskbarUnpinVerbPatterns = @('*Unpin from taskbar*', '*taskbarunpin*')
 $script:TaskbarStatePollIntervalMs = 300
 $script:TaskbarStateTimeoutSec = 6
 $script:StartSurfaceReadyTimeoutSec = 5
-$script:MaxParallelInstallJobs = 4
 $script:GitHubApiMaxAttempts = 3
 $script:GitHubApiBaseDelaySec = 2
 $script:IsHyperVGuest      = $false
@@ -7901,11 +7900,6 @@ function Invoke-ParallelInstalls {
             $script:ParallelInstallTargets = @()
             $script:ParallelInstallJobs = @()
             $script:ParallelInstallResults = @{}
-            $maxParallelJobs = [Math]::Max([int]$script:MaxParallelInstallJobs, 1)
-
-            if ($LaunchOnly) {
-                Write-Log 'LaunchOnly mode enabled: queueing all installer jobs immediately without waiting for slot availability.' 'INFO'
-            }
 
             foreach ($target in @(Get-InstallTargetCatalog)) {
                 if ($target.PackageId -eq 'cinebench-r23') {
@@ -7969,24 +7963,8 @@ function Invoke-ParallelInstalls {
 
                 $script:ParallelInstallTargets += $resolvedTarget
 
-                if (-not $LaunchOnly) {
-                    $slotWaitStart = [datetime]::UtcNow
-                    $slotWaitMaxMinutes = 30
-                    while (@($script:ParallelInstallJobs | Where-Object { $_.Job.State -notin @('Completed', 'Failed', 'Stopped') }).Count -ge $maxParallelJobs) {
-                        if (([datetime]::UtcNow - $slotWaitStart).TotalMinutes -ge $slotWaitMaxMinutes) {
-                            Write-Log "Timed out waiting for a parallel install slot after $slotWaitMaxMinutes minutes. Forcing collection." 'WARN'
-                            $stuckJobs = @($script:ParallelInstallJobs | Where-Object { $_.Job.State -notin @('Completed', 'Failed', 'Stopped') })
-                            foreach ($sj in $stuckJobs) {
-                                Stop-Job -Job $sj.Job -ErrorAction SilentlyContinue
-                                Write-Log "Force-stopped hung install job for $($sj.PackageName)" 'WARN'
-                            }
-                            Invoke-CollectCompletedParallelInstallJobs
-                            break
-                        }
-                        Wait-Job -Job @($script:ParallelInstallJobs | ForEach-Object { $_.Job }) -Any -Timeout 5 | Out-Null
-                        Invoke-CollectCompletedParallelInstallJobs
-                    }
-                }
+                # Collect any already-finished jobs to free resources, but never block
+                Invoke-CollectCompletedParallelInstallJobs
 
                 $jobTarget = @{
                     PackageId                  = $resolvedTarget.PackageId
