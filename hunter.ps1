@@ -3026,8 +3026,8 @@ function Clear-StaleStartCustomizationPolicies {
             )) {
             if (Test-Path $leftoverValue.Path) {
                 try {
-                    $currentValue = Get-ItemProperty -Path $leftoverValue.Path -Name $leftoverValue.Name -ErrorAction Stop
-                    if ($null -ne $currentValue) {
+                    $currentItem = Get-ItemProperty -Path $leftoverValue.Path -ErrorAction Stop
+                    if ($null -ne $currentItem.PSObject.Properties[$leftoverValue.Name]) {
                         $hadFailure = $true
                         Write-Log "Stale Start customization policy is still present: $($leftoverValue.Path)\$($leftoverValue.Name)" 'ERROR'
                     }
@@ -5721,15 +5721,44 @@ function Invoke-RemoveOneDrive {
         $oneDriveProgramFiles = Join-Path $programFilesRoot 'Microsoft OneDrive'
         $oneDriveUserFolder = $env:OneDrive
         $oneDriveGuid = '{018D5C66-4533-4307-9B53-224DE2ED1FE6}'
-        if ((Test-Path $oneDriveSetup32) -or
-            (Test-Path $oneDriveSetup64) -or
-            (Test-Path $oneDriveLocalAppData) -or
-            ((-not [string]::IsNullOrWhiteSpace($oneDriveUserFolder)) -and (Test-Path $oneDriveUserFolder)) -or
-            (Test-ExplorerNamespacePresent -Guid $oneDriveGuid)) {
+
+        $getOneDriveMarkers = {
+            $markers = New-Object 'System.Collections.Generic.List[string]'
+
+            if (Test-Path $oneDriveLocalAppData) {
+                [void]$markers.Add('LocalAppData')
+            }
+
+            if (Test-Path $oneDriveProgramFiles) {
+                [void]$markers.Add('ProgramFiles')
+            }
+
+            if ((-not [string]::IsNullOrWhiteSpace($oneDriveUserFolder)) -and (Test-Path $oneDriveUserFolder)) {
+                [void]$markers.Add('UserFolder')
+            }
+
+            if (Test-ExplorerNamespacePresent -Guid $oneDriveGuid) {
+                [void]$markers.Add('ExplorerNamespace')
+            }
+
+            foreach ($executablePath in @(
+                    "$env:LOCALAPPDATA\Microsoft\OneDrive\OneDrive.exe",
+                    (Join-Path $oneDriveProgramFiles 'OneDrive.exe')
+                )) {
+                if (-not [string]::IsNullOrWhiteSpace($executablePath) -and (Test-Path $executablePath)) {
+                    [void]$markers.Add("Executable:$executablePath")
+                }
+            }
+
+            return @($markers)
+        }
+
+        $detectedMarkers = & $getOneDriveMarkers
+        if ($detectedMarkers.Count -gt 0) {
             Write-Log -Message "OneDrive installation detected." -Level 'INFO'
         } else {
             Write-Log -Message "OneDrive not installed. Skipping." -Level 'INFO'
-            return $true
+            return (New-TaskSkipResult -Reason 'OneDrive runtime artifacts were not present')
         }
 
         $oneDriveExecutablePaths = @(
@@ -5759,10 +5788,40 @@ function Invoke-RemoveOneDrive {
         }
 
         Write-Log -Message "Uninstalling OneDrive..." -Level 'INFO'
+        $uninstallIssue = $null
         if (Test-Path $oneDriveSetup64) {
-            Start-ProcessChecked -FilePath $oneDriveSetup64 -ArgumentList @('/uninstall') -WindowStyle Hidden | Out-Null
+            try {
+                $uninstallProcess = Start-Process -FilePath $oneDriveSetup64 -ArgumentList @('/uninstall') -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+                if ($null -eq $uninstallProcess) {
+                    throw "Failed to start process $oneDriveSetup64"
+                }
+
+                if ([int]$uninstallProcess.ExitCode -ne 0) {
+                    $uninstallIssue = "$oneDriveSetup64 exited with code $($uninstallProcess.ExitCode)"
+                    Write-Log -Message "OneDrive uninstaller reported a non-zero exit code: $uninstallIssue" -Level 'WARN'
+                }
+            } catch {
+                $uninstallIssue = $_.Exception.Message
+                Write-Log -Message "OneDrive uninstall attempt failed: $uninstallIssue" -Level 'WARN'
+            }
         } elseif (Test-Path $oneDriveSetup32) {
-            Start-ProcessChecked -FilePath $oneDriveSetup32 -ArgumentList @('/uninstall') -WindowStyle Hidden | Out-Null
+            try {
+                $uninstallProcess = Start-Process -FilePath $oneDriveSetup32 -ArgumentList @('/uninstall') -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+                if ($null -eq $uninstallProcess) {
+                    throw "Failed to start process $oneDriveSetup32"
+                }
+
+                if ([int]$uninstallProcess.ExitCode -ne 0) {
+                    $uninstallIssue = "$oneDriveSetup32 exited with code $($uninstallProcess.ExitCode)"
+                    Write-Log -Message "OneDrive uninstaller reported a non-zero exit code: $uninstallIssue" -Level 'WARN'
+                }
+            } catch {
+                $uninstallIssue = $_.Exception.Message
+                Write-Log -Message "OneDrive uninstall attempt failed: $uninstallIssue" -Level 'WARN'
+            }
+        } else {
+            $uninstallIssue = 'OneDrive setup binary was not present; continuing with leftover cleanup only.'
+            Write-Log -Message $uninstallIssue -Level 'WARN'
         }
         Start-Sleep -Seconds 3
 
@@ -5781,6 +5840,21 @@ function Invoke-RemoveOneDrive {
 
         Set-ServiceStartType -Name 'OneSyncSvc' -StartType Disabled
         Request-ExplorerRestart
+
+        $remainingMarkers = & $getOneDriveMarkers
+        if ($remainingMarkers.Count -gt 0) {
+            Write-Log -Message ("OneDrive removal incomplete. Remaining markers: {0}" -f ($remainingMarkers -join ', ')) -Level 'ERROR'
+            return $false
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($uninstallIssue)) {
+            Write-Log -Message "OneDrive removal completed with warnings after cleanup verification." -Level 'WARN'
+            return @{
+                Success = $true
+                Status  = 'CompletedWithWarnings'
+                Reason  = $uninstallIssue
+            }
+        }
 
         Write-Log -Message "OneDrive removal complete." -Level 'INFO'
         return $true
