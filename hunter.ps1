@@ -6473,21 +6473,12 @@ function Invoke-DisableBackgroundApps {
 
         # Pre-check
         $bgAppsPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications'
-        if ((Test-RegistryValue -Path $bgAppsPath -Name 'GlobalUserDisabled' -ExpectedValue 1) -and
-            (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\OneDrive' -Name 'DisableFileSyncNGSC' -ExpectedValue 1) -and
-            (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' -Name 'AllowWidgets' -ExpectedValue 0)) {
+        if (Test-RegistryValue -Path $bgAppsPath -Name 'GlobalUserDisabled' -ExpectedValue 1) {
             Write-Log -Message "Background apps already disabled. Skipping." -Level 'INFO'
             return $true
         }
 
         Set-RegistryValue -Path $bgAppsPath -Name 'GlobalUserDisabled' -Value 1 -Type 'DWord'
-        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\OneDrive' -Name 'DisableFileSyncNGSC' -Value 1 -Type DWord
-        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' -Name 'AllowWidgets' -Value 0 -Type DWord
-        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' -Name 'AllowNewsAndInterests' -Value 0 -Type DWord
-        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -Name 'BackgroundModeEnabled' -Value 0 -Type DWord
-        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -Name 'StartupBoostEnabled' -Value 0 -Type DWord
-        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\MicrosoftEdge\Main' -Name 'AllowPrelaunch' -Value 0 -Type DWord
-        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\MicrosoftEdge\TabPreloader' -Name 'AllowTabPreloading' -Value 0 -Type DWord
 
         Write-Log -Message "Background apps disabled." -Level 'INFO'
         return $true
