@@ -8233,6 +8233,12 @@ function Invoke-ParallelInstalls {
                             [hashtable]$InstallResult
                         )
 
+                        $skipSignatureValidation = $false
+                        if (($InstallTarget -is [System.Collections.IDictionary] -and $InstallTarget.Contains('SkipSignatureValidation')) -or
+                            ($null -ne $InstallTarget.PSObject.Properties['SkipSignatureValidation'])) {
+                            $skipSignatureValidation = [bool]$InstallTarget.SkipSignatureValidation
+                        }
+
                         switch ($InstallTarget.InstallKind) {
                             'Installer' {
                                 Install-InstallerPackageInternal `
@@ -8240,7 +8246,7 @@ function Invoke-ParallelInstalls {
                                     -Path $FilePath `
                                     -InstallerArgs $InstallTarget.InstallerArgs `
                                     -AdditionalSuccessExitCodes $InstallTarget.AdditionalSuccessExitCodes `
-                                    -SkipSignatureValidation ([bool]$InstallTarget.SkipSignatureValidation)
+                                    -SkipSignatureValidation $skipSignatureValidation
                             }
                             'Portable' {
                                 Install-PortablePackageInternal `
@@ -8337,7 +8343,13 @@ function Invoke-ParallelInstalls {
                         }
 
                         $result.Success = $true
-                        if ([bool]$Target.SkipSignatureValidation) {
+                        $skipSignatureValidation = $false
+                        if (($Target -is [System.Collections.IDictionary] -and $Target.Contains('SkipSignatureValidation')) -or
+                            ($null -ne $Target.PSObject.Properties['SkipSignatureValidation'])) {
+                            $skipSignatureValidation = [bool]$Target.SkipSignatureValidation
+                        }
+
+                        if ($skipSignatureValidation) {
                             $result.Message = "$($Target.PackageName) installed via direct download (signature validation intentionally skipped)"
                         } else {
                             $result.Message = "$($Target.PackageName) installed via direct download"
