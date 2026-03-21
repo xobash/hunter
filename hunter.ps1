@@ -6295,9 +6295,10 @@ function Invoke-DisableConsumerFeatures {
 function Invoke-DisableActivityHistory {
     <#
     .SYNOPSIS
-    Disables Windows activity history and user activity uploads.
+    Disables Windows activity history, clipboard history, and user activity uploads.
     .DESCRIPTION
-    Ref: https://winutil.christitus.com/dev/tweaks/essential-tweaks/activity/
+    Covers the WinUtil activity-history baseline and Hunter's adjacent clipboard-history
+    suppression so cross-device activity surfaces do not remain enabled.
     #>
     param()
 
@@ -10003,7 +10004,7 @@ function Build-Tasks {
         -TaskId 'apps-activity-history' `
         -Phase '6' `
         -ApplyHandler { Invoke-DisableActivityHistory } `
-        -Description 'Disable activity history tracking'
+        -Description 'Disable activity history plus clipboard/cloud clipboard tracking'
 
     # -------------------------------------------------------------------------
     # PHASE 7: TWEAKS
