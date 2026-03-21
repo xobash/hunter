@@ -3697,13 +3697,18 @@ function Start-ProgressWindow {
             # ---------------------------------------------------------------
             function Start-GlassAnimation {
                 param(
-                    [System.Windows.Media.Animation.Animatable]$Target,
+                    [Parameter(Mandatory)]$Target,
                     [System.Windows.DependencyProperty]$Property,
                     [double]$To,
                     [double]$DurationMs = 350,
                     [switch]$AutoReverse,
                     [switch]$Forever
                 )
+
+                if ($null -eq $Target) {
+                    throw 'Animation target was null.'
+                }
+
                 $anim = [System.Windows.Media.Animation.DoubleAnimation]::new()
                 $anim.To = $To
                 $anim.Duration = [System.Windows.Duration]::new([TimeSpan]::FromMilliseconds($DurationMs))
@@ -4205,8 +4210,10 @@ function Start-ProgressWindow {
                     } elseif ($doneTasks -eq $totalTasks -and $totalTasks -gt 0) {
                         $titleStatus.Text = '  Complete!'
                     }
+
+                    $Sync.Error = $null
                 } catch {
-                    # Non-fatal inside dispatcher
+                    $Sync.Error = $_.Exception.Message
                 }
             }
 
@@ -4319,6 +4326,11 @@ function Update-ProgressUI {
     if ($null -eq $script:UiSync -or -not $script:UiSync.Ready) { return }
 
     try {
+        if (-not [string]::IsNullOrWhiteSpace([string]$script:UiSync.Error) -and -not $script:ProgressUiIssueLogged) {
+            $script:ProgressUiIssueLogged = $true
+            Add-RunInfrastructureIssue -Message "Progress overlay refresh failed; task execution continued without a reliable live UI: $($script:UiSync.Error)" -Level 'WARN'
+        }
+
         # Serialize task state to JSON — the UI thread deserializes independently
         $snapshot = @()
         foreach ($task in @($Tasks)) {
