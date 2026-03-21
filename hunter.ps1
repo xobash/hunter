@@ -6701,10 +6701,7 @@ function Invoke-SetServiceProfileManual {
             'shpamsvc',
             'ssh-agent',
             'tzautoupdate',
-            'UevAgentService',
-            'xbgm',
-            'GamingServices',
-            'GamingServicesNet'
+            'UevAgentService'
         )
 
         $manualServices = @(
