@@ -6213,10 +6213,46 @@ function Invoke-DisableConsumerFeatures {
 
         # Pre-check
         $cloudPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent'
-        if ((Test-RegistryValue -Path $cloudPath -Name 'DisableWindowsConsumerFeatures' -ExpectedValue 1) -and
+        $contentDeliveryManagerPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+        $contentDeliveryChecks = @(
+            'ContentDeliveryAllowed',
+            'FeatureManagementEnabled',
+            'OEMPreInstalledAppsEnabled',
+            'PreInstalledAppsEnabled',
+            'PreInstalledAppsEverEnabled',
+            'RotatingLockScreenEnabled',
+            'RotatingLockScreenOverlayEnabled',
+            'SilentInstalledAppsEnabled',
+            'SoftLandingEnabled',
+            'SystemPaneSuggestionsEnabled',
+            'SubscribedContent-310093Enabled',
+            'SubscribedContent-314563Enabled',
+            'SubscribedContent-338388Enabled',
+            'SubscribedContent-338389Enabled',
+            'SubscribedContent-338393Enabled',
+            'SubscribedContent-353694Enabled',
+            'SubscribedContent-353695Enabled',
+            'SubscribedContent-353696Enabled',
+            'SubscribedContent-353698Enabled',
+            'SubscribedContent-88000326Enabled'
+        )
+
+        $consumerFeaturesDisabled = (
+            (Test-RegistryValue -Path $cloudPath -Name 'DisableWindowsConsumerFeatures' -ExpectedValue 1) -and
             (Test-RegistryValue -Path $cloudPath -Name 'DisableSoftLanding' -ExpectedValue 1) -and
-            (Test-RegistryValue -Path $cloudPath -Name 'DisableWindowsSpotlightFeatures' -ExpectedValue 1) -and
-            (Test-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' -Name 'SoftLandingEnabled' -ExpectedValue 0)) {
+            (Test-RegistryValue -Path $cloudPath -Name 'DisableWindowsSpotlightFeatures' -ExpectedValue 1)
+        )
+
+        if ($consumerFeaturesDisabled) {
+            foreach ($name in $contentDeliveryChecks) {
+                if (-not (Test-RegistryValue -Path $contentDeliveryManagerPath -Name $name -ExpectedValue 0)) {
+                    $consumerFeaturesDisabled = $false
+                    break
+                }
+            }
+        }
+
+        if ($consumerFeaturesDisabled) {
             Write-Log -Message "Consumer features already disabled. Skipping." -Level 'INFO'
             return $true
         }
@@ -6274,7 +6310,10 @@ function Invoke-DisableActivityHistory {
             (Test-RegistryValue -Path $systemPath -Name 'PublishUserActivities' -ExpectedValue 0) -and
             (Test-RegistryValue -Path $systemPath -Name 'UploadUserActivities' -ExpectedValue 0) -and
             (Test-RegistryValue -Path $systemPath -Name 'AllowClipboardHistory' -ExpectedValue 0) -and
-            (Test-RegistryValue -Path $systemPath -Name 'AllowCrossDeviceClipboard' -ExpectedValue 0)) {
+            (Test-RegistryValue -Path $systemPath -Name 'AllowCrossDeviceClipboard' -ExpectedValue 0) -and
+            (Test-RegistryValue -Path 'HKCU:\Software\Microsoft\Clipboard' -Name 'EnableClipboardHistory' -ExpectedValue 0) -and
+            (Test-RegistryValue -Path 'HKCU:\Software\Microsoft\Clipboard' -Name 'EnableCloudClipboard' -ExpectedValue 0) -and
+            (Test-RegistryValue -Path 'HKCU:\Software\Microsoft\Clipboard' -Name 'CloudClipboardAutomaticUpload' -ExpectedValue 0)) {
             Write-Log -Message "Activity history already disabled. Skipping." -Level 'INFO'
             return
         }
@@ -6340,6 +6379,7 @@ function Invoke-DisableTelemetry {
             (Test-RegistryValue -Path $systemPolicyPath -Name 'ShellSmartScreenLevel' -ExpectedValue 'Off') -and
             (Test-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\AppHost' -Name 'EnableWebContentEvaluation' -ExpectedValue 0) -and
             (Test-ServiceStartTypeMatch -Name 'diagtrack' -ExpectedStartType 'Disabled') -and
+            (Test-ServiceStartTypeMatch -Name 'dmwappushservice' -ExpectedStartType 'Disabled') -and
             (Test-ServiceStartTypeMatch -Name 'WerSvc' -ExpectedStartType 'Disabled')) {
             Write-Log -Message "Telemetry already disabled. Skipping." -Level 'INFO'
             return $true
@@ -6475,7 +6515,7 @@ function Invoke-DisableBackgroundApps {
     param()
 
     try {
-        Write-Log -Message "Disabling background apps..." -Level 'INFO'
+        Write-Log -Message "Disabling background apps and adjacent background activity..." -Level 'INFO'
 
         # Pre-check
         $bgAppsPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications'
@@ -6500,7 +6540,7 @@ function Invoke-DisableBackgroundApps {
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\MicrosoftEdge\Main' -Name 'AllowPrelaunch' -Value 0 -Type DWord
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\MicrosoftEdge\TabPreloader' -Name 'AllowTabPreloading' -Value 0 -Type DWord
 
-        Write-Log -Message "Background apps disabled." -Level 'INFO'
+        Write-Log -Message "Background apps and adjacent background activity disabled." -Level 'INFO'
         return $true
     }
     catch {
