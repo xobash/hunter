@@ -6304,14 +6304,16 @@ function Invoke-DisableActivityHistory {
 function Invoke-DisableTelemetry {
     <#
     .SYNOPSIS
-    Disables Windows telemetry and diagnostic data collection.
+    Disables Windows telemetry and Hunter's related privacy/web-content policies.
     .DESCRIPTION
-    Ref: https://winutil.christitus.com/dev/tweaks/essential-tweaks/telemetry/
+    Starts from the WinUtil telemetry baseline and intentionally extends it with
+    SmartScreen/AppHost suppression that Hunter applies as part of its broader
+    privacy-hardening pass.
     #>
     param()
 
     try {
-        Write-Log -Message "Disabling Windows telemetry..." -Level 'INFO'
+        Write-Log -Message "Disabling Windows telemetry and related privacy/web-content policies..." -Level 'INFO'
 
         $dcPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection'
         $systemPolicyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
@@ -6319,10 +6321,6 @@ function Invoke-DisableTelemetry {
         $siufRulesPath = 'HKCU:\Software\Microsoft\Siuf\Rules'
         $werPath = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting'
         $splitThresholdKb = [int]((Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum / 1KB)
-
-        Remove-RegistryValueIfPresent -Path $systemPolicyPath -Name 'EnableSmartScreen'
-        Remove-RegistryValueIfPresent -Path $systemPolicyPath -Name 'ShellSmartScreenLevel'
-        Remove-RegistryValueForAllUsers -SubPath 'Software\Microsoft\Windows\CurrentVersion\AppHost' -Name 'EnableWebContentEvaluation'
 
         if ((Test-RegistryValue -Path $dcPath -Name 'AllowTelemetry' -ExpectedValue 0) -and
             (Test-RegistryValue -Path $systemPolicyPath -Name 'PublishUserActivities' -ExpectedValue 0) -and
@@ -6338,6 +6336,9 @@ function Invoke-DisableTelemetry {
             (Test-RegistryValue -Path $dcPath -Name 'DoNotShowFeedbackNotifications' -ExpectedValue 1) -and
             (Test-RegistryValue -Path $werPath -Name 'Disabled' -ExpectedValue 1) -and
             (Test-RegistryValue -Path $werPath -Name 'DontShowUI' -ExpectedValue 1) -and
+            (Test-RegistryValue -Path $systemPolicyPath -Name 'EnableSmartScreen' -ExpectedValue 0) -and
+            (Test-RegistryValue -Path $systemPolicyPath -Name 'ShellSmartScreenLevel' -ExpectedValue 'Off') -and
+            (Test-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\AppHost' -Name 'EnableWebContentEvaluation' -ExpectedValue 0) -and
             (Test-ServiceStartTypeMatch -Name 'diagtrack' -ExpectedStartType 'Disabled') -and
             (Test-ServiceStartTypeMatch -Name 'WerSvc' -ExpectedStartType 'Disabled')) {
             Write-Log -Message "Telemetry already disabled. Skipping." -Level 'INFO'
@@ -6359,6 +6360,11 @@ function Invoke-DisableTelemetry {
         Set-RegistryValue -Path $dcPath -Name 'DoNotShowFeedbackNotifications' -Value 1 -Type 'DWord'
         Set-RegistryValue -Path $werPath -Name 'Disabled' -Value 1 -Type 'DWord'
         Set-RegistryValue -Path $werPath -Name 'DontShowUI' -Value 1 -Type 'DWord'
+        Set-RegistryValue -Path $systemPolicyPath -Name 'EnableSmartScreen' -Value 0 -Type 'DWord'
+        Set-RegistryValue -Path $systemPolicyPath -Name 'ShellSmartScreenLevel' -Value 'Off' -Type 'String'
+        Set-DwordBatchForAllUsers -Settings @(
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\AppHost'; Name = 'EnableWebContentEvaluation'; Value = 0 }
+        )
         Remove-ItemProperty -Path $siufRulesPath -Name 'PeriodInNanoSeconds' -ErrorAction SilentlyContinue
 
         Write-Log -Message "Disabling telemetry services..." -Level 'INFO'
@@ -6377,7 +6383,7 @@ function Invoke-DisableTelemetry {
             Write-Log -Message "Could not set Defender telemetry preference: $_" -Level 'WARN'
         }
 
-        Write-Log -Message "Windows telemetry disabled." -Level 'INFO'
+        Write-Log -Message "Windows telemetry and related privacy/web-content policies disabled." -Level 'INFO'
         return $true
     }
     catch {
@@ -6464,7 +6470,7 @@ function Invoke-DisableHibernation {
 function Invoke-DisableBackgroundApps {
     <#
     .SYNOPSIS
-    Disables background app refresh globally.
+    Disables background app refresh and adjacent background-activity surfaces.
     #>
     param()
 
@@ -6473,12 +6479,26 @@ function Invoke-DisableBackgroundApps {
 
         # Pre-check
         $bgAppsPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications'
-        if (Test-RegistryValue -Path $bgAppsPath -Name 'GlobalUserDisabled' -ExpectedValue 1) {
+        if ((Test-RegistryValue -Path $bgAppsPath -Name 'GlobalUserDisabled' -ExpectedValue 1) -and
+            (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\OneDrive' -Name 'DisableFileSyncNGSC' -ExpectedValue 1) -and
+            (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' -Name 'AllowWidgets' -ExpectedValue 0) -and
+            (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' -Name 'AllowNewsAndInterests' -ExpectedValue 0) -and
+            (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -Name 'BackgroundModeEnabled' -ExpectedValue 0) -and
+            (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -Name 'StartupBoostEnabled' -ExpectedValue 0) -and
+            (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\MicrosoftEdge\Main' -Name 'AllowPrelaunch' -ExpectedValue 0) -and
+            (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\MicrosoftEdge\TabPreloader' -Name 'AllowTabPreloading' -ExpectedValue 0)) {
             Write-Log -Message "Background apps already disabled. Skipping." -Level 'INFO'
             return $true
         }
 
         Set-RegistryValue -Path $bgAppsPath -Name 'GlobalUserDisabled' -Value 1 -Type 'DWord'
+        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\OneDrive' -Name 'DisableFileSyncNGSC' -Value 1 -Type DWord
+        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' -Name 'AllowWidgets' -Value 0 -Type DWord
+        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' -Name 'AllowNewsAndInterests' -Value 0 -Type DWord
+        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -Name 'BackgroundModeEnabled' -Value 0 -Type DWord
+        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -Name 'StartupBoostEnabled' -Value 0 -Type DWord
+        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\MicrosoftEdge\Main' -Name 'AllowPrelaunch' -Value 0 -Type DWord
+        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\MicrosoftEdge\TabPreloader' -Name 'AllowTabPreloading' -Value 0 -Type DWord
 
         Write-Log -Message "Background apps disabled." -Level 'INFO'
         return $true
@@ -6672,27 +6692,53 @@ function Invoke-BlockAdobeNetworkTraffic {
 function Invoke-SetServiceProfileManual {
     <#
     .SYNOPSIS
-    Sets service startup types according to WinUtil recommended profile.
+    Sets service startup types according to Hunter's aggressive gaming profile.
     .DESCRIPTION
-    Ref: https://winutil.christitus.com/dev/tweaks/essential-tweaks/services/
+    Starts from the WinUtil service baseline but intentionally keeps Hunter's
+    broader, more aggressive service reductions for gaming-oriented systems.
     #>
     param()
 
     try {
-        Write-Log -Message "Setting service profiles to WinUtil recommended..." -Level 'INFO'
+        Write-Log -Message "Setting Hunter aggressive service profile..." -Level 'INFO'
 
         $disabledServices = @(
             'AppVClient',
             'AssignedAccessManagerSvc',
+            'BTAGService',
+            'bthserv',
+            'BthAvctpSvc',
             'DiagTrack',
             'DialogBlockingService',
+            'DsSvc',                     # Data Sharing Service — inter-app data broker
+            'DusmSvc',                   # Diagnostic Usage and Telemetry — usage data collection
+            'GamingServices',            # Xbox / Game Pass integration (Xbox already nuked)
+            'GamingServicesNet',         # Xbox network component (Xbox already nuked)
+            'lfsvc',
+            'MapsBroker',
+            'midisrv',                   # MIDI Service — no MIDI controllers on gaming rigs
             'NetTcpPortSharing',
             'RemoteAccess',
             'RemoteRegistry',
+            'RetailDemo',
+            'SgrmBroker',               # System Guard Runtime Monitor — VBS component (HVCI already disabled)
             'shpamsvc',
             'ssh-agent',
+            'SysMain',
+            'TabletInputService',
             'tzautoupdate',
-            'UevAgentService'
+            'UevAgentService',
+            'WbioSrvc',                 # Windows Biometric Service — not needed on gaming PCs
+            'WerSvc',
+            'WlanSvc',
+            'WpcMonSvc',                # Parental Controls — not needed
+            'WSearch',
+            'wisvc',                     # Windows Insider Service — not needed
+            'XblAuthManager',
+            'xbgm',
+            'XblGameSave',
+            'XboxGipSvc',
+            'XboxNetApiSvc'
         )
 
         $manualServices = @(
@@ -6703,8 +6749,6 @@ function Invoke-SetServiceProfileManual {
             'autotimesvc',
             'AxInstSV',
             'BDESVC',
-            'BTAGService',
-            'bthserv',
             'camsvc',
             'CDPSvc',
             'CertPropSvc',
@@ -6739,7 +6783,6 @@ function Invoke-SetServiceProfileManual {
             'IpxlatCfgSvc',
             'KtmRm',
             'LicenseManager',
-            'lfsvc',
             'lltdsvc',
             'lmhosts',
             'LxpSvc',
@@ -6768,7 +6811,6 @@ function Invoke-SetServiceProfileManual {
             'QWAVE',
             'RasAuto',
             'RasMan',
-            'RetailDemo',
             'RmSvc',
             'RpcLocator',
             'SCardSvr',
@@ -6816,7 +6858,6 @@ function Invoke-SetServiceProfileManual {
             'WalletService',
             'WarpJITSvc',
             'wbengine',
-            'WbioSrvc',
             'wcncsvc',
             'WdiServiceHost',
             'WdiSystemHost',
@@ -6824,34 +6865,26 @@ function Invoke-SetServiceProfileManual {
             'webthreatdefsvc',
             'Wecsvc',
             'WEPHOSTSVC',
-            'WerSvc',
             'wercplsupport',
             'WFDSConMgrSvc',
             'WiaRpc',
             'WinRM',
-            'wisvc',
             'wlidsvc',
             'wlpasvc',
             'WManSvc',
             'wmiApSrv',
             'WMPNetworkSvc',
             'workfolderssvc',
-            'WpcMonSvc',
             'WPDBusEnum',
             'WpnService',
             'WSAIFabricSvc',
-            'wuauserv',
-            'XblAuthManager',
-            'XblGameSave',
-            'XboxGipSvc',
-            'XboxNetApiSvc'
+            'wuauserv'
         )
 
         $automaticServices = @(
             'AudioEndpointBuilder',
             'Audiosrv',
             'AudioSrv',
-            'BthAvctpSvc',
             'CryptSvc',
             'Dhcp',
             'DispBrokerDesktopSvc',
@@ -6869,7 +6902,6 @@ function Invoke-SetServiceProfileManual {
             'SamSs',
             'SENS',
             'ShellHWDetection',
-            'SysMain',
             'Themes',
             'TrkWks',
             'UserManager',
@@ -6886,7 +6918,7 @@ function Invoke-SetServiceProfileManual {
             Write-Log 'Printer detected; Print Spooler will remain automatic.' 'INFO'
         }
 
-        $autoDelayedServices = @('BITS', 'MapsBroker', 'WSearch')
+        $autoDelayedServices = @('BITS')
         $alreadyConfigured = $true
 
         foreach ($svc in $disabledServices) {
@@ -6924,7 +6956,7 @@ function Invoke-SetServiceProfileManual {
         }
 
         if ($alreadyConfigured) {
-            Write-Log -Message "Service profiles already configured. Skipping." -Level 'INFO'
+            Write-Log -Message "Hunter aggressive service profile already configured. Skipping." -Level 'INFO'
             return $true
         }
 
@@ -6979,7 +7011,7 @@ function Invoke-SetServiceProfileManual {
             Stop-ServiceIfPresent -Name $svc
         }
 
-        Write-Log -Message "Service profiles set to WinUtil recommended ($($scProcs.Count) concurrent operations)." -Level 'INFO'
+        Write-Log -Message "Hunter aggressive service profile applied ($($scProcs.Count) concurrent operations)." -Level 'INFO'
         return $true
     }
     catch {
@@ -9913,7 +9945,7 @@ function Build-Tasks {
         -TaskId 'apps-nuke-block' `
         -Phase '6' `
         -ApplyHandler { Invoke-NukeBlockApps } `
-        -Description 'Remove and block bloatware apps'
+        -Description 'Remove and block broad Microsoft bloatware (including Xbox/Game Bar)'
 
     $tasks += New-Task `
         -TaskId 'apps-inking-typing' `
@@ -9941,7 +9973,7 @@ function Build-Tasks {
         -TaskId 'tweaks-services' `
         -Phase '7' `
         -ApplyHandler { Invoke-SetServiceProfileManual } `
-        -Description 'Set service startup profiles to manual'
+        -Description 'Apply Hunter aggressive service startup profile'
 
     $tasks += New-Task `
         -TaskId 'tweaks-virtualization-security' `
@@ -9953,7 +9985,7 @@ function Build-Tasks {
         -TaskId 'tweaks-telemetry' `
         -Phase '7' `
         -ApplyHandler { Invoke-DisableTelemetry } `
-        -Description 'Disable Windows telemetry services'
+        -Description 'Disable telemetry plus Hunter privacy/web-content policies'
 
     $tasks += New-Task `
         -TaskId 'tweaks-location' `
@@ -9971,7 +10003,7 @@ function Build-Tasks {
         -TaskId 'tweaks-background-apps' `
         -Phase '7' `
         -ApplyHandler { Invoke-DisableBackgroundApps } `
-        -Description 'Disable unnecessary background apps'
+        -Description 'Disable background apps plus OneDrive, Widgets, and Edge background activity'
 
     $tasks += New-Task `
         -TaskId 'tweaks-teredo' `

@@ -25,8 +25,8 @@ That's it. No cloning, no downloading, no setup. The script runs directly from G
 | 3 | Start / UI | Kill Bing search, Start recommendations, Widgets, Task View, notifications |
 | 4 | Explorer | This PC as home, remove Home/Gallery/OneDrive tabs, disable auto folder discovery |
 | 5 | Microsoft Cloud | Remove Edge (keeps WebView2), OneDrive, Copilot; block Edge reinstall via Group Policy |
-| 6 | Remove Apps | Nuke ~20 bloatware apps (Outlook, Xbox, Teams, Clipchamp, Solitaire, etc.), block consumer features |
-| 7 | System Tweaks | Service profiles (winutil-based), disable telemetry/location/hibernation, block Razer/Adobe traffic, exhaustive power tuning (throttling, core parking, device power management across USB/HID/PCI/NIC buses), 0.5ms timer resolution service |
+| 6 | Remove Apps | Nuke ~20 Microsoft/bloatware apps in one broad debloat pass (Outlook, Xbox/Game Bar, Teams, Clipchamp, Solitaire, etc.), block consumer features |
+| 7 | System Tweaks | Hunter aggressive service profile (WinUtil-inspired, intentionally broader), disable telemetry plus extra privacy/web-content policies, disable location/hibernation, block Razer/Adobe traffic, exhaustive power tuning (throttling, core parking, device power management across USB/HID/PCI/NIC buses), 0.5ms timer resolution service |
 | 8 | External Tools | Install 11 apps in parallel (Brave, Steam, Parsec, PowerShell 7, FFmpeg, yt-dlp, CrystalDiskMark, Cinebench R23, FurMark, PeaZip, Winaero Tweaker), TCP Optimizer, O&O ShutUp10++ |
 | 9 | Cleanup | Retry failed tasks, disk cleanup, Explorer restart, desktop report |
 
@@ -51,6 +51,14 @@ A real-time progress overlay with animated liquid glass UI tracks everything as 
 
 Hunter is a single PowerShell script (~10,500 lines). It uses a checkpoint/resume engine so reboots don't lose progress. Heavyweight operations (service config, power tuning, app installs) run in parallel where possible. The progress UI runs in a separate STA WPF runspace so the main task engine does not block on rendering.
 
+## Scope Notes
+
+Hunter borrows from WinUtil in several areas, but it does not aim for strict one-to-one parity.
+
+- Hunter intentionally goes beyond WinUtil in some areas when the broader behavior matches Hunter's debloat/gaming-setup goals.
+- The app-removal pass is intentionally broader than Xbox/Game Bar removal alone. Xbox/Game Bar cleanup is bundled into Hunter's larger Microsoft debloat pass alongside Outlook, Teams, Clipchamp, To Do, Power Automate, Sound Recorder, Bing, LinkedIn, and other consumer/bloatware targets already covered by the script.
+- The service profile and background-activity suppression are also intentionally broader than the WinUtil baseline.
+
 State files live in `C:\ProgramData\Hunter\`:
 
 | File | Purpose |
@@ -64,7 +72,7 @@ Hunter detects Hyper-V VMs and adjusts: skips autologin (RDP handles it), skips 
 
 ## Acknowledgements
 
-Service profiles and tweak implementations based on [ChrisTitusTech/winutil](https://github.com/ChrisTitusTech/winutil). Power tuning patterns from [FR33THYFR33THY/WinSux](https://github.com/FR33THYFR33THY/WinSux-Windows-Optimization-Guide).
+Service profiles and tweak implementations build on [ChrisTitusTech/winutil](https://github.com/ChrisTitusTech/winutil), with several Hunter-specific expansions. Power tuning patterns from [FR33THYFR33THY/WinSux](https://github.com/FR33THYFR33THY/WinSux-Windows-Optimization-Guide).
 
 ---
 
