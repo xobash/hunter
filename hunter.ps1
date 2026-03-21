@@ -159,9 +159,20 @@ function Ensure-Directory {
     }
 }
 
+function Ensure-ProtectedDataAvailable {
+    $protectedDataType = [System.Type]::GetType('System.Security.Cryptography.ProtectedData, System.Security', $false)
+    if ($null -ne $protectedDataType) {
+        return $true
+    }
+
+    Add-Type -AssemblyName 'System.Security' -ErrorAction Stop
+    return $true
+}
+
 function Protect-StringForLocalMachine {
     param([Parameter(Mandatory)][string]$Value)
 
+    Ensure-ProtectedDataAvailable | Out-Null
     $plainBytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
     $protectedBytes = [System.Security.Cryptography.ProtectedData]::Protect(
         $plainBytes,
@@ -175,6 +186,7 @@ function Protect-StringForLocalMachine {
 function Unprotect-StringForLocalMachine {
     param([Parameter(Mandatory)][string]$Value)
 
+    Ensure-ProtectedDataAvailable | Out-Null
     $protectedBytes = [Convert]::FromBase64String($Value)
     $plainBytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
         $protectedBytes,
@@ -2284,6 +2296,7 @@ function Get-InstallTargetCatalog {
             AdditionalSuccessExitCodes= @()
             RefreshDownloadOnFailure  = $true
             AllowDirectDownloadFallback = $true
+            SkipSignatureValidation   = $true
             AddToPath                 = $false
             PathProbe                 = ''
             GetExecutable             = { Get-FurMarkExecutablePath }
@@ -5336,12 +5349,20 @@ function Invoke-DisableWidgets {
         Remove-AppxPatterns -Patterns @('Microsoft.WidgetsPlatformRuntime*', 'MicrosoftWindows.Client.WebExperience*')
 
         # WinUtil parity: registry keys to fully disable Widgets
-        Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarDa' -Value 0 -Type 'DWord'
+        $widgetsAdvancedPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+        try {
+            if (-not (Test-Path $widgetsAdvancedPath)) {
+                New-Item -Path (Split-Path -Parent $widgetsAdvancedPath) -Name (Split-Path -Leaf $widgetsAdvancedPath) -Force | Out-Null
+            }
+
+            New-ItemProperty -Path $widgetsAdvancedPath -Name 'TaskbarDa' -Value 0 -PropertyType DWord -Force | Out-Null
+            Write-Log "DWord set for current user: $widgetsAdvancedPath\TaskbarDa = 0"
+        } catch {
+            Write-Log "Skipping per-user Widgets taskbar flag update: $($_.Exception.Message)" 'WARN'
+        }
+
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' -Name 'AllowNewsAndInterests' -Value 0 -Type 'DWord'
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\NewsAndInterests\AllowNewsAndInterests' -Name 'value' -Value 0 -Type 'DWord'
-        Set-DwordBatchForAllUsers -Settings @(
-            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'TaskbarDa'; Value = 0 }
-        )
 
         Request-ExplorerRestart
         return $true
@@ -5750,10 +5771,10 @@ function Invoke-RemoveOneDrive {
                 }
             }
 
-            return @($markers)
+            return [string[]]$markers.ToArray()
         }
 
-        $detectedMarkers = & $getOneDriveMarkers
+        $detectedMarkers = @(& $getOneDriveMarkers)
         if ($detectedMarkers.Count -gt 0) {
             Write-Log -Message "OneDrive installation detected." -Level 'INFO'
         } else {
@@ -5841,7 +5862,7 @@ function Invoke-RemoveOneDrive {
         Set-ServiceStartType -Name 'OneSyncSvc' -StartType Disabled
         Request-ExplorerRestart
 
-        $remainingMarkers = & $getOneDriveMarkers
+        $remainingMarkers = @(& $getOneDriveMarkers)
         if ($remainingMarkers.Count -gt 0) {
             Write-Log -Message ("OneDrive removal incomplete. Remaining markers: {0}" -f ($remainingMarkers -join ', ')) -Level 'ERROR'
             return $false
@@ -8148,11 +8169,14 @@ function Invoke-ParallelInstalls {
                             [string]$PackageName,
                             [string]$Path,
                             [string]$InstallerArgs,
-                            [int[]]$AdditionalSuccessExitCodes
+                            [int[]]$AdditionalSuccessExitCodes,
+                            [bool]$SkipSignatureValidation = $false
                         )
 
                         $resolvedFile = Resolve-DownloadedFile -Path $Path
-                        Confirm-InstallerSignature -PackageName $PackageName -Path $resolvedFile.Path | Out-Null
+                        if (-not $SkipSignatureValidation) {
+                            Confirm-InstallerSignature -PackageName $PackageName -Path $resolvedFile.Path | Out-Null
+                        }
                         $allowedExitCodes = @((@(0, 3010, 1641) + @($AdditionalSuccessExitCodes)) | Select-Object -Unique)
 
                         Invoke-DirectInstallerWithMutex -Action {
@@ -8203,7 +8227,8 @@ function Invoke-ParallelInstalls {
                                     -PackageName $InstallTarget.PackageName `
                                     -Path $FilePath `
                                     -InstallerArgs $InstallTarget.InstallerArgs `
-                                    -AdditionalSuccessExitCodes $InstallTarget.AdditionalSuccessExitCodes
+                                    -AdditionalSuccessExitCodes $InstallTarget.AdditionalSuccessExitCodes `
+                                    -SkipSignatureValidation ([bool]$InstallTarget.SkipSignatureValidation)
                             }
                             'Portable' {
                                 Install-PortablePackageInternal `
@@ -8300,7 +8325,11 @@ function Invoke-ParallelInstalls {
                         }
 
                         $result.Success = $true
-                        $result.Message = "$($Target.PackageName) installed via direct download"
+                        if ([bool]$Target.SkipSignatureValidation) {
+                            $result.Message = "$($Target.PackageName) installed via direct download (signature validation intentionally skipped)"
+                        } else {
+                            $result.Message = "$($Target.PackageName) installed via direct download"
+                        }
                     } catch {
                         $result.Message = $_.Exception.Message
                     }
