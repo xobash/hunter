@@ -16,7 +16,7 @@ That's it. No cloning, no downloading, no setup. The script runs directly from G
 
 ## What It Does
 
-53 tasks across 9 phases. Everything is idempotent — re-running skips completed tasks. If a reboot is needed, Hunter registers a scheduled task to auto-resume on next login.
+62 tasks across 9 phases. Everything is idempotent — re-running skips completed tasks. If a reboot is needed, Hunter registers a scheduled task to auto-resume on next login.
 
 | Phase | Name | What Happens |
 |-------|------|-------------|
@@ -49,7 +49,7 @@ A real-time progress overlay with animated liquid glass UI tracks everything as 
 
 ## How It Works
 
-Hunter is a single PowerShell script (~9,700 lines). It uses a checkpoint/resume engine so reboots don't lose progress. Heavyweight operations (service config, power tuning, app installs) run in parallel where possible. The progress UI runs inline via WPF — no separate window.
+Hunter is a single PowerShell script (~10,500 lines). It uses a checkpoint/resume engine so reboots don't lose progress. Heavyweight operations (service config, power tuning, app installs) run in parallel where possible. The progress UI runs in a separate STA WPF runspace so the main task engine does not block on rendering.
 
 State files live in `C:\ProgramData\Hunter\`:
 
@@ -57,7 +57,6 @@ State files live in `C:\ProgramData\Hunter\`:
 |------|---------|
 | `hunter.log` | Timestamped log of every action |
 | `checkpoint.json` | Completed task tracking (for resume) |
-| `progress.json` | UI state |
 
 ## Hyper-V
 

@@ -48,16 +48,12 @@ $script:EdgeShortcutsRemoved = $false
 $script:PostInstallCompletion = @{}
 $script:RunStopwatch = $null
 $script:RunInfrastructureIssues = @()
-$script:CheckpointLoadFailed = $false
-$script:CheckpointSaveFailed = $false
-$script:PendingRebootCheckFailed = $false
 $script:ProgressUiIssueLogged = $false
 $script:CurrentTaskLoggedError = $false
 $script:CurrentTaskLoggedWarning = $false
 $script:UiSync        = $null
 $script:UiRunspace    = $null
 $script:UiPipeline    = $null
-$script:UiAsyncResult = $null
 $script:CompletedTasks     = @()
 $script:FailedTasks        = @()
 $script:TaskResults        = @{}
@@ -616,6 +612,63 @@ function Format-ElapsedDuration {
     }
 
     return ('{0:00}:{1:00}' -f $Duration.Minutes, $Duration.Seconds)
+}
+
+function Wait-ProcessBatchUntilDeadline {
+    param(
+        [System.Collections.IEnumerable]$ProcessInfos,
+        [int]$TimeoutSeconds = 30
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max($TimeoutSeconds, 1))
+    $pendingProcesses = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($procInfo in @($ProcessInfos)) {
+        if ($null -eq $procInfo -or $null -eq $procInfo.Process) {
+            continue
+        }
+
+        [void]$pendingProcesses.Add($procInfo)
+    }
+
+    while ($pendingProcesses.Count -gt 0) {
+        for ($idx = $pendingProcesses.Count - 1; $idx -ge 0; $idx--) {
+            $procInfo = $pendingProcesses[$idx]
+            try {
+                if (-not $procInfo.Process.HasExited) {
+                    continue
+                }
+
+                if ($procInfo.Process.ExitCode -ne 0) {
+                    Write-Log "$($procInfo.Description) exited with code $($procInfo.Process.ExitCode)." 'WARN'
+                }
+            } catch {
+                Write-Log "Failed to observe completion for $($procInfo.Description): $($_.Exception.Message)" 'WARN'
+            }
+
+            $pendingProcesses.RemoveAt($idx)
+        }
+
+        if ($pendingProcesses.Count -eq 0 -or [DateTime]::UtcNow -ge $deadline) {
+            break
+        }
+
+        Start-Sleep -Milliseconds 200
+    }
+
+    foreach ($procInfo in @($pendingProcesses.ToArray())) {
+        try {
+            if ($procInfo.Process.HasExited) {
+                if ($procInfo.Process.ExitCode -ne 0) {
+                    Write-Log "$($procInfo.Description) exited with code $($procInfo.Process.ExitCode)." 'WARN'
+                }
+            } else {
+                Write-Log "$($procInfo.Description) timed out before completion." 'WARN'
+            }
+        } catch {
+            Write-Log "Failed to observe completion for $($procInfo.Description): $($_.Exception.Message)" 'WARN'
+        }
+    }
 }
 
 # ==============================================================================
@@ -3600,7 +3653,6 @@ function Load-Checkpoint {
         }
     } catch {
         $script:CompletedTasks = @()
-        $script:CheckpointLoadFailed = $true
         Add-RunInfrastructureIssue -Message "Failed to load checkpoint state; starting without resume data: $($_.Exception.Message)" -Level 'ERROR'
     }
 }
@@ -3611,7 +3663,6 @@ function Save-Checkpoint {
         $script:CompletedTasks | ConvertTo-Json -Depth 1 | Set-Content -Path $script:CheckpointPath -Force
         Write-Log "Checkpoint saved: $($script:CompletedTasks.Count) tasks"
     } catch {
-        $script:CheckpointSaveFailed = $true
         Add-RunInfrastructureIssue -Message "Failed to persist checkpoint state: $($_.Exception.Message)" -Level 'ERROR'
     }
 }
@@ -4211,9 +4262,11 @@ function Start-ProgressWindow {
                         $titleStatus.Text = '  Complete!'
                     }
 
+                    $Sync.TaskData = $null
                     $Sync.Error = $null
                 } catch {
                     $Sync.Error = $_.Exception.Message
+                    $Sync.TaskData = $null
                 }
             }
 
@@ -4247,7 +4300,7 @@ function Start-ProgressWindow {
         }).AddArgument($syncRef) | Out-Null
 
         # Launch the UI runspace asynchronously
-        $script:UiAsyncResult = $script:UiPipeline.BeginInvoke()
+        $null = $script:UiPipeline.BeginInvoke()
 
         # Wait for the UI thread to signal readiness (up to 10 seconds)
         $waitStart = [DateTime]::UtcNow
@@ -4310,7 +4363,6 @@ function Close-ProgressWindow {
         $script:UiSync     = $null
         $script:UiPipeline = $null
         $script:UiRunspace = $null
-        $script:UiAsyncResult = $null
     }
 }
 
@@ -4332,16 +4384,16 @@ function Update-ProgressUI {
         }
 
         # Serialize task state to JSON — the UI thread deserializes independently
-        $snapshot = @()
+        $snapshot = [System.Collections.Generic.List[object]]::new()
         foreach ($task in @($Tasks)) {
             if ($null -eq $task) { continue }
-            $snapshot += [ordered]@{
+            [void]$snapshot.Add([ordered]@{
                 TaskId      = [string]$task.TaskId
                 Phase       = [string]$task.Phase
                 Description = [string]$task.Description
                 Status      = [string]$task.Status
                 Error       = if ($null -ne $task.Error) { [string]$task.Error } else { $null }
-            }
+            })
         }
         $script:UiSync.TaskData = ($snapshot | ConvertTo-Json -Depth 4 -Compress)
     } catch {
@@ -6268,6 +6320,10 @@ function Invoke-DisableTelemetry {
         $werPath = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting'
         $splitThresholdKb = [int]((Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum / 1KB)
 
+        Remove-RegistryValueIfPresent -Path $systemPolicyPath -Name 'EnableSmartScreen'
+        Remove-RegistryValueIfPresent -Path $systemPolicyPath -Name 'ShellSmartScreenLevel'
+        Remove-RegistryValueForAllUsers -SubPath 'Software\Microsoft\Windows\CurrentVersion\AppHost' -Name 'EnableWebContentEvaluation'
+
         if ((Test-RegistryValue -Path $dcPath -Name 'AllowTelemetry' -ExpectedValue 0) -and
             (Test-RegistryValue -Path $systemPolicyPath -Name 'PublishUserActivities' -ExpectedValue 0) -and
             (Test-RegistryValue -Path $svcHostPath -Name 'SvcHostSplitThresholdInKB' -ExpectedValue $splitThresholdKb) -and
@@ -6303,11 +6359,6 @@ function Invoke-DisableTelemetry {
         Set-RegistryValue -Path $dcPath -Name 'DoNotShowFeedbackNotifications' -Value 1 -Type 'DWord'
         Set-RegistryValue -Path $werPath -Name 'Disabled' -Value 1 -Type 'DWord'
         Set-RegistryValue -Path $werPath -Name 'DontShowUI' -Value 1 -Type 'DWord'
-        Set-RegistryValue -Path $systemPolicyPath -Name 'EnableSmartScreen' -Value 0 -Type 'DWord'
-        Set-RegistryValue -Path $systemPolicyPath -Name 'ShellSmartScreenLevel' -Value 'Off' -Type 'String'
-        Set-DwordBatchForAllUsers -Settings @(
-            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\AppHost'; Name = 'EnableWebContentEvaluation'; Value = 0 }
-        )
         Remove-ItemProperty -Path $siufRulesPath -Name 'PeriodInNanoSeconds' -ErrorAction SilentlyContinue
 
         Write-Log -Message "Disabling telemetry services..." -Level 'INFO'
@@ -6642,40 +6693,18 @@ function Invoke-SetServiceProfileManual {
         $disabledServices = @(
             'AppVClient',
             'AssignedAccessManagerSvc',
-            'BTAGService',
-            'bthserv',
-            'BthAvctpSvc',
             'DiagTrack',
             'DialogBlockingService',
-            'DsSvc',                     # Data Sharing Service — inter-app data broker
-            'DusmSvc',                   # Diagnostic Usage and Telemetry — usage data collection
-            'GamingServices',            # Xbox / Game Pass integration (Xbox already nuked)
-            'GamingServicesNet',         # Xbox network component (Xbox already nuked)
-            'lfsvc',
-            'MapsBroker',
-            'midisrv',                   # MIDI Service — no MIDI controllers on gaming rigs
             'NetTcpPortSharing',
             'RemoteAccess',
             'RemoteRegistry',
-            'RetailDemo',
-            'SgrmBroker',               # System Guard Runtime Monitor — VBS component (HVCI already disabled)
             'shpamsvc',
             'ssh-agent',
-            'SysMain',
-            'TabletInputService',
             'tzautoupdate',
             'UevAgentService',
-            'WbioSrvc',                 # Windows Biometric Service — not needed on gaming PCs
-            'WerSvc',
-            'WlanSvc',
-            'WpcMonSvc',                # Parental Controls — not needed
-            'WSearch',
-            'wisvc',                     # Windows Insider Service — not needed
-            'XblAuthManager',
             'xbgm',
-            'XblGameSave',
-            'XboxGipSvc',
-            'XboxNetApiSvc'
+            'GamingServices',
+            'GamingServicesNet'
         )
 
         $manualServices = @(
@@ -6686,6 +6715,8 @@ function Invoke-SetServiceProfileManual {
             'autotimesvc',
             'AxInstSV',
             'BDESVC',
+            'BTAGService',
+            'bthserv',
             'camsvc',
             'CDPSvc',
             'CertPropSvc',
@@ -6720,6 +6751,7 @@ function Invoke-SetServiceProfileManual {
             'IpxlatCfgSvc',
             'KtmRm',
             'LicenseManager',
+            'lfsvc',
             'lltdsvc',
             'lmhosts',
             'LxpSvc',
@@ -6748,6 +6780,7 @@ function Invoke-SetServiceProfileManual {
             'QWAVE',
             'RasAuto',
             'RasMan',
+            'RetailDemo',
             'RmSvc',
             'RpcLocator',
             'SCardSvr',
@@ -6795,6 +6828,7 @@ function Invoke-SetServiceProfileManual {
             'WalletService',
             'WarpJITSvc',
             'wbengine',
+            'WbioSrvc',
             'wcncsvc',
             'WdiServiceHost',
             'WdiSystemHost',
@@ -6802,26 +6836,34 @@ function Invoke-SetServiceProfileManual {
             'webthreatdefsvc',
             'Wecsvc',
             'WEPHOSTSVC',
+            'WerSvc',
             'wercplsupport',
             'WFDSConMgrSvc',
             'WiaRpc',
             'WinRM',
+            'wisvc',
             'wlidsvc',
             'wlpasvc',
             'WManSvc',
             'wmiApSrv',
             'WMPNetworkSvc',
             'workfolderssvc',
+            'WpcMonSvc',
             'WPDBusEnum',
             'WpnService',
             'WSAIFabricSvc',
-            'wuauserv'
+            'wuauserv',
+            'XblAuthManager',
+            'XblGameSave',
+            'XboxGipSvc',
+            'XboxNetApiSvc'
         )
 
         $automaticServices = @(
             'AudioEndpointBuilder',
             'Audiosrv',
             'AudioSrv',
+            'BthAvctpSvc',
             'CryptSvc',
             'Dhcp',
             'DispBrokerDesktopSvc',
@@ -6839,6 +6881,7 @@ function Invoke-SetServiceProfileManual {
             'SamSs',
             'SENS',
             'ShellHWDetection',
+            'SysMain',
             'Themes',
             'TrkWks',
             'UserManager',
@@ -6855,7 +6898,7 @@ function Invoke-SetServiceProfileManual {
             Write-Log 'Printer detected; Print Spooler will remain automatic.' 'INFO'
         }
 
-        $autoDelayedServices = @('BITS')
+        $autoDelayedServices = @('BITS', 'MapsBroker', 'WSearch')
         $alreadyConfigured = $true
 
         foreach ($svc in $disabledServices) {
@@ -6942,23 +6985,7 @@ function Invoke-SetServiceProfileManual {
             } catch { Write-Log "Failed to launch sc.exe for delayed-auto service '$svc': $_" 'WARN' }
         }
 
-        # Wait for all concurrent sc.exe / reg.exe operations (max 30s)
-        $scDeadline = [DateTime]::UtcNow.AddSeconds(30)
-        foreach ($procInfo in $scProcs) {
-            $remainMs = [Math]::Max(1, [int]($scDeadline - [DateTime]::UtcNow).TotalMilliseconds)
-            try {
-                if (-not $procInfo.Process.WaitForExit($remainMs)) {
-                    Write-Log "$($procInfo.Description) timed out before completion." 'WARN'
-                    continue
-                }
-
-                if ($procInfo.Process.ExitCode -ne 0) {
-                    Write-Log "$($procInfo.Description) exited with code $($procInfo.Process.ExitCode)." 'WARN'
-                }
-            } catch {
-                Write-Log "Failed to observe completion for $($procInfo.Description): $($_.Exception.Message)" 'WARN'
-            }
-        }
+        Wait-ProcessBatchUntilDeadline -ProcessInfos $scProcs -TimeoutSeconds 30
 
         foreach ($svc in @($disabledServices | Select-Object -Unique)) {
             Stop-ServiceIfPresent -Name $svc
@@ -7366,22 +7393,7 @@ function Invoke-ExhaustivePowerTuning {
         Write-Log "Prepared NIC power settings for $nicCount adapter(s)." 'INFO'
 
         # ---- Wait for powercfg matrix to complete, then reactivate scheme ----
-        $pcfgDeadline = [DateTime]::UtcNow.AddSeconds(30)
-        foreach ($procInfo in $pcfgProcs) {
-            $remainMs = [Math]::Max(1, [int]($pcfgDeadline - [DateTime]::UtcNow).TotalMilliseconds)
-            try {
-                if (-not $procInfo.Process.WaitForExit($remainMs)) {
-                    Write-Log "$($procInfo.Description) timed out before completion." 'WARN'
-                    continue
-                }
-
-                if ($procInfo.Process.ExitCode -ne 0) {
-                    Write-Log "$($procInfo.Description) exited with code $($procInfo.Process.ExitCode)." 'WARN'
-                }
-            } catch {
-                Write-Log "Failed to observe completion for $($procInfo.Description): $($_.Exception.Message)" 'WARN'
-            }
-        }
+        Wait-ProcessBatchUntilDeadline -ProcessInfos $pcfgProcs -TimeoutSeconds 30
         Invoke-NativeCommandChecked -FilePath 'powercfg.exe' -ArgumentList @('/setactive', $activeSchemeGuid) | Out-Null
         Write-Log 'Power value matrix applied and scheme reactivated.' 'INFO'
 
@@ -9594,6 +9606,7 @@ function Invoke-TaskExecution {
         Write-Log "Starting task execution engine..." 'INFO'
 
         foreach ($task in $Tasks) {
+            $completedCountBeforeTask = @($script:CompletedTasks).Count
             try {
                 # Check if already completed
                 if (Test-TaskCompleted -TaskId $task.TaskId) {
@@ -9678,7 +9691,9 @@ function Invoke-TaskExecution {
                 Invoke-CollectCompletedExternalAssetPrefetchJobs
                 # Always update progress
                 Update-ProgressState -Tasks $Tasks
-                Save-Checkpoint
+                if (@($script:CompletedTasks).Count -ne $completedCountBeforeTask) {
+                    Save-Checkpoint
+                }
             }
         }
 
@@ -10253,7 +10268,6 @@ function Test-PendingReboot {
         return ($cbs -or $wuau)
 
     } catch {
-        $script:PendingRebootCheckFailed = $true
         Add-RunInfrastructureIssue -Message "Failed to determine whether Windows is pending reboot: $($_.Exception.Message)" -Level 'WARN'
         return $null
     }
