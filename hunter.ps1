@@ -8160,6 +8160,7 @@ function Invoke-ParallelInstalls {
                     AdditionalSuccessExitCodes = @($resolvedTarget.AdditionalSuccessExitCodes)
                     RefreshDownloadOnFailure   = $resolvedTarget.RefreshDownloadOnFailure
                     AllowDirectDownloadFallback = $resolvedTarget.AllowDirectDownloadFallback
+                    SkipSignatureValidation    = $resolvedTarget.SkipSignatureValidation
                     AddToPath                  = $resolvedTarget.AddToPath
                     PathProbe                  = $resolvedTarget.PathProbe
                 }
