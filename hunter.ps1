@@ -3788,9 +3788,10 @@ function Start-ProgressWindow {
             [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Hunter" Height="520" Width="340"
+        Title="Hunter" Width="460" MinWidth="420" MinHeight="220"
+        SizeToContent="Height"
         WindowStartupLocation="Manual"
-        ResizeMode="CanResizeWithGrip"
+        ResizeMode="NoResize"
         AllowsTransparency="True" WindowStyle="None"
         Background="Transparent" Topmost="True"
         ShowInTaskbar="True">
@@ -3835,20 +3836,22 @@ function Start-ProgressWindow {
                 <Grid Margin="18">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
-                        <TextBlock Text="HUNTER" FontSize="14" FontWeight="Bold" Foreground="#60A5FA"
-                                   FontFamily="Segoe UI" VerticalAlignment="Center"/>
-                        <TextBlock x:Name="TitleStatus" Text="  Initializing..." FontSize="11"
-                                   Foreground="#9CA3AF" FontFamily="Segoe UI" VerticalAlignment="Center"/>
-                    </StackPanel>
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
-                                  HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,10">
-                        <StackPanel x:Name="PhasePanel" />
-                    </ScrollViewer>
+                    <Grid Grid.Row="0" Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="HUNTER" FontSize="14" FontWeight="Bold" Foreground="#60A5FA"
+                                   FontFamily="Segoe UI" VerticalAlignment="Top"/>
+                        <TextBlock Grid.Column="1" x:Name="TitleStatus" Text="Initializing..." FontSize="11"
+                                   Foreground="#9CA3AF" FontFamily="Segoe UI" VerticalAlignment="Top"
+                                   Margin="8,0,0,0" TextWrapping="Wrap"/>
+                    </Grid>
+                    <StackPanel Grid.Row="1" x:Name="PhasePanel" Margin="0,0,0,10" />
                     <Grid Grid.Row="2" Margin="0,4,0,2" Height="10">
                         <Border CornerRadius="5" Background="#0D1117">
                             <Border.BorderBrush>
@@ -3884,7 +3887,7 @@ function Start-ProgressWindow {
                     </Grid>
                     <TextBlock Grid.Row="3" x:Name="ProgressText" Text="0 / 0 tasks"
                                FontSize="10" Foreground="#6B7280" FontFamily="Segoe UI"
-                               HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                               HorizontalAlignment="Center" Margin="0,4,0,0" TextWrapping="Wrap"/>
                 </Grid>
             </Grid>
         </Border>
@@ -3897,7 +3900,12 @@ function Start-ProgressWindow {
 
             # Position at top-right of primary screen
             $screen = [System.Windows.SystemParameters]::WorkArea
-            $window.Left = $screen.Right - 360
+            $window.MaxWidth = [Math]::Max(420, $screen.Width - 32)
+            $window.MaxHeight = [Math]::Max(260, $screen.Height - 32)
+            if ($window.Width -gt $window.MaxWidth) {
+                $window.Width = $window.MaxWidth
+            }
+            $window.Left = $screen.Right - $window.Width - 16
             $window.Top  = $screen.Top + 16
 
             # Draggable
@@ -3938,13 +3946,20 @@ function Start-ProgressWindow {
                 $prevPhaseStatuses[$phaseNum] = 'Pending'
                 $phaseInfo = $phaseLabels[$phaseNum]
 
-                $row = [System.Windows.Controls.StackPanel]::new()
-                $row.Orientation = 'Horizontal'
+                $row = [System.Windows.Controls.Grid]::new()
                 $row.Margin = [System.Windows.Thickness]::new(0, 3, 0, 3)
+
+                $iconColumn = [System.Windows.Controls.ColumnDefinition]::new()
+                $iconColumn.Width = [System.Windows.GridLength]::new(40)
+                [void]$row.ColumnDefinitions.Add($iconColumn)
+
+                $labelColumn = [System.Windows.Controls.ColumnDefinition]::new()
+                $labelColumn.Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star)
+                [void]$row.ColumnDefinitions.Add($labelColumn)
 
                 $glowGrid = [System.Windows.Controls.Grid]::new()
                 $glowGrid.Width = 30; $glowGrid.Height = 30
-                $glowGrid.Margin = [System.Windows.Thickness]::new(0, 0, 10, 0)
+                $glowGrid.Margin = [System.Windows.Thickness]::new(0, 0, 0, 0)
                 $glowGrid.VerticalAlignment = 'Top'
 
                 $glowBorder = [System.Windows.Controls.Border]::new()
@@ -3993,7 +4008,10 @@ function Start-ProgressWindow {
                     [System.Windows.Media.ColorConverter]::ConvertFromString('#9CA3AF'))
                 $lbl.VerticalAlignment = 'Top'
                 $lbl.Margin = [System.Windows.Thickness]::new(0, 4, 0, 0)
+                $lbl.TextWrapping = 'Wrap'
 
+                [System.Windows.Controls.Grid]::SetColumn($glowGrid, 0)
+                [System.Windows.Controls.Grid]::SetColumn($lbl, 1)
                 $row.Children.Add($glowGrid) | Out-Null
                 $row.Children.Add($lbl) | Out-Null
 
@@ -4023,6 +4041,7 @@ function Start-ProgressWindow {
                     if ($null -eq $json) { return }
 
                     $Tasks = $json | ConvertFrom-Json
+                    $expandedTaskPanelHeight = [Math]::Max(800.0, [double]$window.MaxHeight)
 
                     $checkMark = [char]0x2713
 
@@ -4148,7 +4167,7 @@ function Start-ProgressWindow {
                                 }
 
                                 Start-GlassAnimation -Target $tPanel -Property ([System.Windows.UIElement]::OpacityProperty) -To 1.0 -DurationMs 250
-                                Start-GlassAnimation -Target $tPanel -Property ([System.Windows.FrameworkElement]::MaxHeightProperty) -To 500 -DurationMs 350
+                                Start-GlassAnimation -Target $tPanel -Property ([System.Windows.FrameworkElement]::MaxHeightProperty) -To $expandedTaskPanelHeight -DurationMs 350
 
                                 $tPanel.Children.Clear()
                                 $phaseTasks = @($Tasks | Where-Object { $null -ne $_ -and [string]$_.Phase -eq $pn })
@@ -4157,6 +4176,7 @@ function Start-ProgressWindow {
                                     $tb.FontSize   = 11
                                     $tb.FontFamily = [System.Windows.Media.FontFamily]::new('Segoe UI')
                                     $tb.Margin     = [System.Windows.Thickness]::new(0, 1, 0, 1)
+                                    $tb.TextWrapping = 'Wrap'
                                     switch ($pt.Status) {
                                         'Completed' {
                                             $tb.Text = "  $($checkMark)  $($pt.Description)"
@@ -4257,11 +4277,13 @@ function Start-ProgressWindow {
                     }
 
                     if ($null -ne $runningTaskDesc) {
-                        $titleStatus.Text = "  $runningTaskDesc"
+                        $titleStatus.Text = $runningTaskDesc
                     } elseif ($doneTasks -eq $totalTasks -and $totalTasks -gt 0) {
-                        $titleStatus.Text = '  Complete!'
+                        $titleStatus.Text = 'Complete!'
                     }
 
+                    $window.InvalidateMeasure()
+                    $window.UpdateLayout()
                     $Sync.TaskData = $null
                     $Sync.Error = $null
                 } catch {
