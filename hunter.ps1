@@ -3788,13 +3788,23 @@ function Start-ProgressWindow {
             [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Hunter" Width="460" MinWidth="420" MinHeight="220"
+        Title="Hunter" Width="520" MinWidth="480" MinHeight="220"
         SizeToContent="Height"
         WindowStartupLocation="Manual"
         ResizeMode="NoResize"
         AllowsTransparency="True" WindowStyle="None"
         Background="Transparent" Topmost="True"
         ShowInTaskbar="True">
+    <Window.Resources>
+        <Style TargetType="{x:Type ScrollBar}">
+            <Setter Property="Visibility" Value="Collapsed"/>
+        </Style>
+        <Style TargetType="{x:Type ScrollViewer}">
+            <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="CanContentScroll" Value="False"/>
+        </Style>
+    </Window.Resources>
     <Grid>
         <Border CornerRadius="16" x:Name="GlassShell">
             <Border.Background>
@@ -3900,7 +3910,7 @@ function Start-ProgressWindow {
 
             # Position at top-right of primary screen
             $screen = [System.Windows.SystemParameters]::WorkArea
-            $window.MaxWidth = [Math]::Max(420, $screen.Width - 32)
+            $window.MaxWidth = [Math]::Max(480, $screen.Width - 32)
             $window.MaxHeight = [Math]::Max(260, $screen.Height - 32)
             if ($window.Width -gt $window.MaxWidth) {
                 $window.Width = $window.MaxWidth
@@ -4116,7 +4126,7 @@ function Start-ProgressWindow {
                                     $circle.Scale.BeginAnimation([System.Windows.Media.ScaleTransform]::ScaleYProperty, $popUp)
 
                                     Start-GlassAnimation -Target $tPanel -Property ([System.Windows.UIElement]::OpacityProperty) -To 0 -DurationMs 200
-                                    Start-GlassAnimation -Target $tPanel -Property ([System.Windows.FrameworkElement]::MaxHeightProperty) -To 0 -DurationMs 300
+                                    $tPanel.MaxHeight = 0
                                 }
 
                                 $circle.Text.Text = [string]$checkMark
@@ -4166,9 +4176,6 @@ function Start-ProgressWindow {
                                         -To 0.4 -DurationMs 800 -AutoReverse -Forever
                                 }
 
-                                Start-GlassAnimation -Target $tPanel -Property ([System.Windows.UIElement]::OpacityProperty) -To 1.0 -DurationMs 250
-                                Start-GlassAnimation -Target $tPanel -Property ([System.Windows.FrameworkElement]::MaxHeightProperty) -To $expandedTaskPanelHeight -DurationMs 350
-
                                 $tPanel.Children.Clear()
                                 $phaseTasks = @($Tasks | Where-Object { $null -ne $_ -and [string]$_.Phase -eq $pn })
                                 foreach ($pt in $phaseTasks) {
@@ -4214,6 +4221,9 @@ function Start-ProgressWindow {
                                     }
                                     $tPanel.Children.Add($tb) | Out-Null
                                 }
+
+                                $tPanel.MaxHeight = $expandedTaskPanelHeight
+                                Start-GlassAnimation -Target $tPanel -Property ([System.Windows.UIElement]::OpacityProperty) -To 1.0 -DurationMs 250
                             }
 
                             'Failed' {
@@ -4241,7 +4251,7 @@ function Start-ProgressWindow {
                                 $label.TextDecorations = $null
 
                                 Start-GlassAnimation -Target $tPanel -Property ([System.Windows.UIElement]::OpacityProperty) -To 0 -DurationMs 200
-                                Start-GlassAnimation -Target $tPanel -Property ([System.Windows.FrameworkElement]::MaxHeightProperty) -To 0 -DurationMs 300
+                                $tPanel.MaxHeight = 0
                             }
 
                             default {
