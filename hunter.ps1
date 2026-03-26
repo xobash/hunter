@@ -617,7 +617,9 @@ function Format-ElapsedDuration {
 function Wait-ProcessBatchUntilDeadline {
     param(
         [System.Collections.IEnumerable]$ProcessInfos,
-        [int]$TimeoutSeconds = 30
+        [int]$TimeoutSeconds = 30,
+        [string]$BatchDescription = 'Process batch',
+        [int]$MaxTimeoutExamples = 8
     )
 
     $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max($TimeoutSeconds, 1))
@@ -656,6 +658,8 @@ function Wait-ProcessBatchUntilDeadline {
         Start-Sleep -Milliseconds 200
     }
 
+    $timedOutDescriptions = New-Object 'System.Collections.Generic.List[string]'
+
     foreach ($procInfo in @($pendingProcesses.ToArray())) {
         try {
             if ($procInfo.Process.HasExited) {
@@ -663,11 +667,29 @@ function Wait-ProcessBatchUntilDeadline {
                     Write-Log "$($procInfo.Description) exited with code $($procInfo.Process.ExitCode)." 'WARN'
                 }
             } else {
-                Write-Log "$($procInfo.Description) timed out before completion." 'WARN'
+                [void]$timedOutDescriptions.Add([string]$procInfo.Description)
             }
         } catch {
             Write-Log "Failed to observe completion for $($procInfo.Description): $($_.Exception.Message)" 'WARN'
         }
+    }
+
+    if ($timedOutDescriptions.Count -gt 0) {
+        $sampleSize = [Math]::Min($timedOutDescriptions.Count, [Math]::Max($MaxTimeoutExamples, 1))
+        $sampleDescriptions = @($timedOutDescriptions | Select-Object -First $sampleSize)
+        $remainingCount = $timedOutDescriptions.Count - $sampleSize
+        $sampleSuffix = if ($remainingCount -gt 0) {
+            " +$remainingCount more"
+        } else {
+            ''
+        }
+        $sampleText = if ($sampleDescriptions.Count -gt 0) {
+            " Examples: $($sampleDescriptions -join '; ')."
+        } else {
+            ''
+        }
+        $timeoutWindow = Format-ElapsedDuration -Duration ([TimeSpan]::FromSeconds([Math]::Max($TimeoutSeconds, 1)))
+        Write-Log "$BatchDescription exceeded the $timeoutWindow wait window; $($timedOutDescriptions.Count) process(es) were still running.$sampleSuffix$sampleText" 'WARN'
     }
 }
 
@@ -1110,6 +1132,22 @@ function Test-ServiceStartTypeMatch {
         }
 
         return ($actualStartType -eq $ExpectedStartType)
+    } catch {
+        return $false
+    }
+}
+
+function Test-ServiceExists {
+    param([string]$Name)
+
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        return $false
+    }
+
+    try {
+        $escapedName = $Name.Replace("'", "''")
+        $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='$escapedName'" -ErrorAction SilentlyContinue
+        return ($null -ne $service)
     } catch {
         return $false
     }
@@ -7036,8 +7074,15 @@ function Invoke-SetServiceProfileManual {
         # Fire ALL service startup type changes concurrently via sc.exe
         Write-Log -Message "Firing all service startup type changes in parallel..." -Level 'INFO'
         $scProcs = New-Object 'System.Collections.Generic.List[object]'
+        $missingServices = New-Object 'System.Collections.Generic.List[string]'
 
         foreach ($svc in $disabledServices) {
+            if (-not (Test-ServiceExists -Name $svc)) {
+                if (-not $missingServices.Contains($svc)) {
+                    [void]$missingServices.Add($svc)
+                }
+                continue
+            }
             try {
                 $p = Start-Process -FilePath 'sc.exe' -ArgumentList "config `"$svc`" start= disabled" -PassThru -WindowStyle Hidden -ErrorAction Stop
                 if ($null -ne $p) {
@@ -7047,6 +7092,12 @@ function Invoke-SetServiceProfileManual {
         }
 
         foreach ($svc in $manualServices) {
+            if (-not (Test-ServiceExists -Name $svc)) {
+                if (-not $missingServices.Contains($svc)) {
+                    [void]$missingServices.Add($svc)
+                }
+                continue
+            }
             try {
                 $p = Start-Process -FilePath 'sc.exe' -ArgumentList "config `"$svc`" start= demand" -PassThru -WindowStyle Hidden -ErrorAction Stop
                 if ($null -ne $p) {
@@ -7056,6 +7107,12 @@ function Invoke-SetServiceProfileManual {
         }
 
         foreach ($svc in $automaticServices) {
+            if (-not (Test-ServiceExists -Name $svc)) {
+                if (-not $missingServices.Contains($svc)) {
+                    [void]$missingServices.Add($svc)
+                }
+                continue
+            }
             try {
                 $p = Start-Process -FilePath 'sc.exe' -ArgumentList "config `"$svc`" start= auto" -PassThru -WindowStyle Hidden -ErrorAction Stop
                 if ($null -ne $p) {
@@ -7070,6 +7127,12 @@ function Invoke-SetServiceProfileManual {
         }
 
         foreach ($svc in $autoDelayedServices) {
+            if (-not (Test-ServiceExists -Name $svc)) {
+                if (-not $missingServices.Contains($svc)) {
+                    [void]$missingServices.Add($svc)
+                }
+                continue
+            }
             try {
                 $p = Start-Process -FilePath 'sc.exe' -ArgumentList "config `"$svc`" start= delayed-auto" -PassThru -WindowStyle Hidden -ErrorAction Stop
                 if ($null -ne $p) {
@@ -7078,7 +7141,19 @@ function Invoke-SetServiceProfileManual {
             } catch { Write-Log "Failed to launch sc.exe for delayed-auto service '$svc': $_" 'WARN' }
         }
 
-        Wait-ProcessBatchUntilDeadline -ProcessInfos $scProcs -TimeoutSeconds 30
+        if ($missingServices.Count -gt 0) {
+            $sampleSize = [Math]::Min($missingServices.Count, 12)
+            $sampleServices = @($missingServices | Select-Object -First $sampleSize)
+            $remainingCount = $missingServices.Count - $sampleSize
+            $sampleSuffix = if ($remainingCount -gt 0) {
+                " +$remainingCount more"
+            } else {
+                ''
+            }
+            Write-Log "Skipped startup-type changes for $($missingServices.Count) absent service(s): $($sampleServices -join ', ')$sampleSuffix" 'INFO'
+        }
+
+        Wait-ProcessBatchUntilDeadline -ProcessInfos $scProcs -TimeoutSeconds 45 -BatchDescription 'Service startup-type changes'
 
         foreach ($svc in @($disabledServices | Select-Object -Unique)) {
             Stop-ServiceIfPresent -Name $svc
@@ -7158,6 +7233,7 @@ function Invoke-ApplyGraphicsSchedulingTweaks {
 function Invoke-ApplyMemoryDiskBehaviorTweaks {
     try {
         Write-Log 'Applying memory and disk behavior tweaks...' 'INFO'
+        $currentMemoryDiskStep = 'updating memory and Storage Sense registry values'
 
         $prefetchPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters'
         $memoryManagementPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
@@ -7170,6 +7246,7 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
             @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy'; Name = '01'; Value = 0 }
         )
 
+        $currentMemoryDiskStep = 'disabling memory compression'
         try {
             Disable-MMAgent -MemoryCompression -ErrorAction Stop
             Write-Log 'Memory compression disabled.' 'INFO'
@@ -7177,6 +7254,7 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
             Write-Log "Failed to disable memory compression: $($_.Exception.Message)" 'WARN'
         }
 
+        $currentMemoryDiskStep = 'disabling page combining'
         try {
             Disable-MMAgent -PageCombining -ErrorAction Stop
             Write-Log 'Page combining disabled.' 'INFO'
@@ -7184,6 +7262,7 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
             Write-Log "Failed to disable page combining: $($_.Exception.Message)" 'WARN'
         }
 
+        $currentMemoryDiskStep = 'disabling NTFS last access updates'
         try {
             Invoke-NativeCommandChecked -FilePath 'fsutil.exe' -ArgumentList @('behavior', 'set', 'disablelastaccess', '1') | Out-Null
             Write-Log 'NTFS last access updates disabled.' 'INFO'
@@ -7200,7 +7279,7 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
         }
 
         if ($message -match '(?i)access is denied') {
-            Write-Log "Memory and disk behavior tweaks completed with warnings: $message" 'WARN'
+            Write-Log "Memory and disk behavior tweaks completed with warnings during $currentMemoryDiskStep: $message" 'WARN'
             return $true
         }
 
@@ -7496,7 +7575,7 @@ function Invoke-ExhaustivePowerTuning {
         Write-Log "Prepared NIC power settings for $nicCount adapter(s)." 'INFO'
 
         # ---- Wait for powercfg matrix to complete, then reactivate scheme ----
-        Wait-ProcessBatchUntilDeadline -ProcessInfos $pcfgProcs -TimeoutSeconds 30
+        Wait-ProcessBatchUntilDeadline -ProcessInfos $pcfgProcs -TimeoutSeconds 45 -BatchDescription 'Power scheme value updates'
         Invoke-NativeCommandChecked -FilePath 'powercfg.exe' -ArgumentList @('/setactive', $activeSchemeGuid) | Out-Null
         Write-Log 'Power value matrix applied and scheme reactivated.' 'INFO'
 
