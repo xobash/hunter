@@ -7194,6 +7194,16 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
         Write-Log 'Memory and disk behavior tweaks applied.' 'SUCCESS'
         return $true
     } catch {
+        $message = $_.Exception.Message
+        if ([string]::IsNullOrWhiteSpace($message)) {
+            $message = [string]$_
+        }
+
+        if ($message -match '(?i)access is denied') {
+            Write-Log "Memory and disk behavior tweaks completed with warnings: $message" 'WARN'
+            return $true
+        }
+
         Write-Log "Error applying memory and disk behavior tweaks: $_" 'ERROR'
         return $false
     }
@@ -8150,6 +8160,26 @@ function Invoke-ParallelInstalls {
                         [bool]$target.AllowDirectDownloadFallback
                     } else {
                         $true
+                    }
+                    $resolvedTarget.RefreshDownloadOnFailure = if ($target.ContainsKey('RefreshDownloadOnFailure')) {
+                        [bool]$target.RefreshDownloadOnFailure
+                    } else {
+                        $false
+                    }
+                    $resolvedTarget.SkipSignatureValidation = if ($target.ContainsKey('SkipSignatureValidation')) {
+                        [bool]$target.SkipSignatureValidation
+                    } else {
+                        $false
+                    }
+                    $resolvedTarget.AddToPath = if ($target.ContainsKey('AddToPath')) {
+                        [bool]$target.AddToPath
+                    } else {
+                        $false
+                    }
+                    $resolvedTarget.PathProbe = if ($target.ContainsKey('PathProbe') -and -not [string]::IsNullOrWhiteSpace([string]$target.PathProbe)) {
+                        [string]$target.PathProbe
+                    } else {
+                        ''
                     }
                     $resolvedTarget.DownloadUrl = ''
                     $resolvedTarget.DownloadFileName = ''
