@@ -7279,7 +7279,7 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
         }
 
         if ($message -match '(?i)access is denied') {
-            Write-Log "Memory and disk behavior tweaks completed with warnings during $currentMemoryDiskStep: $message" 'WARN'
+            Write-Log ("Memory and disk behavior tweaks completed with warnings during {0}: {1}" -f $currentMemoryDiskStep, $message) 'WARN'
             return $true
         }
 
