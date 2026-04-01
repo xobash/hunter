@@ -1,87 +1,194 @@
 # Hunter
 
-Automated Windows 10/11 debloat and gaming PC setup. One command, no manual steps. Removes bloatware, kills telemetry, installs your apps, tunes performance — done.
+Hunter is a single-script Windows 10/11 debloat and gaming-PC setup tool. It applies a fixed sequence of system cleanup, privacy, UI, service, storage, graphics, power, and package-install steps so a fresh machine can be brought to a known state quickly.
 
-## Run It
+It exists to make repeatable Windows setup fast: run one elevated PowerShell command, let the checkpoint/resume engine handle the workflow, and review the exported report at the end.
 
-Open PowerShell **as Administrator** and paste:
+## Features
 
-```powershell
-irm https://raw.githubusercontent.com/xobash/hunter/main/hunter.ps1 | iex
-```
-
-That's it. No cloning, no downloading, no setup. The script runs directly from GitHub.
-
-> Requires admin. If you forget, it'll tell you.
-
-## What It Does
-
-62 tasks across 9 phases. Everything is idempotent — re-running skips completed tasks. If a reboot is needed, Hunter registers a scheduled task to auto-resume on next login.
-
-| Phase | Name | What Happens |
-|-------|------|-------------|
-| 1 | Preflight | System restore point, background app downloads start |
-| 2 | Core Setup | Local standard user, dark mode, Ultimate Performance power plan |
-| 3 | Start / UI | Kill Bing search, Start recommendations, Widgets, Task View, notification center, Focus Assist |
-| 4 | Explorer | This PC as home, remove Home/Gallery/OneDrive tabs, disable auto folder discovery |
-| 5 | Microsoft Cloud | Remove Edge (keeps WebView2), OneDrive, Copilot; block Edge reinstall via Group Policy |
-| 6 | Remove Apps | Nuke ~20 Microsoft/bloatware apps in one broad debloat pass (Outlook, Xbox/Game Bar, Teams, Clipchamp, Solitaire, etc.), block consumer features |
-| 7 | System Tweaks | Hunter aggressive service profile (WinUtil-inspired, intentionally broader, but keeps WLAN/IP Helper/Fax/AJRouter/SNMP Trap available), disable telemetry plus extra privacy/web-content policies, disable location/hibernation, disable HAGS, enable GPU MSI mode, block Razer/Adobe traffic, exhaustive power tuning (processor floor/ceiling at 100, core parking/C-state suppression, device power management across USB/HID/PCI/NIC buses), 0.5ms timer resolution service |
-| 8 | External Tools | Install 11 apps in parallel (Brave, Steam, Parsec, PowerShell 7, FFmpeg, yt-dlp, CrystalDiskMark, Cinebench R23, FurMark, PeaZip, Winaero Tweaker), TCP Optimizer, O&O ShutUp10++ |
-| 9 | Cleanup | Retry failed tasks, disk cleanup, Explorer restart, desktop report |
-
-A real-time progress overlay with animated liquid glass UI tracks everything as it runs. A summary report lands on your desktop when done.
+- One-command execution from GitHub or local checkout
+- Checkpoint and resume support across reboots
+- Parallel package installs and background asset prefetch
+- Broad Microsoft app removal plus privacy and UI cleanup
+- Gaming-focused power, graphics, storage, and device-management tuning
+- Desktop report and full log export at the end of the run
 
 ## Requirements
 
 - Windows 10 22H2+ or Windows 11 23H2+
 - Administrator privileges
 - Internet connection
-- winget (pre-installed on modern Windows)
+- `winget` available on the target machine
 
-## Options
+## Quick Start
 
-| Flag | What it does |
+Open PowerShell as Administrator and run:
+
+```powershell
+irm https://raw.githubusercontent.com/xobash/hunter/main/hunter.ps1 | iex
+```
+
+Local checkout:
+
+```powershell
+git clone https://github.com/xobash/hunter.git
+cd hunter
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1
+```
+
+## Usage
+
+Default run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1
+```
+
+Strict mode:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -Strict
+```
+
+Automation-safe run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -AutomationSafe
+```
+
+Custom log path:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -LogPath C:\Temp\hunter.log
+```
+
+## Flags
+
+| Flag | Description |
 |------|-------------|
-| `-Strict` | Abort if any task fails |
-| `-LogPath <path>` | Custom log location |
-| `-AutomationSafe` | Unattended mode — skips dialogs and manual review steps |
+| `-Strict` | Abort the run when a mandatory task fails |
+| `-AutomationSafe` | Skip dialogs, UI-only launches, and reboot/sign-out actions for unattended runs |
+| `-LogPath <path>` | Write the main log to a custom path |
 
-## How It Works
+## Environment Variables
 
-Hunter is a single PowerShell script (~10,800 lines). It uses a checkpoint/resume engine so reboots don't lose progress. Heavyweight operations (service config, power tuning, app installs) run in parallel where possible. The progress UI runs in a separate STA WPF runspace so the main task engine does not block on rendering.
+| Variable | Description |
+|----------|-------------|
+| `HUNTER_LOCAL_USER_PASSWORD` | Overrides the generated/stored password for Hunter's managed local `user` account |
+| `HUNTER_AUTOMATION_SAFE=1` | Forces automation-safe behavior without passing `-AutomationSafe` |
 
-## Additional Tuning
+## What Hunter Does
 
-- Storage behavior: disables 8.3 short-name creation, disables NTFS last-access updates, and removes the NTFS USN journal when present.
-- Memory policy: `LargeSystemCache` is RAM-aware. Systems under 16 GiB get `1`; systems at or above 16 GiB get `0`.
-- Graphics policy: disables Hardware-Accelerated GPU Scheduling and enables GPU MSI mode for detected PCI display adapters.
-- CPU / power policy: clears explicit TSC sync overrides, drives processor min/max throttle to `100`, and suppresses core parking through `CPMINCORES`.
-- Notification policy: disables toast notifications, notification center, and Focus Assist for the current and default user profiles.
+Hunter currently runs 62 tasks across 9 phases. Re-running is safe: completed work is checkpointed and skipped where possible.
 
-## Scope Notes
+| Phase | Name | Behavior |
+|------|------|----------|
+| 1 | Preflight | Connectivity checks, optional restore point, start package/asset background jobs |
+| 2 | Core Setup | Create or normalize local standard user, configure dark mode, activate Ultimate Performance |
+| 3 | Start / UI | Disable Bing search, Start recommendations, Widgets, Task View, notification center, and Focus Assist |
+| 4 | Explorer | Set This PC as Explorer home, remove Home/Gallery/OneDrive shell entries, disable folder auto-discovery |
+| 5 | Microsoft Cloud | Remove Edge while preserving WebView2, remove OneDrive and Copilot, clean Edge pins and shortcuts |
+| 6 | Remove Apps | Remove bundled Microsoft and consumer apps, disable consumer features and activity history |
+| 7 | System Tweaks | Apply service profile, telemetry/privacy changes, storage tweaks, graphics tweaks, power tuning, timer resolution service, Adobe/Razer blocking |
+| 8 | External Tools | Install packages and apply external tooling such as TCP Optimizer and O&O ShutUp10 |
+| 9 | Cleanup | Finalize installs, retry failed tasks, cleanup temp data, restart Explorer, export report/logs |
 
-Hunter borrows from WinUtil in several areas, but it does not aim for strict one-to-one parity.
+## Tuning Highlights
 
-- Hunter intentionally goes beyond WinUtil in some areas when the broader behavior matches Hunter's debloat/gaming-setup goals.
-- The app-removal pass is intentionally broader than Xbox/Game Bar removal alone. Xbox/Game Bar cleanup is bundled into Hunter's larger Microsoft debloat pass alongside Outlook, Teams, Clipchamp, To Do, Power Automate, Sound Recorder, Bing, LinkedIn, and other consumer/bloatware targets already covered by the script.
-- The service profile and background-activity suppression are also intentionally broader than the WinUtil baseline.
+- Storage: disables 8.3 short-name creation, disables NTFS last-access updates, and deletes the NTFS USN journal when present.
+- Memory: applies a RAM-aware `LargeSystemCache` policy. Systems under 16 GiB get `1`; systems at or above 16 GiB get `0`.
+- Graphics: disables HAGS, enables GPU MSI mode for detected PCI display adapters, and applies frame-pacing related registry changes.
+- CPU / power: forces `PROCTHROTTLEMIN/MAX` to `100`, suppresses core parking with `CPMINCORES`, clears the `tscsyncpolicy` override, and applies broader device/power-plan tuning.
+- Services: keeps `WlanSvc`, `iphlpsvc`, `Fax`, `AJRouter`, and `SNMP Trap` available while still applying the broader Hunter service profile.
+- Notifications: disables toast notifications, notification center, and Focus Assist for the current and default user profiles.
 
-State files live in `C:\ProgramData\Hunter\`:
+## Packages and External Tools
+
+Hunter currently installs these packages in parallel:
+
+- PowerShell 7
+- Brave
+- Parsec
+- Steam
+- FFmpeg
+- yt-dlp
+- CrystalDiskMark
+- Cinebench R23
+- FurMark
+- PeaZip
+- Winaero Tweaker
+
+It also applies:
+
+- TCP Optimizer
+- O&O ShutUp10 preset import
+- Wallpaper setup
+- Classic System Properties shortcut/open step
+- Network Connections shortcut creation
+
+## Outputs
+
+Hunter writes its working state under `C:\ProgramData\Hunter\`.
 
 | File | Purpose |
 |------|---------|
-| `hunter.log` | Timestamped log of every action |
-| `checkpoint.json` | Completed task tracking (for resume) |
+| `hunter.log` | Main timestamped execution log |
+| `checkpoint.json` | Completed-task tracking for resume |
+| `Secrets\local-user.secret` | Machine-protected stored credential payload for the managed local user |
 
-## Hyper-V
+At the end of the run Hunter exports:
 
-Hunter detects Hyper-V VMs and adjusts: skips autologin (RDP handles it), skips disk cleanup, tunes DWM for Enhanced Session.
+- A desktop summary report
+- A copy of the full execution log
+
+## Hyper-V Behavior
+
+Hunter detects Hyper-V guests and changes behavior where the default desktop-oriented flow is not appropriate.
+
+- Skips autologin configuration
+- Preserves RDP-relevant behavior
+- Skips disk cleanup
+- Keeps Hyper-V-specific tuning branches in the power/virtualization logic
+
+## Project Structure
+
+```text
+hunter.ps1          Main script and task engine
+README.md           Project documentation
+.github/workflows/  GitHub Actions workflows
+```
+
+## Development
+
+Run locally:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1
+```
+
+Basic repo checks:
+
+```bash
+git diff --check
+```
+
+If PowerShell is installed in your dev environment, syntax-check the script with:
+
+```powershell
+[void][System.Management.Automation.Language.Parser]::ParseFile('hunter.ps1',[ref]$null,[ref]$null)
+```
+
+## Scope Notes
+
+- Hunter is opinionated. It is not a general-purpose Windows tuning framework.
+- It borrows from WinUtil and similar tuning references, but it does not attempt strict one-to-one parity.
+- The service profile, app removal pass, and privacy suppression are intentionally broader than a minimal debloat baseline.
+
+## License
+
+No license file is currently included in this repository.
 
 ## Acknowledgements
 
-Service profiles and tweak implementations build on [ChrisTitusTech/winutil](https://github.com/ChrisTitusTech/winutil), with several Hunter-specific expansions. Power tuning patterns from [FR33THYFR33THY/WinSux](https://github.com/FR33THYFR33THY/WinSux-Windows-Optimization-Guide).
-
----
-
-If Hunter saved you time, consider giving it a **star** — a lot of work went into building and testing this. It helps others find it too.
+- [ChrisTitusTech/winutil](https://github.com/ChrisTitusTech/winutil)
+- [FR33THYFR33THY/WinSux-Windows-Optimization-Guide](https://github.com/FR33THYFR33THY/WinSux-Windows-Optimization-Guide)
