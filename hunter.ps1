@@ -295,6 +295,23 @@ function Invoke-NativeCommandChecked {
     return $exitCode
 }
 
+function Get-NativeSystemExecutablePath {
+    param([Parameter(Mandatory)][string]$FileName)
+
+    $systemDirectory = if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+        Join-Path $script:WindowsRoot 'Sysnative'
+    } else {
+        Join-Path $script:WindowsRoot 'System32'
+    }
+
+    $candidatePath = Join-Path $systemDirectory $FileName
+    if (Test-Path $candidatePath) {
+        return $candidatePath
+    }
+
+    return $FileName
+}
+
 function Start-ProcessChecked {
     param(
         [Parameter(Mandatory)][string]$FilePath,
@@ -357,17 +374,40 @@ function New-TaskSkipResult {
     }
 }
 
+function Get-TaskResultField {
+    param(
+        [object]$TaskResult,
+        [string]$Name
+    )
+
+    if ($null -eq $TaskResult -or [string]::IsNullOrWhiteSpace($Name)) {
+        return $null
+    }
+
+    if ($TaskResult -is [System.Collections.IDictionary]) {
+        if ($TaskResult.Contains($Name)) {
+            return $TaskResult[$Name]
+        }
+
+        return $null
+    }
+
+    if ($null -ne $TaskResult.PSObject -and $null -ne $TaskResult.PSObject.Properties[$Name]) {
+        return $TaskResult.$Name
+    }
+
+    return $null
+}
+
 function Get-TaskHandlerCompletionStatus {
     param(
         [object]$TaskResult,
         [bool]$LoggedWarning = $false
     )
 
-    $explicitStatus = $null
-    if ($TaskResult -is [hashtable] -and $TaskResult.ContainsKey('Status')) {
-        $explicitStatus = [string]$TaskResult['Status']
-    } elseif ($null -ne $TaskResult -and $TaskResult.PSObject.Properties['Status']) {
-        $explicitStatus = [string]$TaskResult.Status
+    $explicitStatus = Get-TaskResultField -TaskResult $TaskResult -Name 'Status'
+    if ($null -ne $explicitStatus) {
+        $explicitStatus = [string]$explicitStatus
     }
 
     switch ($explicitStatus) {
@@ -1167,6 +1207,26 @@ function Test-ServiceAutomaticDelayedStart {
     )
 }
 
+function Test-ServiceProtected {
+    param([string]$Name)
+
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        return $false
+    }
+
+    $serviceKeyPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
+    try {
+        $launchProtected = Get-ItemProperty -Path $serviceKeyPath -Name 'LaunchProtected' -ErrorAction SilentlyContinue
+        if ($null -eq $launchProtected -or $null -eq $launchProtected.LaunchProtected) {
+            return $false
+        }
+
+        return ([int]$launchProtected.LaunchProtected -gt 0)
+    } catch {
+        return $false
+    }
+}
+
 function Stop-ServiceIfPresent {
     param([string]$Name)
 
@@ -1322,7 +1382,8 @@ function Invoke-BCDEditBestEffort {
     )
 
     try {
-        $process = Start-Process -FilePath 'bcdedit.exe' -ArgumentList $ArgumentList -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+        $bcdeditPath = Get-NativeSystemExecutablePath -FileName 'bcdedit.exe'
+        $process = Start-Process -FilePath $bcdeditPath -ArgumentList $ArgumentList -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
         if ($null -eq $process) {
             throw 'bcdedit.exe did not return a process handle.'
         }
@@ -1332,10 +1393,10 @@ function Invoke-BCDEditBestEffort {
             return $true
         }
 
-        Write-Log "$Description returned exit code $($process.ExitCode)." 'WARN'
+        Write-Log "$Description skipped (bcdedit exited with code $($process.ExitCode))." 'INFO'
         return $false
     } catch {
-        Write-Log "Failed to update boot configuration for ${Description}: $($_.Exception.Message)" 'WARN'
+        Write-Log "Skipped boot configuration update for ${Description}: $($_.Exception.Message)" 'INFO'
         return $false
     }
 }
@@ -1360,7 +1421,7 @@ function Remove-AppxPatterns {
                     Write-Log "AppX package removed: $($package.Name)"
                 } catch {
                     $errorMessage = $_.Exception.Message
-                    if ($errorMessage -match '0x80070032|part of Windows and cannot be uninstalled|The request is not supported') {
+                    if ($errorMessage -match '0x80070032|part of Windows and cannot be uninstalled|The request is not supported|The system cannot find the path specified|cannot find the file specified') {
                         Write-Log "Skipping built-in AppX package $($package.Name): $errorMessage" 'INFO'
                     } else {
                         Write-Log "Failed to remove AppX package $($package.Name) : $_" 'WARN'
@@ -1375,7 +1436,7 @@ function Remove-AppxPatterns {
                     Write-Log "AppX provisioned package removed: $($package.DisplayName)"
                 } catch {
                     $errorMessage = $_.Exception.Message
-                    if ($errorMessage -match '0x80070032|part of Windows and cannot be uninstalled|The request is not supported') {
+                    if ($errorMessage -match '0x80070032|part of Windows and cannot be uninstalled|The request is not supported|The system cannot find the path specified|cannot find the file specified') {
                         Write-Log "Skipping built-in AppX provisioned package $($package.DisplayName): $errorMessage" 'INFO'
                     } else {
                         Write-Log "Failed to remove AppX provisioned package $($package.DisplayName) : $_" 'WARN'
@@ -3408,7 +3469,9 @@ function Invoke-AppsFolderActionByPatterns {
         [string[]]$VerbPatterns,
         [string]$SuccessMessagePrefix,
         [string]$UnavailableMessagePrefix,
-        [string]$FailureMessagePrefix
+        [string]$FailureMessagePrefix,
+        [ValidateSet('INFO','WARN')]
+        [string]$UnavailableLogLevel = 'WARN'
     )
 
     if ($null -eq $Patterns -or $Patterns.Count -eq 0) {
@@ -3449,7 +3512,7 @@ function Invoke-AppsFolderActionByPatterns {
                         Write-Log "${SuccessMessagePrefix}: $($item.Name)"
                     } else {
                         $unavailableCount++
-                        Write-Log "${UnavailableMessagePrefix}: $($item.Name)" 'WARN'
+                        Write-Log "${UnavailableMessagePrefix}: $($item.Name)" $UnavailableLogLevel
                     }
                 } catch {
                     $failureCount++
@@ -3497,7 +3560,8 @@ function Invoke-StartMenuUnpinByPatterns {
         -VerbPatterns @('*Unpin*Start*') `
         -SuccessMessagePrefix 'AppFolder app unpinned from Start' `
         -UnavailableMessagePrefix 'Start unpin verb not available for AppFolder item' `
-        -FailureMessagePrefix 'Failed to unpin AppFolder app from Start'
+        -FailureMessagePrefix 'Failed to unpin AppFolder app from Start' `
+        -UnavailableLogLevel 'INFO'
 }
 
 function Get-DefaultBlockedStartPinsPatterns {
@@ -3560,14 +3624,6 @@ function Invoke-ApplyLiveStartPinCleanup {
         [int]$cleanupResult.MatchedCount,
         [int]$cleanupResult.SucceededCount,
         [int]$cleanupResult.UnavailableCount) 'INFO'
-
-    if ([int]$cleanupResult.UnavailableCount -gt 0) {
-        return @{
-            Success = $true
-            Status  = 'CompletedWithWarnings'
-            Reason  = 'Some blocked Start items did not expose an unpin verb'
-        }
-    }
 
     return $true
 }
@@ -4838,7 +4894,12 @@ function Set-ExplorerNamespacePinnedState {
             Write-Log "Registry set: $machineOverridePath\System.IsPinnedToNameSpaceTree = $Value (DWord)"
         }
     } catch {
-        Write-Log "Machine-wide namespace pin override skipped for ${Guid}: $_" 'WARN'
+        $errorMessage = $_.Exception.Message
+        if ($errorMessage -match 'Requested registry access is not allowed|Access is denied') {
+            Write-Log "Machine-wide namespace pin override skipped for ${Guid}: $errorMessage" 'INFO'
+        } else {
+            Write-Log "Machine-wide namespace pin override skipped for ${Guid}: $_" 'WARN'
+        }
     }
 }
 
@@ -4853,7 +4914,7 @@ function Invoke-CreateRestorePoint {
     }
 
     if ($script:IsAutomationRun) {
-        Write-Log 'Automation-safe mode enabled; skipping restore point creation.' 'WARN'
+        Write-Log 'Automation-safe mode enabled; skipping restore point creation.' 'INFO'
         return (New-TaskSkipResult -Reason 'Restore point creation skipped in automation-safe mode')
     }
 
@@ -4863,7 +4924,7 @@ function Invoke-CreateRestorePoint {
         -DefaultToNo $true
 
     if (-not $shouldCreateRestorePoint) {
-        Write-Log 'Restore point creation skipped by user.' 'WARN'
+        Write-Log 'Restore point creation skipped by user.' 'INFO'
         return (New-TaskSkipResult -Reason 'Restore point creation was skipped by the user')
     }
 
@@ -4954,6 +5015,7 @@ function Invoke-CreateRestorePoint {
 function Invoke-VerifyInternetConnectivity {
     try {
         Write-Log 'Verifying internet connectivity...' 'INFO'
+        $probeFailures = New-Object 'System.Collections.Generic.List[string]'
 
         $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
         if ($null -ne $curl) {
@@ -4965,10 +5027,10 @@ function Invoke-VerifyInternetConnectivity {
                 }
 
                 if ($LASTEXITCODE -ne 0) {
-                    Write-Log "curl-based internet probe exited with code $LASTEXITCODE" 'WARN'
+                    [void]$probeFailures.Add("curl-based internet probe exited with code $LASTEXITCODE")
                 }
             } catch {
-                Write-Log "curl-based internet probe failed: $($_.Exception.Message)" 'WARN'
+                [void]$probeFailures.Add("curl-based internet probe failed: $($_.Exception.Message)")
             }
         }
 
@@ -4979,7 +5041,7 @@ function Invoke-VerifyInternetConnectivity {
                 return $true
             }
         } catch {
-            Write-Log "HTTP internet probe failed: $($_.Exception.Message)" 'WARN'
+            [void]$probeFailures.Add("HTTP internet probe failed: $($_.Exception.Message)")
         }
 
         try {
@@ -4988,7 +5050,11 @@ function Invoke-VerifyInternetConnectivity {
                 return $true
             }
         } catch {
-            Write-Log "TCP internet probe failed: $($_.Exception.Message)" 'WARN'
+            [void]$probeFailures.Add("TCP internet probe failed: $($_.Exception.Message)")
+        }
+
+        foreach ($probeFailure in @($probeFailures)) {
+            Write-Log $probeFailure 'WARN'
         }
 
         throw 'All connectivity probes failed.'
@@ -5069,7 +5135,7 @@ function Invoke-EnsureLocalStandardUser {
                 Write-Log "Local user 'user' removed from Administrators"
             }
         } else {
-            Write-Log 'LocalAccounts cmdlets unavailable; falling back to net.exe for local user management.' 'WARN'
+            Write-Log 'LocalAccounts cmdlets unavailable; falling back to net.exe for local user management.' 'INFO'
 
             $computerName = $env:COMPUTERNAME
             $userAdsPath = "WinNT://$computerName/user,user"
@@ -5492,7 +5558,7 @@ function Invoke-DisableWidgets {
             New-ItemProperty -Path $widgetsAdvancedPath -Name 'TaskbarDa' -Value 0 -PropertyType DWord -Force | Out-Null
             Write-Log "DWord set for current user: $widgetsAdvancedPath\TaskbarDa = 0"
         } catch {
-            Write-Log "Skipping per-user Widgets taskbar flag update: $($_.Exception.Message)" 'WARN'
+            Write-Log "Skipping per-user Widgets taskbar flag update: $($_.Exception.Message)" 'INFO'
         }
 
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' -Name 'AllowNewsAndInterests' -Value 0 -Type 'DWord'
@@ -5789,7 +5855,7 @@ function Invoke-RemoveEdgeKeepWebView2 {
                 return (New-TaskSkipResult -Reason 'Edge uninstall was blocked by the current Windows build or installer state')
             }
 
-            Write-Log -Message "$warningMessage Edge binaries are no longer present." -Level 'WARN'
+            Write-Log -Message "$warningMessage Edge binaries are no longer present." -Level 'SUCCESS'
             return $true
         }
 
@@ -7083,6 +7149,10 @@ function Invoke-SetServiceProfileManual {
                 }
                 continue
             }
+            if (Test-ServiceProtected -Name $svc) {
+                Write-Log "Skipped startup-type change for protected service ${svc}." 'INFO'
+                continue
+            }
             try {
                 $p = Start-Process -FilePath 'sc.exe' -ArgumentList "config `"$svc`" start= disabled" -PassThru -WindowStyle Hidden -ErrorAction Stop
                 if ($null -ne $p) {
@@ -7096,6 +7166,10 @@ function Invoke-SetServiceProfileManual {
                 if (-not $missingServices.Contains($svc)) {
                     [void]$missingServices.Add($svc)
                 }
+                continue
+            }
+            if (Test-ServiceProtected -Name $svc) {
+                Write-Log "Skipped startup-type change for protected service ${svc}." 'INFO'
                 continue
             }
             try {
@@ -7113,15 +7187,20 @@ function Invoke-SetServiceProfileManual {
                 }
                 continue
             }
+            if (Test-ServiceProtected -Name $svc) {
+                Write-Log "Skipped startup-type change for protected service ${svc}." 'INFO'
+                continue
+            }
             try {
                 $p = Start-Process -FilePath 'sc.exe' -ArgumentList "config `"$svc`" start= auto" -PassThru -WindowStyle Hidden -ErrorAction Stop
                 if ($null -ne $p) {
                     [void]$scProcs.Add([pscustomobject]@{ Process = $p; Description = "Set service $svc to automatic start" })
                 }
-                # Clear delayed autostart flag concurrently
-                $p2 = Start-Process -FilePath 'reg.exe' -ArgumentList "add `"HKLM\SYSTEM\CurrentControlSet\Services\$svc`" /v DelayedAutostart /t REG_DWORD /d 0 /f" -PassThru -WindowStyle Hidden -ErrorAction Stop
-                if ($null -ne $p2) {
-                    [void]$scProcs.Add([pscustomobject]@{ Process = $p2; Description = "Clear DelayedAutostart for $svc" })
+                if (Test-ServiceAutomaticDelayedStart -Name $svc) {
+                    $p2 = Start-Process -FilePath 'reg.exe' -ArgumentList "add `"HKLM\SYSTEM\CurrentControlSet\Services\$svc`" /v DelayedAutostart /t REG_DWORD /d 0 /f" -PassThru -WindowStyle Hidden -ErrorAction Stop
+                    if ($null -ne $p2) {
+                        [void]$scProcs.Add([pscustomobject]@{ Process = $p2; Description = "Clear DelayedAutostart for $svc" })
+                    }
                 }
             } catch { Write-Log "Failed to launch sc.exe for automatic service '$svc': $_" 'WARN' }
         }
@@ -7131,6 +7210,10 @@ function Invoke-SetServiceProfileManual {
                 if (-not $missingServices.Contains($svc)) {
                     [void]$missingServices.Add($svc)
                 }
+                continue
+            }
+            if (Test-ServiceProtected -Name $svc) {
+                Write-Log "Skipped startup-type change for protected service ${svc}." 'INFO'
                 continue
             }
             try {
@@ -7234,6 +7317,12 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
     try {
         Write-Log 'Applying memory and disk behavior tweaks...' 'INFO'
         $currentMemoryDiskStep = 'updating memory and Storage Sense registry values'
+        $mmAgentState = $null
+        try {
+            $mmAgentState = Get-MMAgent -ErrorAction Stop
+        } catch {
+            $mmAgentState = $null
+        }
 
         $prefetchPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters'
         $memoryManagementPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
@@ -7247,19 +7336,37 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
         )
 
         $currentMemoryDiskStep = 'disabling memory compression'
-        try {
-            Disable-MMAgent -MemoryCompression -ErrorAction Stop
-            Write-Log 'Memory compression disabled.' 'INFO'
-        } catch {
-            Write-Log "Failed to disable memory compression: $($_.Exception.Message)" 'WARN'
+        if ($null -ne $mmAgentState -and $null -ne $mmAgentState.PSObject.Properties['MemoryCompression'] -and -not [bool]$mmAgentState.MemoryCompression) {
+            Write-Log 'Memory compression already disabled.' 'INFO'
+        } else {
+            try {
+                Disable-MMAgent -MemoryCompression -ErrorAction Stop
+                Write-Log 'Memory compression disabled.' 'INFO'
+            } catch {
+                $errorMessage = $_.Exception.Message
+                if ($errorMessage -match 'service cannot be started|no enabled devices associated with it|not supported') {
+                    Write-Log "Skipping memory compression disable: $errorMessage" 'INFO'
+                } else {
+                    Write-Log "Failed to disable memory compression: $errorMessage" 'WARN'
+                }
+            }
         }
 
         $currentMemoryDiskStep = 'disabling page combining'
-        try {
-            Disable-MMAgent -PageCombining -ErrorAction Stop
-            Write-Log 'Page combining disabled.' 'INFO'
-        } catch {
-            Write-Log "Failed to disable page combining: $($_.Exception.Message)" 'WARN'
+        if ($null -ne $mmAgentState -and $null -ne $mmAgentState.PSObject.Properties['PageCombining'] -and -not [bool]$mmAgentState.PageCombining) {
+            Write-Log 'Page combining already disabled.' 'INFO'
+        } else {
+            try {
+                Disable-MMAgent -PageCombining -ErrorAction Stop
+                Write-Log 'Page combining disabled.' 'INFO'
+            } catch {
+                $errorMessage = $_.Exception.Message
+                if ($errorMessage -match 'service cannot be started|no enabled devices associated with it|not supported') {
+                    Write-Log "Skipping page combining disable: $errorMessage" 'INFO'
+                } else {
+                    Write-Log "Failed to disable page combining: $errorMessage" 'WARN'
+                }
+            }
         }
 
         $currentMemoryDiskStep = 'disabling NTFS last access updates'
@@ -7468,9 +7575,11 @@ function Invoke-ExhaustivePowerTuning {
             Set-RegistryValue -Path $usb3LinkPowerMgmtPath -Name 'Attributes' -Value 2 -Type DWord
         }
 
+        $powercfgPath = Get-NativeSystemExecutablePath -FileName 'powercfg.exe'
+
         # Disable console lock timeout (AC and DC)
-        Invoke-NativeCommandChecked -FilePath 'powercfg.exe' -ArgumentList @('/setacvalueindex', 'scheme_current', 'sub_none', 'consolelock', '0') | Out-Null
-        Invoke-NativeCommandChecked -FilePath 'powercfg.exe' -ArgumentList @('/setdcvalueindex', 'scheme_current', 'sub_none', 'consolelock', '0') | Out-Null
+        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setacvalueindex', 'scheme_current', 'sub_none', 'consolelock', '0') | Out-Null
+        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setdcvalueindex', 'scheme_current', 'sub_none', 'consolelock', '0') | Out-Null
         Write-Log 'Console lock timeout disabled on AC and DC power.' 'INFO'
 
         $powerValueMatrix = @(
@@ -7513,19 +7622,37 @@ function Invoke-ExhaustivePowerTuning {
 
         # ---- Fire powercfg matrix concurrently (all AC/DC pairs at once) ----
         $pcfgProcs = New-Object 'System.Collections.Generic.List[object]'
+        $unsupportedPowerSettings = New-Object 'System.Collections.Generic.List[string]'
         foreach ($pv in $powerValueMatrix) {
+            & $powercfgPath /query $activeSchemeGuid $($pv.SubGroup) $($pv.Setting) *> $null
+            if ($LASTEXITCODE -ne 0) {
+                [void]$unsupportedPowerSettings.Add("$($pv.SubGroup)/$($pv.Setting)")
+                continue
+            }
+
             try {
-                $p1 = Start-Process -FilePath 'powercfg.exe' -ArgumentList "/setacvalueindex $activeSchemeGuid $($pv.SubGroup) $($pv.Setting) $($pv.Value)" -PassThru -WindowStyle Hidden -ErrorAction Stop
+                $p1 = Start-Process -FilePath $powercfgPath -ArgumentList "/setacvalueindex $activeSchemeGuid $($pv.SubGroup) $($pv.Setting) $($pv.Value)" -PassThru -WindowStyle Hidden -ErrorAction Stop
                 if ($null -ne $p1) {
                     [void]$pcfgProcs.Add([pscustomobject]@{ Process = $p1; Description = "powercfg AC $($pv.SubGroup)/$($pv.Setting)" })
                 }
             } catch { Write-Log "Failed to launch powercfg AC for $($pv.SubGroup)/$($pv.Setting): $_" 'WARN' }
             try {
-                $p2 = Start-Process -FilePath 'powercfg.exe' -ArgumentList "/setdcvalueindex $activeSchemeGuid $($pv.SubGroup) $($pv.Setting) $($pv.Value)" -PassThru -WindowStyle Hidden -ErrorAction Stop
+                $p2 = Start-Process -FilePath $powercfgPath -ArgumentList "/setdcvalueindex $activeSchemeGuid $($pv.SubGroup) $($pv.Setting) $($pv.Value)" -PassThru -WindowStyle Hidden -ErrorAction Stop
                 if ($null -ne $p2) {
                     [void]$pcfgProcs.Add([pscustomobject]@{ Process = $p2; Description = "powercfg DC $($pv.SubGroup)/$($pv.Setting)" })
                 }
             } catch { Write-Log "Failed to launch powercfg DC for $($pv.SubGroup)/$($pv.Setting): $_" 'WARN' }
+        }
+        if ($unsupportedPowerSettings.Count -gt 0) {
+            $sampleSize = [Math]::Min($unsupportedPowerSettings.Count, 8)
+            $sampleUnsupported = @($unsupportedPowerSettings | Select-Object -First $sampleSize)
+            $remainingCount = $unsupportedPowerSettings.Count - $sampleSize
+            $sampleSuffix = if ($remainingCount -gt 0) {
+                " +$remainingCount more"
+            } else {
+                ''
+            }
+            Write-Log "Skipped $($unsupportedPowerSettings.Count) unsupported power setting pair(s): $($sampleUnsupported -join ', ')$sampleSuffix" 'INFO'
         }
         Write-Log "Fired $($pcfgProcs.Count) concurrent powercfg operations." 'INFO'
 
@@ -9308,10 +9435,10 @@ function Invoke-CreateNetworkConnectionsShortcut {
                     $pinVerb.DoIt()
                     Write-Log "Pinned '$shortcutName' to Start menu via shell verb" 'SUCCESS'
                 } else {
-                    Write-Log "Pin to Start verb not available for '$shortcutName' (may require policy-based pinning)" 'WARN'
+                    Write-Log "Pin to Start verb not available for '$shortcutName' (may require policy-based pinning)" 'INFO'
                 }
             } catch {
-                Write-Log "Failed to pin '$shortcutName' to Start menu: $_" 'WARN'
+                Write-Log "Failed to pin '$shortcutName' to Start menu: $_" 'INFO'
             }
         }
 
@@ -9365,23 +9492,19 @@ function Invoke-DeleteTempFiles {
                     $totalFailed += $failed
 
                     if ($failed -gt 0) {
-                        Write-Log "Temporary cleanup removed $removed items from $path and skipped $failed locked or inaccessible item(s)." 'WARN'
+                        Write-Log "Temporary cleanup removed $removed items from $path and skipped $failed locked or inaccessible item(s)." 'INFO'
                     } else {
                         Write-Log "Cleaned $removed items from $path" 'INFO'
                     }
                 } catch {
-                    Write-Log "Warning cleaning $path : $_" 'WARN'
+                    Write-Log "Best-effort temp cleanup skipped some items in $path : $_" 'INFO'
                 }
             }
         }
 
         if ($totalFailed -gt 0) {
-            Write-Log "Temporary file cleanup completed with warnings: $totalRemoved removed, $totalFailed skipped" 'WARN'
-            return @{
-                Success = $true
-                Status  = 'CompletedWithWarnings'
-                Reason  = "Skipped $totalFailed temporary item(s) that could not be removed"
-            }
+            Write-Log "Temporary file cleanup completed best-effort: $totalRemoved removed, $totalFailed skipped" 'INFO'
+            return $true
         }
 
         Write-Log "Temporary file cleanup complete: $totalRemoved items removed" 'SUCCESS'
@@ -9441,22 +9564,14 @@ function Test-TaskHandlerReturnedFailure {
         return $true
     }
 
-    if ($TaskResult -is [hashtable]) {
-        if ($TaskResult.ContainsKey('Success')) {
-            return (-not [bool]$TaskResult['Success'])
-        }
-
-        if ($TaskResult.ContainsKey('Status')) {
-            return ([string]$TaskResult['Status'] -eq 'Failed')
-        }
+    $successValue = Get-TaskResultField -TaskResult $TaskResult -Name 'Success'
+    if ($null -ne $successValue) {
+        return (-not [bool]$successValue)
     }
 
-    if ($null -ne $TaskResult -and $TaskResult.PSObject.Properties['Success']) {
-        return (-not [bool]$TaskResult.Success)
-    }
-
-    if ($null -ne $TaskResult -and $TaskResult.PSObject.Properties['Status']) {
-        return ([string]$TaskResult.Status -eq 'Failed')
+    $statusValue = Get-TaskResultField -TaskResult $TaskResult -Name 'Status'
+    if ($null -ne $statusValue) {
+        return ([string]$statusValue -eq 'Failed')
     }
 
     if ($TaskResult -is [bool]) {
