@@ -1401,6 +1401,39 @@ function Invoke-BCDEditBestEffort {
     }
 }
 
+function Invoke-PowerCfgValueBestEffort {
+    param(
+        [Parameter(Mandatory)][string]$PowerCfgPath,
+        [Parameter(Mandatory)][string]$Scheme,
+        [Parameter(Mandatory)][string]$SubGroup,
+        [Parameter(Mandatory)][string]$Setting,
+        [Parameter(Mandatory)][string]$Value,
+        [Parameter(Mandatory)][ValidateSet('AC', 'DC')][string]$Mode,
+        [string]$Description = ''
+    )
+
+    $settingLabel = if ([string]::IsNullOrWhiteSpace($Description)) {
+        "$SubGroup/$Setting"
+    } else {
+        $Description
+    }
+
+    & $PowerCfgPath /query $Scheme $SubGroup $Setting *> $null
+    if ([int]$LASTEXITCODE -ne 0) {
+        Write-Log "Skipped power setting ${settingLabel} ($Mode): unavailable on this system." 'INFO'
+        return $false
+    }
+
+    $operation = if ($Mode -eq 'AC') { '/setacvalueindex' } else { '/setdcvalueindex' }
+    try {
+        Invoke-NativeCommandChecked -FilePath $PowerCfgPath -ArgumentList @($operation, $Scheme, $SubGroup, $Setting, $Value) | Out-Null
+        return $true
+    } catch {
+        Write-Log "Skipped power setting ${settingLabel} ($Mode): $($_.Exception.Message)" 'INFO'
+        return $false
+    }
+}
+
 # ==============================================================================
 # APPX HELPERS
 # ==============================================================================
@@ -7678,12 +7711,23 @@ function Invoke-ExhaustivePowerTuning {
         } else {
             Write-Log 'CPU cores already unparked.' 'INFO'
         }
-        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setacvalueindex', 'scheme_current', 'SUB_PROCESSOR', 'CPMINCORES', '100') | Out-Null
-        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setdcvalueindex', 'scheme_current', 'SUB_PROCESSOR', 'CPMINCORES', '100') | Out-Null
-        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setacvalueindex', 'scheme_current', 'SUB_PROCESSOR', 'PROCTHROTTLEMIN', '100') | Out-Null
-        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setdcvalueindex', 'scheme_current', 'SUB_PROCESSOR', 'PROCTHROTTLEMIN', '100') | Out-Null
-        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setacvalueindex', 'scheme_current', 'SUB_PROCESSOR', 'PROCTHROTTLEMAX', '100') | Out-Null
-        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setdcvalueindex', 'scheme_current', 'SUB_PROCESSOR', 'PROCTHROTTLEMAX', '100') | Out-Null
+        foreach ($processorPowerSetting in @(
+            @{ Mode = 'AC'; Setting = 'CPMINCORES'; Value = '100'; Description = 'processor core parking minimum cores' },
+            @{ Mode = 'DC'; Setting = 'CPMINCORES'; Value = '100'; Description = 'processor core parking minimum cores' },
+            @{ Mode = 'AC'; Setting = 'PROCTHROTTLEMIN'; Value = '100'; Description = 'processor minimum performance state' },
+            @{ Mode = 'DC'; Setting = 'PROCTHROTTLEMIN'; Value = '100'; Description = 'processor minimum performance state' },
+            @{ Mode = 'AC'; Setting = 'PROCTHROTTLEMAX'; Value = '100'; Description = 'processor maximum performance state' },
+            @{ Mode = 'DC'; Setting = 'PROCTHROTTLEMAX'; Value = '100'; Description = 'processor maximum performance state' }
+        )) {
+            Invoke-PowerCfgValueBestEffort `
+                -PowerCfgPath $powercfgPath `
+                -Scheme $activeSchemeGuid `
+                -SubGroup 'SUB_PROCESSOR' `
+                -Setting $processorPowerSetting.Setting `
+                -Value $processorPowerSetting.Value `
+                -Mode $processorPowerSetting.Mode `
+                -Description $processorPowerSetting.Description | Out-Null
+        }
 
         # Enable global timer resolution requests
         Ensure-GlobalTimerResolutionRequestsEnabled -LogIfAlreadyEnabled | Out-Null
