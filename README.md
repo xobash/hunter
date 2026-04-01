@@ -126,6 +126,16 @@ It also applies:
 - Classic System Properties shortcut/open step
 - Network Connections shortcut creation
 
+## Architecture
+
+`hunter.ps1` remains the stable entry script and compatibility surface. The migration work is moving shared logic into `src/Hunter` in small, behavior-preserving steps.
+
+- `hunter.ps1`: live entrypoint, raw argument parsing, and remaining legacy orchestration
+- `src/Hunter/Private`: extracted private layers for config, common helpers, execution helpers, and native-system wrappers
+- `src/Hunter/Hunter.psd1` / `src/Hunter/Hunter.psm1`: root module scaffold for the ongoing monolith decomposition
+- `tests/Smoke`: wrapper, task-catalog, and module-scaffold compatibility checks
+- `scripts/verification`: baseline capture and comparison helpers for before/after refactors
+
 ## Outputs
 
 Hunter writes its working state under `C:\ProgramData\Hunter\`.
@@ -153,9 +163,13 @@ Hunter detects Hyper-V guests and changes behavior where the default desktop-ori
 ## Project Structure
 
 ```text
-hunter.ps1          Main script and task engine
-README.md           Project documentation
-.github/workflows/  GitHub Actions workflows
+hunter.ps1
+README.md
+docs/
+scripts/verification/
+src/Hunter/
+tests/Smoke/
+tests/Fixtures/
 ```
 
 ## Development
@@ -172,10 +186,22 @@ Basic repo checks:
 git diff --check
 ```
 
+Run the smoke compatibility suite:
+
+```powershell
+Invoke-Pester .\tests\Smoke
+```
+
 If PowerShell is installed in your dev environment, syntax-check the script with:
 
 ```powershell
 [void][System.Management.Automation.Language.Parser]::ParseFile('hunter.ps1',[ref]$null,[ref]$null)
+```
+
+Validate the module scaffold:
+
+```powershell
+Test-ModuleManifest .\src\Hunter\Hunter.psd1
 ```
 
 ## Scope Notes
