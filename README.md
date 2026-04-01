@@ -184,11 +184,13 @@ If PowerShell is installed in your dev environment, syntax-check the script with
 - It borrows from WinUtil and similar tuning references, but it does not attempt strict one-to-one parity.
 - The service profile, app removal pass, and privacy suppression are intentionally broader than a minimal debloat baseline.
 
-## License
-
-No license file is currently included in this repository.
-
 ## Acknowledgements
 
 - [ChrisTitusTech/winutil](https://github.com/ChrisTitusTech/winutil)
 - [FR33THYFR33THY/WinSux-Windows-Optimization-Guide](https://github.com/FR33THYFR33THY/WinSux-Windows-Optimization-Guide)
+
+---
+
+## License
+
+[GPL-3.0](LICENSE)
