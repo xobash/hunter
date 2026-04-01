@@ -124,6 +124,11 @@ function Write-Log {
         'SUCCESS' { Write-Host $line -ForegroundColor Green }
         default   { Write-Host $line }
     }
+
+    try {
+        [Console]::Out.Flush()
+        [Console]::Error.Flush()
+    } catch { }
 }
 
 function Add-RunInfrastructureIssue {
@@ -429,6 +434,50 @@ function Initialize-InstallerJobHelpers {
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function global:Write-InstallerHelperWarning {
+    param([string]$Message)
+
+    try {
+        [Console]::Error.WriteLine("[Hunter] $Message")
+    } catch { }
+}
+
+function global:Invoke-WithNamedSemaphore {
+    param(
+        [string]$Name,
+        [scriptblock]$Action,
+        [int]$MaxConcurrency = 1,
+        [int]$WaitTimeoutSeconds = 1800
+    )
+
+    $safeMaxConcurrency = [Math]::Max($MaxConcurrency, 1)
+    $createdNew = $false
+    $semaphore = $null
+    $hasHandle = $false
+
+    try {
+        $semaphore = New-Object System.Threading.Semaphore($safeMaxConcurrency, $safeMaxConcurrency, $Name, ([ref]$createdNew))
+        $hasHandle = $semaphore.WaitOne([TimeSpan]::FromSeconds([Math]::Max($WaitTimeoutSeconds, 1)))
+        if (-not $hasHandle) {
+            throw "Timed out waiting for semaphore '$Name'."
+        }
+
+        return (& $Action)
+    } finally {
+        if ($hasHandle -and $null -ne $semaphore) {
+            try {
+                [void]$semaphore.Release()
+            } catch {
+                Write-InstallerHelperWarning "failed to release semaphore '$Name': $($_.Exception.Message)"
+            }
+        }
+
+        if ($null -ne $semaphore) {
+            $semaphore.Dispose()
+        }
+    }
+}
+
 function global:Get-PackageSlug {
     param([string]$PackageName)
 
@@ -559,35 +608,10 @@ function global:Invoke-WingetWithMutex {
         [int]$WaitTimeoutSeconds = 1800
     )
 
-    $mutex = [System.Threading.Mutex]::new($false, 'Global\HunterWingetInstall')
-    $hasHandle = $false
-
-    try {
-        try {
-            $hasHandle = $mutex.WaitOne([TimeSpan]::FromSeconds([Math]::Max($WaitTimeoutSeconds, 1)))
-        } catch [System.Threading.AbandonedMutexException] {
-            $hasHandle = $true
-        }
-
-        if (-not $hasHandle) {
-            throw 'Timed out waiting for winget installation mutex.'
-        }
-
+    return (Invoke-WithNamedSemaphore -Name 'Global\HunterWingetInstall' -MaxConcurrency 3 -WaitTimeoutSeconds $WaitTimeoutSeconds -Action {
         & winget @Arguments *> $null
         return $LASTEXITCODE
-    } finally {
-        if ($hasHandle) {
-            try {
-                [void]$mutex.ReleaseMutex()
-            } catch {
-                Write-Log "Warning: failed to release winget mutex: $_" 'WARN'
-            }
-        }
-
-        if ($null -ne $mutex) {
-            $mutex.Dispose()
-        }
-    }
+    })
 }
 
 function global:Invoke-DirectInstallerWithMutex {
@@ -596,34 +620,7 @@ function global:Invoke-DirectInstallerWithMutex {
         [int]$WaitTimeoutSeconds = 1800
     )
 
-    $mutex = [System.Threading.Mutex]::new($false, 'Global\HunterDirectInstall')
-    $hasHandle = $false
-
-    try {
-        try {
-            $hasHandle = $mutex.WaitOne([TimeSpan]::FromSeconds([Math]::Max($WaitTimeoutSeconds, 1)))
-        } catch [System.Threading.AbandonedMutexException] {
-            $hasHandle = $true
-        }
-
-        if (-not $hasHandle) {
-            throw 'Timed out waiting for direct installer mutex.'
-        }
-
-        & $Action
-    } finally {
-        if ($hasHandle) {
-            try {
-                [void]$mutex.ReleaseMutex()
-            } catch {
-                Write-Log "Warning: failed to release direct installer mutex: $_" 'WARN'
-            }
-        }
-
-        if ($null -ne $mutex) {
-            $mutex.Dispose()
-        }
-    }
+    return (Invoke-WithNamedSemaphore -Name 'Global\HunterDirectInstall' -MaxConcurrency 1 -WaitTimeoutSeconds $WaitTimeoutSeconds -Action $Action)
 }
 '@
 
@@ -7811,8 +7808,22 @@ function Invoke-ExhaustivePowerTuning {
         }
 
         # Disable console lock timeout (AC and DC)
-        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setacvalueindex', 'scheme_current', 'sub_none', 'consolelock', '0') | Out-Null
-        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setdcvalueindex', 'scheme_current', 'sub_none', 'consolelock', '0') | Out-Null
+        Invoke-PowerCfgValueBestEffort `
+            -PowerCfgPath $powercfgPath `
+            -Scheme $activeSchemeGuid `
+            -SubGroup 'SUB_NONE' `
+            -Setting 'CONSOLELOCK' `
+            -Value '0' `
+            -Mode 'AC' `
+            -Description 'console lock timeout' | Out-Null
+        Invoke-PowerCfgValueBestEffort `
+            -PowerCfgPath $powercfgPath `
+            -Scheme $activeSchemeGuid `
+            -SubGroup 'SUB_NONE' `
+            -Setting 'CONSOLELOCK' `
+            -Value '0' `
+            -Mode 'DC' `
+            -Description 'console lock timeout' | Out-Null
         Write-Log 'Console lock timeout disabled on AC and DC power.' 'INFO'
 
         $powerValueMatrix = @(
@@ -7853,41 +7864,27 @@ function Invoke-ExhaustivePowerTuning {
             @{ SubGroup = 'de830923-a562-41af-a086-e3a2c6bad2da'; Setting = 'e69653ca-cf7f-4f05-aa73-cb833fa90ad4'; Value = '0x00000000' }
         )
 
-        # ---- Fire powercfg matrix concurrently (all AC/DC pairs at once) ----
-        $pcfgProcs = New-Object 'System.Collections.Generic.List[object]'
-        $unsupportedPowerSettings = New-Object 'System.Collections.Generic.List[string]'
+        # ---- Apply the powercfg matrix best-effort ----
+        $appliedPowerSettings = 0
+        $skippedPowerSettings = 0
         foreach ($pv in $powerValueMatrix) {
-            & $powercfgPath /query $activeSchemeGuid $($pv.SubGroup) $($pv.Setting) *> $null
-            if ($LASTEXITCODE -ne 0) {
-                [void]$unsupportedPowerSettings.Add("$($pv.SubGroup)/$($pv.Setting)")
-                continue
-            }
-
-            try {
-                $p1 = Start-Process -FilePath $powercfgPath -ArgumentList "/setacvalueindex $activeSchemeGuid $($pv.SubGroup) $($pv.Setting) $($pv.Value)" -PassThru -WindowStyle Hidden -ErrorAction Stop
-                if ($null -ne $p1) {
-                    [void]$pcfgProcs.Add([pscustomobject]@{ Process = $p1; Description = "powercfg AC $($pv.SubGroup)/$($pv.Setting)" })
+            foreach ($powerMode in @('AC', 'DC')) {
+                $wasApplied = Invoke-PowerCfgValueBestEffort `
+                    -PowerCfgPath $powercfgPath `
+                    -Scheme $activeSchemeGuid `
+                    -SubGroup $pv.SubGroup `
+                    -Setting $pv.Setting `
+                    -Value $pv.Value `
+                    -Mode $powerMode `
+                    -Description "power setting $($pv.SubGroup)/$($pv.Setting)"
+                if ($wasApplied) {
+                    $appliedPowerSettings++
+                } else {
+                    $skippedPowerSettings++
                 }
-            } catch { Write-Log "Failed to launch powercfg AC for $($pv.SubGroup)/$($pv.Setting): $_" 'WARN' }
-            try {
-                $p2 = Start-Process -FilePath $powercfgPath -ArgumentList "/setdcvalueindex $activeSchemeGuid $($pv.SubGroup) $($pv.Setting) $($pv.Value)" -PassThru -WindowStyle Hidden -ErrorAction Stop
-                if ($null -ne $p2) {
-                    [void]$pcfgProcs.Add([pscustomobject]@{ Process = $p2; Description = "powercfg DC $($pv.SubGroup)/$($pv.Setting)" })
-                }
-            } catch { Write-Log "Failed to launch powercfg DC for $($pv.SubGroup)/$($pv.Setting): $_" 'WARN' }
-        }
-        if ($unsupportedPowerSettings.Count -gt 0) {
-            $sampleSize = [Math]::Min($unsupportedPowerSettings.Count, 8)
-            $sampleUnsupported = @($unsupportedPowerSettings | Select-Object -First $sampleSize)
-            $remainingCount = $unsupportedPowerSettings.Count - $sampleSize
-            $sampleSuffix = if ($remainingCount -gt 0) {
-                " +$remainingCount more"
-            } else {
-                ''
             }
-            Write-Log "Skipped $($unsupportedPowerSettings.Count) unsupported power setting pair(s): $($sampleUnsupported -join ', ')$sampleSuffix" 'INFO'
         }
-        Write-Log "Fired $($pcfgProcs.Count) concurrent powercfg operations." 'INFO'
+        Write-Log "Applied $appliedPowerSettings power scheme value update(s); skipped $skippedPowerSettings unsupported or unavailable update(s)." 'INFO'
 
         # ---- Fire device bus enumerations concurrently (USB/HID/PCI) ----
         $busEnumJobs = @()
@@ -7934,8 +7931,7 @@ function Invoke-ExhaustivePowerTuning {
         }
         Write-Log "Prepared NIC power settings for $nicCount adapter(s)." 'INFO'
 
-        # ---- Wait for powercfg matrix to complete, then reactivate scheme ----
-        Wait-ProcessBatchUntilDeadline -ProcessInfos $pcfgProcs -TimeoutSeconds 45 -BatchDescription 'Power scheme value updates'
+        # ---- Reactivate the tuned scheme after applying value updates ----
         Invoke-NativeCommandChecked -FilePath 'powercfg.exe' -ArgumentList @('/setactive', $activeSchemeGuid) | Out-Null
         Write-Log 'Power value matrix applied and scheme reactivated.' 'INFO'
 
