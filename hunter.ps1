@@ -1291,6 +1291,25 @@ function Disable-ScheduledTaskIfPresent {
     }
 }
 
+function Test-ScheduledTaskDisabledOrMissing {
+    param(
+        [string]$TaskPath,
+        [string]$TaskName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($TaskPath) -or [string]::IsNullOrWhiteSpace($TaskName)) {
+        return $true
+    }
+
+    try {
+        $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
+        return ($null -eq $task -or $task.State -eq 'Disabled')
+    } catch {
+        Write-Log "Failed to query scheduled task ${TaskPath}${TaskName}: $($_.Exception.Message)" 'WARN'
+        return $false
+    }
+}
+
 function Disable-WindowsOptionalFeatureIfPresent {
     param(
         [string]$DisplayName,
@@ -6615,6 +6634,34 @@ function Invoke-DisableTelemetry {
         $siufRulesPath = 'HKCU:\Software\Microsoft\Siuf\Rules'
         $werPath = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting'
         $splitThresholdKb = [int]((Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum / 1KB)
+        $telemetryScheduledTasks = @(
+            @{ TaskPath = '\Microsoft\Windows\Application Experience\'; TaskName = 'Microsoft Compatibility Appraiser'; DisplayName = 'Microsoft Compatibility Appraiser' },
+            @{ TaskPath = '\Microsoft\Windows\Application Experience\'; TaskName = 'ProgramDataUpdater'; DisplayName = 'ProgramDataUpdater' },
+            @{ TaskPath = '\Microsoft\Windows\Autochk\'; TaskName = 'Proxy'; DisplayName = 'Autochk Proxy' },
+            @{ TaskPath = '\Microsoft\Windows\Customer Experience Improvement Program\'; TaskName = 'Consolidator'; DisplayName = 'CEIP Consolidator' },
+            @{ TaskPath = '\Microsoft\Windows\Customer Experience Improvement Program\'; TaskName = 'KernelCeipTask'; DisplayName = 'CEIP KernelCeipTask' },
+            @{ TaskPath = '\Microsoft\Windows\Customer Experience Improvement Program\'; TaskName = 'UsbCeip'; DisplayName = 'CEIP UsbCeip' },
+            @{ TaskPath = '\Microsoft\Windows\DiskDiagnostic\'; TaskName = 'Microsoft-Windows-DiskDiagnosticDataCollector'; DisplayName = 'Disk Diagnostic Data Collector' },
+            @{ TaskPath = '\Microsoft\Windows\Feedback\Siuf\'; TaskName = 'DmClient'; DisplayName = 'Feedback DmClient' },
+            @{ TaskPath = '\Microsoft\Windows\Feedback\Siuf\'; TaskName = 'DmClientOnScenarioDownload'; DisplayName = 'Feedback DmClientOnScenarioDownload' }
+        )
+        $telemetryTasksDisabled = $true
+        foreach ($telemetryTask in $telemetryScheduledTasks) {
+            if (-not (Test-ScheduledTaskDisabledOrMissing -TaskPath $telemetryTask.TaskPath -TaskName $telemetryTask.TaskName)) {
+                $telemetryTasksDisabled = $false
+                break
+            }
+        }
+
+        $defenderCloudProtectionDisabled = $false
+        try {
+            $mpPreference = Get-MpPreference -ErrorAction Stop
+            $mapsReportingDisabled = ($mpPreference.MAPSReporting -eq 0 -or [string]$mpPreference.MAPSReporting -eq 'Disabled')
+            $sampleSubmissionDisabled = ($mpPreference.SubmitSamplesConsent -eq 2 -or [string]$mpPreference.SubmitSamplesConsent -eq 'NeverSend')
+            $defenderCloudProtectionDisabled = ($mapsReportingDisabled -and $sampleSubmissionDisabled -and [bool]$mpPreference.DisableBlockAtFirstSeen)
+        } catch {
+            $defenderCloudProtectionDisabled = $false
+        }
 
         if ((Test-RegistryValue -Path $dcPath -Name 'AllowTelemetry' -ExpectedValue 0) -and
             (Test-RegistryValue -Path $systemPolicyPath -Name 'PublishUserActivities' -ExpectedValue 0) -and
@@ -6635,7 +6682,9 @@ function Invoke-DisableTelemetry {
             (Test-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\AppHost' -Name 'EnableWebContentEvaluation' -ExpectedValue 0) -and
             (Test-ServiceStartTypeMatch -Name 'diagtrack' -ExpectedStartType 'Disabled') -and
             (Test-ServiceStartTypeMatch -Name 'dmwappushservice' -ExpectedStartType 'Disabled') -and
-            (Test-ServiceStartTypeMatch -Name 'WerSvc' -ExpectedStartType 'Disabled')) {
+            (Test-ServiceStartTypeMatch -Name 'WerSvc' -ExpectedStartType 'Disabled') -and
+            $telemetryTasksDisabled -and
+            $defenderCloudProtectionDisabled) {
             Write-Log -Message "Telemetry already disabled. Skipping." -Level 'INFO'
             return $true
         }
@@ -6670,12 +6719,29 @@ function Invoke-DisableTelemetry {
         Stop-ServiceIfPresent -Name 'dmwappushservice'
         Stop-ServiceIfPresent -Name 'WerSvc'
 
+        Write-Log -Message "Disabling telemetry scheduled tasks..." -Level 'INFO'
+        foreach ($telemetryTask in $telemetryScheduledTasks) {
+            Disable-ScheduledTaskIfPresent -TaskPath $telemetryTask.TaskPath -TaskName $telemetryTask.TaskName -DisplayName $telemetryTask.DisplayName | Out-Null
+        }
+
         Write-Log -Message "Disabling Defender telemetry..." -Level 'INFO'
         try {
             Set-MpPreference -SubmitSamplesConsent 2 -ErrorAction Stop
         }
         catch {
             Write-Log -Message "Could not set Defender telemetry preference: $_" -Level 'WARN'
+        }
+        try {
+            Set-MpPreference -MAPSReporting Disabled -ErrorAction Stop
+        }
+        catch {
+            Write-Log -Message "Could not disable Defender cloud reporting: $_" -Level 'WARN'
+        }
+        try {
+            Set-MpPreference -DisableBlockAtFirstSeen $true -ErrorAction Stop
+        }
+        catch {
+            Write-Log -Message "Could not disable Defender block-at-first-seen: $_" -Level 'WARN'
         }
 
         Write-Log -Message "Windows telemetry and related privacy/web-content policies disabled." -Level 'INFO'
@@ -7453,6 +7519,7 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
         Set-RegistryValue -Path $prefetchPath -Name 'EnablePrefetcher' -Value 0 -Type DWord
         Set-RegistryValue -Path $prefetchPath -Name 'EnableSuperfetch' -Value 0 -Type DWord
         Set-LargeSystemCacheByRamPolicy -Path $memoryManagementPath | Out-Null
+        Set-RegistryValue -Path $memoryManagementPath -Name 'DisablePagingExecutive' -Value 1 -Type DWord
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\StorageSense' -Name 'AllowStorageSenseGlobal' -Value 0 -Type DWord
         Set-DwordBatchForAllUsers -Settings @(
             @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy'; Name = '01'; Value = 0 }
@@ -7558,6 +7625,7 @@ function Invoke-ApplyUiDesktopPerformanceTweaks {
 
         Set-StringForAllUsers -SubPath 'Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Value '0'
         Set-StringForAllUsers -SubPath 'Control Panel\Desktop' -Name 'WindowArrangementActive' -Value '0'
+        Set-StringForAllUsers -SubPath 'Control Panel\Desktop' -Name 'MenuShowDelay' -Value '0'
         Set-StringForAllUsers -SubPath 'Control Panel\Desktop' -Name 'SmoothScroll' -Value '0'
 
         Request-ExplorerRestart
@@ -9133,6 +9201,45 @@ function Invoke-BraveDebloat {
 # PHASE 8 - EXTERNAL TOOLS
 # ==============================================================================
 
+function Set-NetAdapterAdvancedDisplayValueIfPresent {
+    param(
+        [Parameter(Mandatory)][string]$AdapterName,
+        [Parameter(Mandatory)][string]$DisplayName,
+        [Parameter(Mandatory)][string]$DisplayValue,
+        [string]$SettingLabel = $DisplayName
+    )
+
+    try {
+        $matchingProperties = @(
+            Get-NetAdapterAdvancedProperty -Name $AdapterName -DisplayName $DisplayName -ErrorAction SilentlyContinue
+        )
+
+        if ($matchingProperties.Count -eq 0) {
+            Write-Log "$SettingLabel advanced property is not exposed on NIC $AdapterName. Skipping." 'INFO'
+            return $false
+        }
+
+        $allAlreadyConfigured = $true
+        foreach ($property in $matchingProperties) {
+            if ([string]$property.DisplayValue -ne $DisplayValue) {
+                Set-NetAdapterAdvancedProperty -Name $AdapterName -DisplayName $property.DisplayName -DisplayValue $DisplayValue -ErrorAction Stop
+                $allAlreadyConfigured = $false
+            }
+        }
+
+        if ($allAlreadyConfigured) {
+            Write-Log "$SettingLabel already set to $DisplayValue on NIC $AdapterName." 'INFO'
+        } else {
+            Write-Log "$SettingLabel set to $DisplayValue on NIC $AdapterName." 'INFO'
+        }
+
+        return $true
+    } catch {
+        Write-Log "Failed to set ${SettingLabel} on NIC ${AdapterName}: $($_.Exception.Message)" 'WARN'
+        return $false
+    }
+}
+
 function Invoke-ApplyTcpOptimizerTutorialProfile {
     try {
         Invoke-CollectCompletedExternalAssetPrefetchJobs
@@ -9151,6 +9258,14 @@ function Invoke-ApplyTcpOptimizerTutorialProfile {
                 Write-Log "Failed to set MTU on $($adapter.Name): $_" 'WARN'
             }
         }
+        foreach ($adapter in $activeAdapters) {
+            try {
+                Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses @('1.1.1.1', '8.8.8.8') -ErrorAction Stop
+                Write-Log "DNS servers set on $($adapter.Name): 1.1.1.1, 8.8.8.8" 'INFO'
+            } catch {
+                Write-Log "Failed to set DNS servers on $($adapter.Name): $($_.Exception.Message)" 'WARN'
+            }
+        }
 
         # -- Main TCP settings --
         Invoke-NativeCommandChecked -FilePath 'netsh.exe' -ArgumentList @('int', 'tcp', 'set', 'global', 'autotuninglevel=disabled') | Out-Null
@@ -9167,6 +9282,10 @@ function Invoke-ApplyTcpOptimizerTutorialProfile {
             } catch {
                 Write-Log "Failed to enable RSC on $($adapter.Name): $_" 'WARN'
             }
+        }
+        foreach ($adapter in $activeAdapters) {
+            Set-NetAdapterAdvancedDisplayValueIfPresent -AdapterName $adapter.Name -DisplayName 'Interrupt Moderation' -DisplayValue 'Disabled' -SettingLabel 'Interrupt Moderation' | Out-Null
+            Set-NetAdapterAdvancedDisplayValueIfPresent -AdapterName $adapter.Name -DisplayName 'Flow Control' -DisplayValue 'Disabled' -SettingLabel 'Flow Control' | Out-Null
         }
         # ECN: Disabled
         Invoke-NativeCommandChecked -FilePath 'netsh.exe' -ArgumentList @('int', 'tcp', 'set', 'global', 'ecncapability=disabled') | Out-Null
@@ -9267,6 +9386,25 @@ function Invoke-ApplyTcpOptimizerTutorialProfile {
         }
         # TCP DelAck Ticks: Disabled (0)
         Set-RegistryValue -Path $tcpParams -Name 'TcpDelAckTicks' -Value 0 -Type DWord
+
+        # Disable NetBIOS over TCP/IP on IP-enabled adapters
+        foreach ($adapterConfig in @(Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter 'IPEnabled = True' -ErrorAction SilentlyContinue)) {
+            try {
+                if ($adapterConfig.TcpipNetbiosOptions -eq 2) {
+                    Write-Log "NetBIOS over TCP/IP already disabled on $($adapterConfig.Description)." 'INFO'
+                    continue
+                }
+
+                $netbiosResult = Invoke-CimMethod -InputObject $adapterConfig -MethodName 'SetTcpipNetbios' -Arguments @{ TcpipNetbiosOptions = [uint32]2 } -ErrorAction Stop
+                if ($netbiosResult.ReturnValue -in @(0, 1)) {
+                    Write-Log "NetBIOS over TCP/IP disabled on $($adapterConfig.Description)." 'INFO'
+                } else {
+                    Write-Log "Failed to disable NetBIOS over TCP/IP on $($adapterConfig.Description): WMI returned $($netbiosResult.ReturnValue)." 'WARN'
+                }
+            } catch {
+                Write-Log "Failed to disable NetBIOS over TCP/IP on $($adapterConfig.Description): $($_.Exception.Message)" 'WARN'
+            }
+        }
 
         # -- Cache / memory / ports --
         $memMgmt = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
