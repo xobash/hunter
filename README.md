@@ -22,11 +22,11 @@ That's it. No cloning, no downloading, no setup. The script runs directly from G
 |-------|------|-------------|
 | 1 | Preflight | System restore point, background app downloads start |
 | 2 | Core Setup | Local standard user, dark mode, Ultimate Performance power plan |
-| 3 | Start / UI | Kill Bing search, Start recommendations, Widgets, Task View, notifications |
+| 3 | Start / UI | Kill Bing search, Start recommendations, Widgets, Task View, notification center, Focus Assist |
 | 4 | Explorer | This PC as home, remove Home/Gallery/OneDrive tabs, disable auto folder discovery |
 | 5 | Microsoft Cloud | Remove Edge (keeps WebView2), OneDrive, Copilot; block Edge reinstall via Group Policy |
 | 6 | Remove Apps | Nuke ~20 Microsoft/bloatware apps in one broad debloat pass (Outlook, Xbox/Game Bar, Teams, Clipchamp, Solitaire, etc.), block consumer features |
-| 7 | System Tweaks | Hunter aggressive service profile (WinUtil-inspired, intentionally broader), disable telemetry plus extra privacy/web-content policies, disable location/hibernation, block Razer/Adobe traffic, exhaustive power tuning (throttling, core parking, device power management across USB/HID/PCI/NIC buses), 0.5ms timer resolution service |
+| 7 | System Tweaks | Hunter aggressive service profile (WinUtil-inspired, intentionally broader, but keeps WLAN/IP Helper/Fax/AJRouter/SNMP Trap available), disable telemetry plus extra privacy/web-content policies, disable location/hibernation, disable HAGS, enable GPU MSI mode, block Razer/Adobe traffic, exhaustive power tuning (processor floor/ceiling at 100, core parking/C-state suppression, device power management across USB/HID/PCI/NIC buses), 0.5ms timer resolution service |
 | 8 | External Tools | Install 11 apps in parallel (Brave, Steam, Parsec, PowerShell 7, FFmpeg, yt-dlp, CrystalDiskMark, Cinebench R23, FurMark, PeaZip, Winaero Tweaker), TCP Optimizer, O&O ShutUp10++ |
 | 9 | Cleanup | Retry failed tasks, disk cleanup, Explorer restart, desktop report |
 
@@ -49,7 +49,15 @@ A real-time progress overlay with animated liquid glass UI tracks everything as 
 
 ## How It Works
 
-Hunter is a single PowerShell script (~10,500 lines). It uses a checkpoint/resume engine so reboots don't lose progress. Heavyweight operations (service config, power tuning, app installs) run in parallel where possible. The progress UI runs in a separate STA WPF runspace so the main task engine does not block on rendering.
+Hunter is a single PowerShell script (~10,800 lines). It uses a checkpoint/resume engine so reboots don't lose progress. Heavyweight operations (service config, power tuning, app installs) run in parallel where possible. The progress UI runs in a separate STA WPF runspace so the main task engine does not block on rendering.
+
+## Additional Tuning
+
+- Storage behavior: disables 8.3 short-name creation, disables NTFS last-access updates, and removes the NTFS USN journal when present.
+- Memory policy: `LargeSystemCache` is RAM-aware. Systems under 16 GiB get `1`; systems at or above 16 GiB get `0`.
+- Graphics policy: disables Hardware-Accelerated GPU Scheduling and enables GPU MSI mode for detected PCI display adapters.
+- CPU / power policy: clears explicit TSC sync overrides, drives processor min/max throttle to `100`, and suppresses core parking through `CPMINCORES`.
+- Notification policy: disables toast notifications, notification center, and Focus Assist for the current and default user profiles.
 
 ## Scope Notes
 
