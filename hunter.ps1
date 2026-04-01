@@ -3713,6 +3713,87 @@ function Initialize-HyperVDetection {
 }
 
 # ==============================================================================
+# HARDWARE / SYSTEM POLICY HELPERS
+# ==============================================================================
+
+function Get-InstalledSystemMemoryBytes {
+    try {
+        $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+        if ($null -ne $computerSystem -and $null -ne $computerSystem.TotalPhysicalMemory) {
+            return [uint64]$computerSystem.TotalPhysicalMemory
+        }
+    } catch {
+        Write-Log "Failed to query installed system memory: $($_.Exception.Message)" 'WARN'
+    }
+
+    return [uint64]0
+}
+
+function Get-DesiredLargeSystemCacheValue {
+    $installedMemoryBytes = Get-InstalledSystemMemoryBytes
+    if ($installedMemoryBytes -le 0) {
+        Write-Log 'Installed system memory could not be determined; defaulting LargeSystemCache to 1.' 'WARN'
+        return 1
+    }
+
+    $installedMemoryGiB = [Math]::Round(($installedMemoryBytes / 1GB), 2)
+    $desiredValue = if ($installedMemoryBytes -lt 16GB) { 1 } else { 0 }
+    Write-Log "Installed RAM detected: ${installedMemoryGiB} GiB. LargeSystemCache target = $desiredValue" 'INFO'
+    return $desiredValue
+}
+
+function Set-LargeSystemCacheByRamPolicy {
+    param(
+        [string]$Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
+    )
+
+    $desiredValue = Get-DesiredLargeSystemCacheValue
+    Set-RegistryValue -Path $Path -Name 'LargeSystemCache' -Value $desiredValue -Type DWord | Out-Null
+    return $desiredValue
+}
+
+function Invoke-EnableGpuMsiMode {
+    $displayClassGuid = '{4d36e968-e325-11ce-bfc1-08002be10318}'
+    $pciEnumPath = 'HKLM:\SYSTEM\CurrentControlSet\Enum\PCI'
+
+    if (-not (Test-Path $pciEnumPath)) {
+        Write-Log 'PCI device enumeration path is unavailable; skipping GPU MSI-mode enablement.' 'INFO'
+        return $true
+    }
+
+    $gpuDeviceCount = 0
+    $msiEnabledCount = 0
+
+    foreach ($pciDeviceKey in @(Get-ChildItem -Path $pciEnumPath -ErrorAction SilentlyContinue)) {
+        foreach ($pciInstanceKey in @(Get-ChildItem -Path $pciDeviceKey.PSPath -ErrorAction SilentlyContinue)) {
+            try {
+                $instanceProperties = Get-ItemProperty -Path $pciInstanceKey.PSPath -ErrorAction Stop
+                if ([string]$instanceProperties.ClassGUID -ne $displayClassGuid) {
+                    continue
+                }
+
+                $gpuDeviceCount++
+                $msiPath = "$($pciInstanceKey.PSPath)\Interrupt Management\MessageSignaledInterruptProperties"
+                Set-RegistryValue -Path $msiPath -Name 'MSISupported' -Value 1 -Type DWord | Out-Null
+                if (Test-RegistryValue -Path $msiPath -Name 'MSISupported' -ExpectedValue 1) {
+                    $msiEnabledCount++
+                }
+            } catch {
+                Write-Log "Failed to enable MSI mode for PCI display device $($pciInstanceKey.PSChildName): $($_.Exception.Message)" 'WARN'
+            }
+        }
+    }
+
+    if ($gpuDeviceCount -eq 0) {
+        Write-Log 'No PCI display devices were detected for GPU MSI-mode enablement.' 'INFO'
+        return $true
+    }
+
+    Write-Log "GPU MSI mode enabled for $msiEnabledCount/$gpuDeviceCount PCI display device(s)." 'INFO'
+    return ($msiEnabledCount -gt 0)
+}
+
+# ==============================================================================
 # CHECKPOINT SYSTEM
 # ==============================================================================
 
@@ -5599,11 +5680,15 @@ function Invoke-DisableNotificationsTrayCalendar {
     }
 
     try {
-        $notificationsPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications'
-        $explorerPath = 'HKCU:\Software\Policies\Microsoft\Windows\Explorer'
+        $notificationsPath = 'Software\Microsoft\Windows\CurrentVersion\PushNotifications'
+        $explorerPolicyPath = 'Software\Policies\Microsoft\Windows\Explorer'
+        $quietHoursPolicyPath = 'Software\Policies\Microsoft\Windows\CurrentVersion\QuietHours'
 
-        Set-RegistryValue -Path $notificationsPath -Name 'ToastEnabled' -Value 0 -Type 'DWord'
-        Set-RegistryValue -Path $explorerPath -Name 'DisableNotificationCenter' -Value 1 -Type 'DWord'
+        Set-DwordBatchForAllUsers -Settings @(
+            @{ SubPath = $notificationsPath; Name = 'ToastEnabled'; Value = 0 },
+            @{ SubPath = $explorerPolicyPath; Name = 'DisableNotificationCenter'; Value = 1 },
+            @{ SubPath = $quietHoursPolicyPath; Name = 'Enable'; Value = 0 }
+        )
 
         return $true
 
@@ -6907,7 +6992,6 @@ function Invoke-SetServiceProfileManual {
             'UevAgentService',
             'WbioSrvc',                 # Windows Biometric Service — not needed on gaming PCs
             'WerSvc',
-            'WlanSvc',
             'WpcMonSvc',                # Parental Controls — not needed
             'WSearch',
             'wisvc',                     # Windows Insider Service — not needed
@@ -7003,8 +7087,6 @@ function Invoke-SetServiceProfileManual {
             'SharedAccess',
             'smphost',
             'SmsRouter',
-            'SNMPTrap',
-            'SNMPTRAP',
             'SSDPSRV',
             'SstpSvc',
             'StiSvc',
@@ -7059,6 +7141,7 @@ function Invoke-SetServiceProfileManual {
         )
 
         $automaticServices = @(
+            'AJRouter',
             'AudioEndpointBuilder',
             'Audiosrv',
             'AudioSrv',
@@ -7068,6 +7151,7 @@ function Invoke-SetServiceProfileManual {
             'DPS',
             'EventLog',
             'EventSystem',
+            'Fax',
             'FontCache',
             'iphlpsvc',
             'KeyIso',
@@ -7079,10 +7163,13 @@ function Invoke-SetServiceProfileManual {
             'SamSs',
             'SENS',
             'ShellHWDetection',
+            'SNMPTrap',
+            'SNMPTRAP',
             'Themes',
             'TrkWks',
             'UserManager',
             'Wcmsvc',
+            'WlanSvc',
             'Winmgmt'
         )
 
@@ -7285,11 +7372,12 @@ function Invoke-ApplyGraphicsSchedulingTweaks {
         $graphicsDriversPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers'
         $dwmPath = 'HKLM:\SOFTWARE\Microsoft\Windows\Dwm'
 
-        Set-RegistryValue -Path $graphicsDriversPath -Name 'HwSchMode' -Value 2 -Type DWord
+        Set-RegistryValue -Path $graphicsDriversPath -Name 'HwSchMode' -Value 1 -Type DWord
         Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrLevel' -Value 0 -Type DWord
         Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrDelay' -Value 10 -Type DWord
         Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrDdiDelay' -Value 10 -Type DWord
         Set-RegistryValue -Path $dwmPath -Name 'OverlayTestMode' -Value 5 -Type DWord
+        Invoke-EnableGpuMsiMode | Out-Null
 
         Set-DirectXGlobalPreferenceValue -Key 'VRROptimizeEnable' -Value '1'
         Set-DirectXGlobalPreferenceValue -Key 'SwapEffectUpgradeEnable' -Value '1'
@@ -7318,6 +7406,8 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
         Write-Log 'Applying memory and disk behavior tweaks...' 'INFO'
         $currentMemoryDiskStep = 'updating memory and Storage Sense registry values'
         $mmAgentState = $null
+        $fsutilPath = Get-NativeSystemExecutablePath -FileName 'fsutil.exe'
+        $systemVolume = $env:SystemDrive.TrimEnd('\')
         try {
             $mmAgentState = Get-MMAgent -ErrorAction Stop
         } catch {
@@ -7329,11 +7419,19 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
 
         Set-RegistryValue -Path $prefetchPath -Name 'EnablePrefetcher' -Value 0 -Type DWord
         Set-RegistryValue -Path $prefetchPath -Name 'EnableSuperfetch' -Value 0 -Type DWord
-        Set-RegistryValue -Path $memoryManagementPath -Name 'LargeSystemCache' -Value 1 -Type DWord
+        Set-LargeSystemCacheByRamPolicy -Path $memoryManagementPath | Out-Null
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\StorageSense' -Name 'AllowStorageSenseGlobal' -Value 0 -Type DWord
         Set-DwordBatchForAllUsers -Settings @(
             @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy'; Name = '01'; Value = 0 }
         )
+
+        $currentMemoryDiskStep = 'disabling 8.3 short-name creation'
+        try {
+            Invoke-NativeCommandChecked -FilePath $fsutilPath -ArgumentList @('behavior', 'set', 'disable8dot3', '1') | Out-Null
+            Write-Log '8.3 filename creation disabled.' 'INFO'
+        } catch {
+            Write-Log "Failed to disable 8.3 filename creation: $($_.Exception.Message)" 'WARN'
+        }
 
         $currentMemoryDiskStep = 'disabling memory compression'
         if ($null -ne $mmAgentState -and $null -ne $mmAgentState.PSObject.Properties['MemoryCompression'] -and -not [bool]$mmAgentState.MemoryCompression) {
@@ -7371,10 +7469,23 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
 
         $currentMemoryDiskStep = 'disabling NTFS last access updates'
         try {
-            Invoke-NativeCommandChecked -FilePath 'fsutil.exe' -ArgumentList @('behavior', 'set', 'disablelastaccess', '1') | Out-Null
+            Invoke-NativeCommandChecked -FilePath $fsutilPath -ArgumentList @('behavior', 'set', 'disablelastaccess', '1') | Out-Null
             Write-Log 'NTFS last access updates disabled.' 'INFO'
         } catch {
             Write-Log "Failed to disable NTFS last access updates: $($_.Exception.Message)" 'WARN'
+        }
+
+        $currentMemoryDiskStep = 'deleting the NTFS USN journal'
+        try {
+            & $fsutilPath usn queryjournal $systemVolume *> $null
+            if ($LASTEXITCODE -eq 0) {
+                Invoke-NativeCommandChecked -FilePath $fsutilPath -ArgumentList @('usn', 'deletejournal', '/d', $systemVolume) | Out-Null
+                Write-Log "NTFS USN journal deleted on $systemVolume." 'INFO'
+            } else {
+                Write-Log "NTFS USN journal is not active on $systemVolume. Skipping delete." 'INFO'
+            }
+        } catch {
+            Write-Log "Failed to delete the NTFS USN journal on ${systemVolume}: $($_.Exception.Message)" 'WARN'
         }
 
         Write-Log 'Memory and disk behavior tweaks applied.' 'SUCCESS'
@@ -7443,6 +7554,7 @@ function Invoke-ApplyInputAndMaintenanceTweaks {
 
         Invoke-BCDEditBestEffort -ArgumentList @('/deletevalue', 'useplatformclock') -Description 'HPET platform clock override removed.' | Out-Null
         Invoke-BCDEditBestEffort -ArgumentList @('/set', 'disabledynamictick', 'yes') -Description 'Dynamic ticks disabled.' | Out-Null
+        Invoke-BCDEditBestEffort -ArgumentList @('/deletevalue', 'tscsyncpolicy') -Description 'TSC sync policy override removed.' | Out-Null
 
         Write-Log 'Input latency and maintenance tweaks applied.' 'SUCCESS'
         return $true
@@ -7554,13 +7666,24 @@ function Invoke-ExhaustivePowerTuning {
             Write-Log 'Fast boot already disabled.' 'INFO'
         }
 
+        $powercfgPath = Get-NativeSystemExecutablePath -FileName 'powercfg.exe'
+
         # Unpark CPU cores - set max parking percentage to 100 (= never park)
         $coreUnparkPath = 'HKLM:\SYSTEM\ControlSet001\Control\Power\PowerSettings\54533251-82be-4824-96c1-47b60b740d00\0cc5b647-c1df-4637-891a-dec35c318583'
+        if (-not (Test-RegistryValue -Path $coreUnparkPath -Name 'ValueMin' -ExpectedValue 100)) {
+            Set-RegistryValue -Path $coreUnparkPath -Name 'ValueMin' -Value 100 -Type DWord
+        }
         if (-not (Test-RegistryValue -Path $coreUnparkPath -Name 'ValueMax' -ExpectedValue 100)) {
             Set-RegistryValue -Path $coreUnparkPath -Name 'ValueMax' -Value 100 -Type DWord
         } else {
             Write-Log 'CPU cores already unparked.' 'INFO'
         }
+        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setacvalueindex', 'scheme_current', 'SUB_PROCESSOR', 'CPMINCORES', '100') | Out-Null
+        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setdcvalueindex', 'scheme_current', 'SUB_PROCESSOR', 'CPMINCORES', '100') | Out-Null
+        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setacvalueindex', 'scheme_current', 'SUB_PROCESSOR', 'PROCTHROTTLEMIN', '100') | Out-Null
+        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setdcvalueindex', 'scheme_current', 'SUB_PROCESSOR', 'PROCTHROTTLEMIN', '100') | Out-Null
+        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setacvalueindex', 'scheme_current', 'SUB_PROCESSOR', 'PROCTHROTTLEMAX', '100') | Out-Null
+        Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setdcvalueindex', 'scheme_current', 'SUB_PROCESSOR', 'PROCTHROTTLEMAX', '100') | Out-Null
 
         # Enable global timer resolution requests
         Ensure-GlobalTimerResolutionRequestsEnabled -LogIfAlreadyEnabled | Out-Null
@@ -7574,8 +7697,6 @@ function Invoke-ExhaustivePowerTuning {
         if (-not (Test-RegistryValue -Path $usb3LinkPowerMgmtPath -Name 'Attributes' -ExpectedValue 2)) {
             Set-RegistryValue -Path $usb3LinkPowerMgmtPath -Name 'Attributes' -Value 2 -Type DWord
         }
-
-        $powercfgPath = Get-NativeSystemExecutablePath -FileName 'powercfg.exe'
 
         # Disable console lock timeout (AC and DC)
         Invoke-NativeCommandChecked -FilePath $powercfgPath -ArgumentList @('/setacvalueindex', 'scheme_current', 'sub_none', 'consolelock', '0') | Out-Null
@@ -9105,8 +9226,8 @@ function Invoke-ApplyTcpOptimizerTutorialProfile {
 
         # -- Cache / memory / ports --
         $memMgmt = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
-        # Large System Cache: Enabled (1)
-        Set-RegistryValue -Path $memMgmt -Name 'LargeSystemCache' -Value 1 -Type DWord
+        # Large System Cache: RAM-aware policy
+        Set-LargeSystemCacheByRamPolicy -Path $memMgmt | Out-Null
         # Size: Default (1)
         Set-RegistryValue -Path $memMgmt -Name 'Size' -Value 1 -Type DWord
 
