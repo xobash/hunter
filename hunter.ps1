@@ -11,13 +11,64 @@ $ErrorActionPreference = 'Stop'
 # SCRIPT HEADER + CONFIG
 # ==============================================================================
 
-$hunterPrivateRoot = Join-Path $PSScriptRoot 'src\Hunter\Private'
-. (Join-Path $hunterPrivateRoot 'Bootstrap\Config.ps1')
-. (Join-Path $hunterPrivateRoot 'Common\Common.ps1')
-. (Join-Path $hunterPrivateRoot 'Common\PathPolicy.ps1')
-. (Join-Path $hunterPrivateRoot 'Execution\Engine.ps1')
-. (Join-Path $hunterPrivateRoot 'Infrastructure\NativeSystem.ps1')
-Remove-Variable -Name hunterPrivateRoot -ErrorAction SilentlyContinue
+$script:HunterSourceRoot = $null
+$script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/main'
+$hunterPrivateRelativePaths = @(
+    'src\Hunter\Private\Bootstrap\Config.ps1',
+    'src\Hunter\Private\Common\Common.ps1',
+    'src\Hunter\Private\Common\PathPolicy.ps1',
+    'src\Hunter\Private\Execution\Engine.ps1',
+    'src\Hunter\Private\Infrastructure\NativeSystem.ps1'
+)
+
+$canUseLocalHunterPrivateLayers = $false
+if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    $missingHunterPrivateLayers = @(
+        $hunterPrivateRelativePaths | Where-Object {
+            -not (Test-Path (Join-Path $PSScriptRoot $_))
+        }
+    )
+
+    if ($missingHunterPrivateLayers.Count -eq 0) {
+        $script:HunterSourceRoot = $PSScriptRoot
+        $canUseLocalHunterPrivateLayers = $true
+    }
+}
+
+if (-not $canUseLocalHunterPrivateLayers) {
+    $script:HunterSourceRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'HunterBootstrap'
+
+    foreach ($hunterPrivateRelativePath in $hunterPrivateRelativePaths) {
+        $hunterPrivateDestinationPath = Join-Path $script:HunterSourceRoot $hunterPrivateRelativePath
+        if (-not (Test-Path $hunterPrivateDestinationPath)) {
+            $hunterPrivateUri = '{0}/{1}' -f $script:HunterRemoteRoot.TrimEnd('/'), ($hunterPrivateRelativePath -replace '\\', '/')
+            $hunterPrivateContent = (Invoke-WebRequest -Uri $hunterPrivateUri -UseBasicParsing -ErrorAction Stop).Content
+            if ([string]::IsNullOrWhiteSpace([string]$hunterPrivateContent)) {
+                throw "Downloaded bootstrap layer was empty: $hunterPrivateUri"
+            }
+
+            $hunterPrivateDestinationRoot = Split-Path -Parent $hunterPrivateDestinationPath
+            if (-not (Test-Path $hunterPrivateDestinationRoot)) {
+                New-Item -ItemType Directory -Path $hunterPrivateDestinationRoot -Force | Out-Null
+            }
+
+            Set-Content -Path $hunterPrivateDestinationPath -Value ([string]$hunterPrivateContent) -Encoding UTF8 -Force
+        }
+    }
+}
+
+foreach ($hunterPrivateRelativePath in $hunterPrivateRelativePaths) {
+    . (Join-Path $script:HunterSourceRoot $hunterPrivateRelativePath)
+}
+
+Remove-Variable -Name canUseLocalHunterPrivateLayers -ErrorAction SilentlyContinue
+Remove-Variable -Name hunterPrivateContent -ErrorAction SilentlyContinue
+Remove-Variable -Name hunterPrivateDestinationPath -ErrorAction SilentlyContinue
+Remove-Variable -Name hunterPrivateDestinationRoot -ErrorAction SilentlyContinue
+Remove-Variable -Name hunterPrivateRelativePath -ErrorAction SilentlyContinue
+Remove-Variable -Name hunterPrivateRelativePaths -ErrorAction SilentlyContinue
+Remove-Variable -Name hunterPrivateUri -ErrorAction SilentlyContinue
+Remove-Variable -Name missingHunterPrivateLayers -ErrorAction SilentlyContinue
 
 try {
     if ($null -ne $MyInvocation.MyCommand.ScriptBlock -and $null -ne $MyInvocation.MyCommand.ScriptBlock.Ast) {
@@ -9854,8 +9905,15 @@ function Register-ResumeTask {
                     'src\Hunter\Private\Execution\Engine.ps1',
                     'src\Hunter\Private\Infrastructure\NativeSystem.ps1'
                 )
+                $resumeSupportRoot = if (-not [string]::IsNullOrWhiteSpace($script:HunterSourceRoot)) {
+                    $script:HunterSourceRoot
+                } elseif (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+                    $PSScriptRoot
+                } else {
+                    throw "Could not determine Hunter support root for resume task registration."
+                }
                 foreach ($resumeSupportRelativePath in $resumeSupportPaths) {
-                    $resumeSupportSourcePath = Join-Path $PSScriptRoot $resumeSupportRelativePath
+                    $resumeSupportSourcePath = Join-Path $resumeSupportRoot $resumeSupportRelativePath
                     $resumeSupportDestinationPath = Join-Path (Split-Path -Parent $script:ResumeScriptPath) $resumeSupportRelativePath
                     Ensure-Directory (Split-Path -Parent $resumeSupportDestinationPath)
                     Copy-Item -Path $resumeSupportSourcePath -Destination $resumeSupportDestinationPath -Force -ErrorAction Stop

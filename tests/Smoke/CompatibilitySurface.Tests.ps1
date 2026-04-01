@@ -83,4 +83,11 @@ Describe 'Wrapper compatibility surface' {
     It 'keeps the wrapper invoking Invoke-Main with parsed arguments' {
         $sourceText | Should -Match 'Invoke-Main -Mode \$scriptMode -Strict:\$scriptStrict -AutomationSafe:\$scriptAutomationSafe'
     }
+
+    It 'keeps remote bootstrap support for irm pipe iex execution' {
+        $sourceText | Should -Match "\$script:HunterRemoteRoot = 'https://raw\.githubusercontent\.com/xobash/hunter/main'"
+        $sourceText | Should -Match "Join-Path \(\[System\.IO\.Path\]::GetTempPath\(\)\) 'HunterBootstrap'"
+        $sourceText | Should -Match 'Invoke-WebRequest -Uri \$hunterPrivateUri -UseBasicParsing -ErrorAction Stop'
+        $sourceText | Should -Match '\$resumeSupportSourcePath = Join-Path \$resumeSupportRoot \$resumeSupportRelativePath'
+    }
 }

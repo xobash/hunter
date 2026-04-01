@@ -28,6 +28,8 @@ Open PowerShell as Administrator and run:
 irm https://raw.githubusercontent.com/xobash/hunter/main/hunter.ps1 | iex
 ```
 
+The one-liner remains supported after the ongoing module split. `hunter.ps1` bootstraps its extracted private layers automatically when it is executed directly from GitHub.
+
 Local checkout:
 
 ```powershell
