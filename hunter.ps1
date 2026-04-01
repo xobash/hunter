@@ -812,6 +812,57 @@ function Set-StringForAllUsers {
     Set-RegistryValueForAllUsers -SubPath $SubPath -Name $Name -Value $Value -Type String
 }
 
+function Set-RegistryDefaultValueForAllUsers {
+    param(
+        [string]$SubPath,
+        [string]$Value
+    )
+
+    $regPath = Get-NativeSystemExecutablePath -FileName 'reg.exe'
+    $allSucceeded = $true
+
+    try {
+        Invoke-NativeCommandChecked -FilePath $regPath -ArgumentList @('add', "HKCU\$SubPath", '/ve', '/d', $Value, '/f') | Out-Null
+        Write-Log "Default value set for current user: $SubPath = $Value"
+    } catch {
+        Write-Log "Failed to set default value for current user ${SubPath}: $($_.Exception.Message)" 'ERROR'
+        $allSucceeded = $false
+    }
+
+    $defaultHiveLoaded = $false
+    try {
+        $profileListDefault = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -Name Default -ErrorAction SilentlyContinue).Default
+        if ($profileListDefault) {
+            $defaultHive = Join-Path $profileListDefault 'NTUSER.DAT'
+        }
+        if ([string]::IsNullOrEmpty($defaultHive) -or -not (Test-Path $defaultHive)) {
+            $defaultHive = Join-Path $env:SystemDrive 'Users\Default\NTUSER.DAT'
+        }
+        if (Test-Path $defaultHive) {
+            $defaultHiveLoaded = Invoke-RegHiveCommandWithRetry -Action Load -HiveName 'HKU\HunterDefault' -HivePath $defaultHive
+            if (-not $defaultHiveLoaded) {
+                Write-Log "Failed to load Default user hive for default value update on $SubPath" 'WARN'
+                return $false
+            }
+
+            Invoke-NativeCommandChecked -FilePath $regPath -ArgumentList @('add', "HKU\HunterDefault\$SubPath", '/ve', '/d', $Value, '/f') | Out-Null
+            Write-Log "Default value set for Default user: $SubPath = $Value"
+        }
+    } catch {
+        Write-Log "Failed to set default value for Default user ${SubPath}: $($_.Exception.Message)" 'ERROR'
+        $allSucceeded = $false
+    } finally {
+        if ($defaultHiveLoaded) {
+            [GC]::Collect()
+            if (-not (Invoke-RegHiveCommandWithRetry -Action Unload -HiveName 'HKU\HunterDefault')) {
+                Write-Log "Failed to unload Default user hive after updating default value for $SubPath" 'WARN'
+            }
+        }
+    }
+
+    return $allSucceeded
+}
+
 function Remove-RegistryValueIfPresent {
     param(
         [string]$Path,
@@ -3799,6 +3850,149 @@ function Set-LargeSystemCacheByRamPolicy {
     $desiredValue = Get-DesiredLargeSystemCacheValue
     Set-RegistryValue -Path $Path -Name 'LargeSystemCache' -Value $desiredValue -Type DWord | Out-Null
     return $desiredValue
+}
+
+function Get-FixedPageFileSizeMegabytes {
+    $installedMemoryBytes = Get-InstalledSystemMemoryBytes
+    if ($installedMemoryBytes -le 0) {
+        Write-Log 'Installed system memory could not be determined; pagefile sizing will be skipped.' 'WARN'
+        return 0
+    }
+
+    return [int][Math]::Ceiling(($installedMemoryBytes / 1MB) * 1.5)
+}
+
+function Set-FixedPageFileByRamPolicy {
+    try {
+        $targetPageFileSizeMb = Get-FixedPageFileSizeMegabytes
+        if ($targetPageFileSizeMb -le 0) {
+            return $false
+        }
+
+        $pageFilePath = '{0}\pagefile.sys' -f $env:SystemDrive.TrimEnd('\')
+        $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+        if ($null -ne $computerSystem -and [bool]$computerSystem.AutomaticManagedPagefile) {
+            Set-CimInstance -InputObject $computerSystem -Property @{ AutomaticManagedPagefile = $false } -ErrorAction Stop | Out-Null
+            Write-Log 'Automatic pagefile management disabled.' 'INFO'
+        } else {
+            Write-Log 'Automatic pagefile management already disabled.' 'INFO'
+        }
+
+        $existingPageFileSettings = @(Get-CimInstance -ClassName Win32_PageFileSetting -ErrorAction SilentlyContinue)
+        $targetSetting = $null
+        foreach ($pageFileSetting in $existingPageFileSettings) {
+            if ($null -eq $pageFileSetting) {
+                continue
+            }
+
+            if ([string]$pageFileSetting.Name -ieq $pageFilePath) {
+                $targetSetting = $pageFileSetting
+                continue
+            }
+
+            try {
+                Remove-CimInstance -InputObject $pageFileSetting -ErrorAction Stop
+                Write-Log "Removed non-system pagefile setting: $($pageFileSetting.Name)" 'INFO'
+            } catch {
+                Write-Log "Failed to remove pagefile setting $($pageFileSetting.Name): $($_.Exception.Message)" 'WARN'
+            }
+        }
+
+        if ($null -eq $targetSetting) {
+            New-CimInstance -ClassName Win32_PageFileSetting -Property @{
+                Name        = $pageFilePath
+                InitialSize = $targetPageFileSizeMb
+                MaximumSize = $targetPageFileSizeMb
+            } -ErrorAction Stop | Out-Null
+            Write-Log "Fixed pagefile created at $pageFilePath (${targetPageFileSizeMb} MB)." 'INFO'
+        } elseif ([int]$targetSetting.InitialSize -eq $targetPageFileSizeMb -and [int]$targetSetting.MaximumSize -eq $targetPageFileSizeMb) {
+            Write-Log "Fixed pagefile already configured at $pageFilePath (${targetPageFileSizeMb} MB)." 'INFO'
+        } else {
+            Set-CimInstance -InputObject $targetSetting -Property @{
+                InitialSize = $targetPageFileSizeMb
+                MaximumSize = $targetPageFileSizeMb
+            } -ErrorAction Stop | Out-Null
+            Write-Log "Fixed pagefile updated at $pageFilePath (${targetPageFileSizeMb} MB)." 'INFO'
+        }
+
+        return $true
+    } catch {
+        Write-Log "Failed to configure fixed pagefile sizing: $($_.Exception.Message)" 'WARN'
+        return $false
+    }
+}
+
+function Invoke-DisableDiskWriteCacheBufferFlushing {
+    try {
+        $diskDeviceEntries = @(Get-CimInstance -ClassName Win32_DiskDrive -ErrorAction SilentlyContinue | Where-Object {
+            $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_.PNPDeviceID)
+        })
+
+        if ($diskDeviceEntries.Count -eq 0) {
+            Write-Log 'No disk device entries were found for write-cache buffer flushing policy.' 'INFO'
+            return $true
+        }
+
+        $updatedDiskPolicies = 0
+        foreach ($diskDevice in $diskDeviceEntries) {
+            $deviceParametersPath = 'HKLM:\SYSTEM\CurrentControlSet\Enum\{0}\Device Parameters\Disk' -f $diskDevice.PNPDeviceID
+            $cacheProtectedUpdated = Set-RegistryValue -Path $deviceParametersPath -Name 'CacheIsPowerProtected' -Value 1 -Type DWord
+            $writeCacheUpdated = Set-RegistryValue -Path $deviceParametersPath -Name 'UserWriteCacheSetting' -Value 1 -Type DWord
+            if ($cacheProtectedUpdated -or $writeCacheUpdated) {
+                $updatedDiskPolicies++
+            }
+        }
+
+        Write-Log "Disk write-cache buffer flushing policy disabled on $updatedDiskPolicies disk device policy key(s)." 'INFO'
+        return $true
+    } catch {
+        Write-Log "Failed to disable disk write-cache buffer flushing: $($_.Exception.Message)" 'WARN'
+        return $false
+    }
+}
+
+function Invoke-DisableAudioEnhancements {
+    try {
+        $endpointPropertyName = '{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5'
+        $endpointRoot = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio'
+        $updatedEndpointCount = 0
+
+        foreach ($endpointType in @('Render', 'Capture')) {
+            $typeRootPath = Join-Path $endpointRoot $endpointType
+            if (-not (Test-Path $typeRootPath)) {
+                continue
+            }
+
+            foreach ($endpointKey in @(Get-ChildItem -Path $typeRootPath -ErrorAction SilentlyContinue)) {
+                $fxPropertiesPath = Join-Path $endpointKey.PSPath 'FxProperties'
+                $endpointUpdated = Set-RegistryValue -Path $fxPropertiesPath -Name $endpointPropertyName -Value 1 -Type DWord
+                if ($endpointUpdated) {
+                    $updatedEndpointCount++
+                }
+            }
+        }
+
+        Write-Log "Audio enhancements disabled on $updatedEndpointCount endpoint(s)." 'INFO'
+        return $true
+    } catch {
+        Write-Log "Failed to disable audio enhancements: $($_.Exception.Message)" 'WARN'
+        return $false
+    }
+}
+
+function Set-NoSoundsSchemeForAllUsers {
+    try {
+        if (Set-RegistryDefaultValueForAllUsers -SubPath 'AppEvents\Schemes' -Value '.None') {
+            Write-Log 'Sound scheme set to No Sounds for current and Default users.' 'INFO'
+            return $true
+        }
+
+        Write-Log 'Sound scheme update completed with partial failures.' 'WARN'
+        return $false
+    } catch {
+        Write-Log "Failed to set sound scheme to No Sounds: $($_.Exception.Message)" 'WARN'
+        return $false
+    }
 }
 
 function Invoke-EnableGpuMsiMode {
@@ -7436,7 +7630,7 @@ function Invoke-SetServiceProfileManual {
 
 function Invoke-DisableVirtualizationSecurityOverhead {
     try {
-        Write-Log 'Disabling virtualization security overhead...' 'INFO'
+        Write-Log 'Disabling virtualization security overhead and legacy optional features...' 'INFO'
 
         $deviceGuardPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
         $hvciPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
@@ -7452,8 +7646,12 @@ function Invoke-DisableVirtualizationSecurityOverhead {
         Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Hyper-V' -CandidateNames @('Microsoft-Hyper-V-All', 'Microsoft-Hyper-V') -SkipOnHyperVGuest | Out-Null
         Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Windows Sandbox' -CandidateNames @('Containers-DisposableClientVM') -SkipOnHyperVGuest | Out-Null
         Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Application Guard' -CandidateNames @('Windows-Defender-ApplicationGuard') | Out-Null
+        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Windows Subsystem for Linux' -CandidateNames @('Microsoft-Windows-Subsystem-Linux') | Out-Null
+        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'SMB 1.0/CIFS File Sharing Support' -CandidateNames @('SMB1Protocol') | Out-Null
+        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'SMB 1.0/CIFS Client' -CandidateNames @('SMB1Protocol-Client') | Out-Null
+        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'SMB 1.0/CIFS Server' -CandidateNames @('SMB1Protocol-Server') | Out-Null
 
-        Write-Log 'Virtualization security overhead disabled.' 'SUCCESS'
+        Write-Log 'Virtualization security overhead and legacy optional features disabled.' 'SUCCESS'
         return $true
     } catch {
         Write-Log "Error disabling virtualization security overhead: $_" 'ERROR'
@@ -7517,6 +7715,7 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
         Set-RegistryValue -Path $prefetchPath -Name 'EnableSuperfetch' -Value 0 -Type DWord
         Set-LargeSystemCacheByRamPolicy -Path $memoryManagementPath | Out-Null
         Set-RegistryValue -Path $memoryManagementPath -Name 'DisablePagingExecutive' -Value 1 -Type DWord
+        Set-FixedPageFileByRamPolicy | Out-Null
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\StorageSense' -Name 'AllowStorageSenseGlobal' -Value 0 -Type DWord
         Set-DwordBatchForAllUsers -Settings @(
             @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy'; Name = '01'; Value = 0 }
@@ -7585,6 +7784,9 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
             Write-Log "Failed to delete the NTFS USN journal on ${systemVolume}: $($_.Exception.Message)" 'WARN'
         }
 
+        $currentMemoryDiskStep = 'disabling disk write-cache buffer flushing'
+        Invoke-DisableDiskWriteCacheBufferFlushing | Out-Null
+
         Write-Log 'Memory and disk behavior tweaks applied.' 'SUCCESS'
         return $true
     } catch {
@@ -7624,6 +7826,8 @@ function Invoke-ApplyUiDesktopPerformanceTweaks {
         Set-StringForAllUsers -SubPath 'Control Panel\Desktop' -Name 'WindowArrangementActive' -Value '0'
         Set-StringForAllUsers -SubPath 'Control Panel\Desktop' -Name 'MenuShowDelay' -Value '0'
         Set-StringForAllUsers -SubPath 'Control Panel\Desktop' -Name 'SmoothScroll' -Value '0'
+        Invoke-DisableAudioEnhancements | Out-Null
+        Set-NoSoundsSchemeForAllUsers | Out-Null
 
         Request-ExplorerRestart
         Write-Log 'Desktop compositor and UI performance tweaks applied.' 'SUCCESS'
@@ -7650,6 +7854,7 @@ function Invoke-ApplyInputAndMaintenanceTweaks {
         Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Maintenance Configurator' -DisplayName 'Maintenance Configurator' | Out-Null
         Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\Defrag\' -TaskName 'ScheduledDefrag' -DisplayName 'Scheduled Defrag' | Out-Null
 
+        Invoke-BCDEditBestEffort -ArgumentList @('/timeout', '0') -Description 'Boot manager timeout set to 0 seconds.' | Out-Null
         Invoke-BCDEditBestEffort -ArgumentList @('/deletevalue', 'useplatformclock') -Description 'HPET platform clock override removed.' | Out-Null
         Invoke-BCDEditBestEffort -ArgumentList @('/set', 'disabledynamictick', 'yes') -Description 'Dynamic ticks disabled.' | Out-Null
         Invoke-BCDEditBestEffort -ArgumentList @('/deletevalue', 'tscsyncpolicy') -Description 'TSC sync policy override removed.' | Out-Null
