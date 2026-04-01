@@ -9531,12 +9531,21 @@ function Invoke-DeleteTempFiles {
         foreach ($path in $tempPaths) {
             if (Test-Path $path) {
                 try {
-                    $items = @(Get-ChildItem -Path $path -Recurse -Force -ErrorAction SilentlyContinue)
+                    $itemCountEstimate = @(Get-ChildItem -Path $path -Recurse -Force -ErrorAction SilentlyContinue).Count
+                    $items = @(Get-ChildItem -Path $path -Force -ErrorAction SilentlyContinue)
                     $removeErrors = @()
-                    $items | Remove-Item -Recurse -Force -ErrorAction Continue -ErrorVariable +removeErrors
+                    # Remove only top-level temp entries recursively. Piping every
+                    # descendant back into Remove-Item causes noisy PathNotFound
+                    # races once parent directories are removed first.
+                    $items | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable +removeErrors
 
-                    $failed = @($removeErrors).Count
-                    $removed = [Math]::Max(0, $items.Count - $failed)
+                    $meaningfulRemoveErrors = @(
+                        $removeErrors | Where-Object {
+                            [string]$_.FullyQualifiedErrorId -notlike 'PathNotFound,*'
+                        }
+                    )
+                    $failed = @($meaningfulRemoveErrors).Count
+                    $removed = [Math]::Max(0, $itemCountEstimate - $failed)
 
                     $totalRemoved += $removed
                     $totalFailed += $failed
