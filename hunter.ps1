@@ -244,6 +244,30 @@ function Show-YesNoDialog {
     }
 }
 
+function Resolve-SkipAppDownloadsPreference {
+    if ($null -ne $script:SkipAppDownloads) {
+        return [bool]$script:SkipAppDownloads
+    }
+
+    if ($script:IsAutomationRun) {
+        $script:SkipAppDownloads = $false
+        return $false
+    }
+
+    $script:SkipAppDownloads = Show-YesNoDialog `
+        -Title 'Hunter App Downloads' `
+        -Message "Skip app downloads and installs?`n`nChoose Yes to skip package downloads and installs, or No to continue with the normal app download and install pipeline." `
+        -DefaultToNo $true
+
+    if ($script:SkipAppDownloads) {
+        Write-Log 'App downloads and installs skipped by user.' 'INFO'
+    } else {
+        Write-Log 'App downloads and installs enabled by user.' 'INFO'
+    }
+
+    return [bool]$script:SkipAppDownloads
+}
+
 function Initialize-InstallerJobHelpers {
     $helperContent = @'
 Set-StrictMode -Version Latest
@@ -4793,6 +4817,8 @@ function Invoke-CreateRestorePoint {
         -Message "Create a Windows System Restore point before Hunter continues?`n`nThis can take several minutes and may stall on some systems.`n`nChoose Yes to create one now, or No to skip this step." `
         -DefaultToNo $true
 
+    Resolve-SkipAppDownloadsPreference | Out-Null
+
     if (-not $shouldCreateRestorePoint) {
         Write-Log 'Restore point creation skipped by user.' 'INFO'
         return (New-TaskSkipResult -Reason 'Restore point creation was skipped by the user')
@@ -4937,6 +4963,12 @@ function Invoke-VerifyInternetConnectivity {
 function Invoke-PreDownloadInstallers {
     try {
         Write-Log 'Starting background package download/install pipeline during preflight...' 'INFO'
+        if (Resolve-SkipAppDownloadsPreference) {
+            Write-Log 'Skipping background package download/install pipeline by user request.' 'INFO'
+            Invoke-PrefetchExternalAssets
+            return $true
+        }
+
         $launchResult = Invoke-ParallelInstalls -LaunchOnly
         Invoke-PrefetchExternalAssets
         return $launchResult
@@ -8298,6 +8330,11 @@ function Invoke-ParallelInstalls {
     )
 
     try {
+        if (Resolve-SkipAppDownloadsPreference) {
+            Write-Log 'App downloads and installs were skipped by user preference. Package pipeline will not run.' 'INFO'
+            return (New-TaskSkipResult -Reason 'App downloads and installs were skipped by the user')
+        }
+
         if ($null -eq $script:PostInstallCompletion) {
             $script:PostInstallCompletion = @{}
         }

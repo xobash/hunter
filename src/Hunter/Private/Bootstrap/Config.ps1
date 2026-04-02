@@ -38,6 +38,7 @@ $script:RunInfrastructureIssues = @()
 $script:ProgressUiIssueLogged = $false
 $script:CurrentTaskLoggedError = $false
 $script:CurrentTaskLoggedWarning = $false
+$script:SkipAppDownloads = $null
 $script:UiSync        = $null
 $script:UiRunspace    = $null
 $script:UiPipeline    = $null
