@@ -272,6 +272,12 @@ function Build-Tasks {
         -Description 'Create Windows System Restore point'
 
     $tasks += New-Task `
+        -TaskId 'preflight-app-downloads' `
+        -Phase '1' `
+        -ApplyHandler { Invoke-ConfirmAppDownloads } `
+        -Description 'Choose whether to skip app downloads and installs'
+
+    $tasks += New-Task `
         -TaskId 'preflight-predownload-v2' `
         -Phase '1' `
         -ApplyHandler { Invoke-PreDownloadInstallers } `

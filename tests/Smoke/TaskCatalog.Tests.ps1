@@ -77,6 +77,7 @@ Describe 'Build-Tasks catalog compatibility' {
         $expectedTaskIds = @(
             'preflight-internet',
             'preflight-restore-point',
+            'preflight-app-downloads',
             'preflight-predownload-v2',
             'install-launch-packages-v2',
             'core-local-user-v2',
@@ -140,7 +141,7 @@ Describe 'Build-Tasks catalog compatibility' {
         )
 
         $expectedPhases = @(
-            1, 1, 1,
+            1, 1, 1, 1,
             2, 2, 2, 2, 2,
             3, 3, 3, 3, 3, 3, 3, 3, 3,
             4, 4, 4, 4, 4,
@@ -153,7 +154,7 @@ Describe 'Build-Tasks catalog compatibility' {
     }
 
     It 'defines the current total task count' {
-        $taskCatalog.Count | Should -Be 62
+        $taskCatalog.Count | Should -Be 63
     }
 
     It 'preserves the exact task ID order' {

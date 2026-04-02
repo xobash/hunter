@@ -81,11 +81,11 @@ powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -LogPath C:\Temp\hunter.lo
 
 ## What Hunter Does
 
-Hunter currently runs 62 tasks across 9 phases. Re-running is safe: completed work is checkpointed and skipped where possible.
+Hunter currently runs 63 tasks across 9 phases. Re-running is safe: completed work is checkpointed and skipped where possible.
 
 | Phase | Name | Behavior |
 |------|------|----------|
-| 1 | Preflight | Connectivity checks, optional restore point, start package/asset background jobs |
+| 1 | Preflight | Connectivity checks, optional restore point, app-download choice prompt, start package/asset background jobs |
 | 2 | Core Setup | Create or normalize local standard user, configure dark mode, activate Ultimate Performance |
 | 3 | Start / UI | Disable Bing search, Start recommendations, Widgets, Task View, notification center, and Focus Assist |
 | 4 | Explorer | Set This PC as Explorer home, remove Home/Gallery/OneDrive shell entries, disable folder auto-discovery |

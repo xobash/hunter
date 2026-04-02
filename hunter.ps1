@@ -4817,8 +4817,6 @@ function Invoke-CreateRestorePoint {
         -Message "Create a Windows System Restore point before Hunter continues?`n`nThis can take several minutes and may stall on some systems.`n`nChoose Yes to create one now, or No to skip this step." `
         -DefaultToNo $true
 
-    Resolve-SkipAppDownloadsPreference | Out-Null
-
     if (-not $shouldCreateRestorePoint) {
         Write-Log 'Restore point creation skipped by user.' 'INFO'
         return (New-TaskSkipResult -Reason 'Restore point creation was skipped by the user')
@@ -4957,6 +4955,16 @@ function Invoke-VerifyInternetConnectivity {
     } catch {
         Write-Log "Internet connectivity check failed: $_" 'ERROR'
         throw
+    }
+}
+
+function Invoke-ConfirmAppDownloads {
+    try {
+        Resolve-SkipAppDownloadsPreference | Out-Null
+        return $true
+    } catch {
+        Write-Log "Failed to capture app download/install preference : $_" 'ERROR'
+        return $false
     }
 }
 
