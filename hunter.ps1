@@ -3606,6 +3606,7 @@ function Invoke-DisableAudioEnhancements {
         $endpointPropertyName = '{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5'
         $endpointRoot = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio'
         $updatedEndpointCount = 0
+        $skippedEndpointCount = 0
 
         foreach ($endpointType in @('Render', 'Capture')) {
             $typeRootPath = Join-Path $endpointRoot $endpointType
@@ -3615,14 +3616,22 @@ function Invoke-DisableAudioEnhancements {
 
             foreach ($endpointKey in @(Get-ChildItem -Path $typeRootPath -ErrorAction SilentlyContinue)) {
                 $fxPropertiesPath = Join-Path $endpointKey.PSPath 'FxProperties'
-                $endpointUpdated = Set-RegistryValue -Path $fxPropertiesPath -Name $endpointPropertyName -Value 1 -Type DWord
-                if ($endpointUpdated) {
+                try {
+                    if (-not (Test-Path $fxPropertiesPath)) {
+                        New-Item -Path $endpointKey.PSPath -Name 'FxProperties' -Force -ErrorAction Stop | Out-Null
+                    }
+
+                    New-ItemProperty -Path $fxPropertiesPath -Name $endpointPropertyName -Value 1 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
+                    Write-Log "Registry set: $fxPropertiesPath\$endpointPropertyName = 1 (DWord)"
                     $updatedEndpointCount++
+                } catch {
+                    $skippedEndpointCount++
+                    Write-Log "Skipping protected or unavailable audio endpoint enhancement policy at ${fxPropertiesPath}: $($_.Exception.Message)" 'INFO'
                 }
             }
         }
 
-        Write-Log "Audio enhancements disabled on $updatedEndpointCount endpoint(s)." 'INFO'
+        Write-Log "Audio enhancements disabled on $updatedEndpointCount endpoint(s); skipped $skippedEndpointCount protected or unavailable endpoint(s)." 'INFO'
         return $true
     } catch {
         Write-Log "Failed to disable audio enhancements: $($_.Exception.Message)" 'WARN'
@@ -7599,23 +7608,27 @@ function Invoke-ExhaustivePowerTuning {
         }
 
         # Disable console lock timeout (AC and DC)
-        Invoke-PowerCfgValueBestEffort `
+        $consoleLockAcUpdated = Invoke-PowerCfgValueBestEffort `
             -PowerCfgPath $powercfgPath `
             -Scheme $activeSchemeGuid `
             -SubGroup 'SUB_NONE' `
             -Setting 'CONSOLELOCK' `
             -Value '0' `
             -Mode 'AC' `
-            -Description 'console lock timeout' | Out-Null
-        Invoke-PowerCfgValueBestEffort `
+            -Description 'console lock timeout'
+        $consoleLockDcUpdated = Invoke-PowerCfgValueBestEffort `
             -PowerCfgPath $powercfgPath `
             -Scheme $activeSchemeGuid `
             -SubGroup 'SUB_NONE' `
             -Setting 'CONSOLELOCK' `
             -Value '0' `
             -Mode 'DC' `
-            -Description 'console lock timeout' | Out-Null
-        Write-Log 'Console lock timeout disabled on AC and DC power.' 'INFO'
+            -Description 'console lock timeout'
+        if ($consoleLockAcUpdated -or $consoleLockDcUpdated) {
+            Write-Log 'Console lock timeout disabled where supported.' 'INFO'
+        } else {
+            Write-Log 'Console lock timeout setting is unavailable on this system. Skipping.' 'INFO'
+        }
 
         $powerValueMatrix = @(
             @{ SubGroup = '0012ee47-9041-4b5d-9b77-535fba8b1442'; Setting = '6738e2c4-e8a5-4a42-b16a-e040e769756e'; Value = '0x00000000' },

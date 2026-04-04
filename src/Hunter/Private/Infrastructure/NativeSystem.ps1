@@ -140,18 +140,29 @@ function Invoke-PowerCfgValueBestEffort {
         $Description
     }
 
-    & $PowerCfgPath /query $Scheme $SubGroup $Setting *> $null
-    if ([int]$LASTEXITCODE -ne 0) {
+    $operation = if ($Mode -eq 'AC') { '/setacvalueindex' } else { '/setdcvalueindex' }
+    $unsupportedPattern = '(?i)does not exist|invalid parameter|not supported|not available'
+
+    $queryOutput = @(& $PowerCfgPath /query $Scheme $SubGroup $Setting 2>&1)
+    $queryExitCode = [int]$LASTEXITCODE
+    $queryText = [string]::Join(' ', @($queryOutput | ForEach-Object { [string]$_ })).Trim()
+    if ($queryExitCode -ne 0 -or $queryText -match $unsupportedPattern) {
         Write-Log "Skipped power setting ${settingLabel} ($Mode): unavailable on this system." 'INFO'
         return $false
     }
 
-    $operation = if ($Mode -eq 'AC') { '/setacvalueindex' } else { '/setdcvalueindex' }
-    try {
-        Invoke-NativeCommandChecked -FilePath $PowerCfgPath -ArgumentList @($operation, $Scheme, $SubGroup, $Setting, $Value) | Out-Null
-        return $true
-    } catch {
-        Write-Log "Skipped power setting ${settingLabel} ($Mode): $($_.Exception.Message)" 'INFO'
+    $setOutput = @(& $PowerCfgPath $operation $Scheme $SubGroup $Setting $Value 2>&1)
+    $setExitCode = [int]$LASTEXITCODE
+    $setText = [string]::Join(' ', @($setOutput | ForEach-Object { [string]$_ })).Trim()
+    if ($setExitCode -ne 0 -or $setText -match $unsupportedPattern) {
+        $detail = if ([string]::IsNullOrWhiteSpace($setText)) {
+            "powercfg exited with code $setExitCode"
+        } else {
+            $setText
+        }
+        Write-Log "Skipped power setting ${settingLabel} ($Mode): $detail" 'INFO'
         return $false
     }
+
+    return $true
 }
