@@ -1228,9 +1228,153 @@ function Set-DirectXGlobalPreferenceValue {
 # APPX HELPERS
 # ==============================================================================
 
+function Test-CanUseInlineAppxCommands {
+    if ($null -ne $script:InlineAppxCommandsAvailable) {
+        return [bool]$script:InlineAppxCommandsAvailable
+    }
+
+    if ($PSVersionTable.PSEdition -ne 'Desktop') {
+        $script:InlineAppxCommandsAvailable = $false
+        return $false
+    }
+
+    try {
+        Import-Module Appx -ErrorAction Stop | Out-Null
+        Get-Command Get-AppxPackage -ErrorAction Stop | Out-Null
+        Get-Command Get-AppxProvisionedPackage -ErrorAction Stop | Out-Null
+        $script:InlineAppxCommandsAvailable = $true
+    } catch {
+        $script:InlineAppxCommandsAvailable = $false
+    }
+
+    return [bool]$script:InlineAppxCommandsAvailable
+}
+
+function Invoke-AppxPatternOperationViaWindowsPowerShell {
+    param(
+        [string[]]$Patterns,
+        [ValidateSet('Remove', 'Test')]
+        [string]$Mode = 'Remove'
+    )
+
+    $patterns = @($Patterns | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    if ($patterns.Count -eq 0) {
+        if ($Mode -eq 'Test') {
+            return [pscustomobject]@{ Exists = $false }
+        }
+
+        return [pscustomobject]@{
+            RemovedInstalled   = @()
+            RemovedProvisioned = @()
+            Warnings           = @()
+        }
+    }
+
+    $desktopPowerShellPath = Get-NativeSystemExecutablePath -FileName 'powershell.exe'
+    $tempRoot = Join-Path $script:HunterRoot 'Temp'
+    Ensure-Directory $tempRoot
+
+    $operationId = [guid]::NewGuid().ToString('N')
+    $patternsPath = Join-Path $tempRoot "appx-patterns-$operationId.json"
+    $runnerPath = Join-Path $tempRoot "appx-runner-$operationId.ps1"
+
+    try {
+        @($patterns) | ConvertTo-Json -Depth 3 | Set-Content -Path $patternsPath -Encoding UTF8 -Force
+
+        $runnerScript = @'
+param(
+    [Parameter(Mandatory)][string]$PatternsPath,
+    [Parameter(Mandatory)][string]$Mode
+)
+
+$patterns = @((Get-Content -Path $PatternsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop))
+$result = [ordered]@{
+    Exists             = $false
+    RemovedInstalled   = @()
+    RemovedProvisioned = @()
+    Warnings           = @()
+}
+
+$installedPackages = @(Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue)
+$provisionedPackages = @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue)
+
+foreach ($pattern in $patterns) {
+    $matchingInstalled = @($installedPackages | Where-Object { $_.PSObject.Properties['Name'] -and $_.Name -like $pattern })
+    $matchingProvisioned = @($provisionedPackages | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -like $pattern })
+
+    if ($Mode -eq 'Test') {
+        if ($matchingInstalled.Count -gt 0 -or $matchingProvisioned.Count -gt 0) {
+            $result.Exists = $true
+            break
+        }
+
+        continue
+    }
+
+    foreach ($package in $matchingInstalled) {
+        try {
+            Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction Stop
+            $result.RemovedInstalled += @([string]$package.Name)
+        } catch {
+            $result.Warnings += @("Skipping installed AppX package $($package.Name): $($_.Exception.Message)")
+        }
+    }
+
+    foreach ($package in $matchingProvisioned) {
+        try {
+            Remove-AppxProvisionedPackage -Online -PackageName $package.PackageName -ErrorAction Stop | Out-Null
+            $result.RemovedProvisioned += @([string]$package.DisplayName)
+        } catch {
+            $result.Warnings += @("Skipping built-in AppX provisioned package $($package.DisplayName): $($_.Exception.Message)")
+        }
+    }
+}
+
+$result | ConvertTo-Json -Depth 6 -Compress
+'@
+
+        Set-Content -Path $runnerPath -Value $runnerScript -Encoding UTF8 -Force
+        $operationOutput = @(& $desktopPowerShellPath -NoProfile -ExecutionPolicy Bypass -File $runnerPath -PatternsPath $patternsPath -Mode $Mode 2>&1)
+        if ([int]$LASTEXITCODE -ne 0) {
+            throw "$desktopPowerShellPath exited with code $LASTEXITCODE"
+        }
+
+        $operationJson = [string]::Join([Environment]::NewLine, @($operationOutput | ForEach-Object { [string]$_ })).Trim()
+        if ([string]::IsNullOrWhiteSpace($operationJson)) {
+            throw 'Desktop AppX helper did not return any JSON output.'
+        }
+
+        return ($operationJson | ConvertFrom-Json -ErrorAction Stop)
+    } finally {
+        Remove-Item -Path $patternsPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $runnerPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Remove-AppxPatterns {
     param([string[]]$Patterns)
     if ($null -eq $Patterns -or $Patterns.Count -eq 0) { return }
+
+    if (-not (Test-CanUseInlineAppxCommands)) {
+        try {
+            $desktopResult = Invoke-AppxPatternOperationViaWindowsPowerShell -Patterns $Patterns -Mode Remove
+            foreach ($removedPackageName in @($desktopResult.RemovedInstalled)) {
+                Write-Log "AppX package removed: $removedPackageName"
+            }
+
+            foreach ($removedProvisionedName in @($desktopResult.RemovedProvisioned)) {
+                Write-Log "AppX provisioned package removed: $removedProvisionedName"
+            }
+
+            foreach ($warning in @($desktopResult.Warnings)) {
+                Write-Log $warning 'INFO'
+            }
+        } catch {
+            Write-Log "Skipping AppX package removal because the desktop AppX helper failed: $($_.Exception.Message)" 'WARN'
+        }
+
+        return
+    }
 
     $installedPackages = @(Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue)
     $provisionedPackages = @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue)
@@ -1277,6 +1421,16 @@ function Test-AppxPatternExists {
 
     if ($null -eq $Patterns -or $Patterns.Count -eq 0) {
         return $false
+    }
+
+    if (-not (Test-CanUseInlineAppxCommands)) {
+        try {
+            $desktopResult = Invoke-AppxPatternOperationViaWindowsPowerShell -Patterns $Patterns -Mode Test
+            return [bool]$desktopResult.Exists
+        } catch {
+            Write-Log "Failed to query AppX patterns via desktop helper: $($_.Exception.Message)" 'WARN'
+            return $false
+        }
     }
 
     $installedPackages = @(Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue)
@@ -3451,6 +3605,7 @@ function Add-HostsEntries {
 
 function Test-IsHyperVGuest {
     $probeFailures = New-Object 'System.Collections.Generic.List[string]'
+    $nonHyperVVirtualizationPattern = '(?i)qemu|kvm|proxmox|virtio|red hat|vmware|virtualbox|xen|parallels'
 
     try {
         $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
@@ -3459,7 +3614,7 @@ function Test-IsHyperVGuest {
             [string]$cs.Model
         ) -join ' '
 
-        if ($computerSystemMarkers -match '(?i)qemu|kvm|proxmox|vmware|virtualbox|xen|parallels') {
+        if ($computerSystemMarkers -match $nonHyperVVirtualizationPattern) {
             return $false
         }
 
@@ -3468,6 +3623,22 @@ function Test-IsHyperVGuest {
         }
     } catch {
         [void]$probeFailures.Add("Win32_ComputerSystem probe failed: $($_.Exception.Message)")
+    }
+
+    try {
+        $hardwareMarkers = @()
+        $hardwareMarkers += @(Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue | ForEach-Object {
+            [string]::Join(' ', @([string]$_.Model, [string]$_.Manufacturer, [string]$_.PNPDeviceID))
+        })
+        $hardwareMarkers += @(Get-CimInstance Win32_NetworkAdapter -ErrorAction SilentlyContinue | ForEach-Object {
+            [string]::Join(' ', @([string]$_.Name, [string]$_.Manufacturer, [string]$_.PNPDeviceID))
+        })
+
+        if (([string]::Join(' ', @($hardwareMarkers))).Trim() -match $nonHyperVVirtualizationPattern) {
+            return $false
+        }
+    } catch {
+        [void]$probeFailures.Add("Virtual hardware marker probe failed: $($_.Exception.Message)")
     }
 
     try {
@@ -6089,16 +6260,20 @@ function Invoke-RemoveCopilot {
         Write-Log -Message "Removing Copilot Appx packages..." -Level 'INFO'
         Remove-AppxPatterns ($copilotAppxPatterns + @('Microsoft.MicrosoftOfficeHub*'))
 
-        $currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-        $coreAiPackage = Get-AppxPackage -AllUsers -Name 'MicrosoftWindows.Client.CoreAI*' -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -ne $coreAiPackage -and -not [string]::IsNullOrWhiteSpace($currentUserSid)) {
-            $coreAiEndOfLifePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\EndOfLife\$currentUserSid\$($coreAiPackage.PackageFullName)"
-            New-Item -Path $coreAiEndOfLifePath -Force | Out-Null
-            try {
-                Remove-AppxPackage -Package $coreAiPackage.PackageFullName -ErrorAction Stop
-            } catch {
-                Write-Log -Message "Failed to remove CoreAI package $($coreAiPackage.PackageFullName): $_" -Level 'WARN'
+        if (Test-CanUseInlineAppxCommands) {
+            $currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+            $coreAiPackage = Get-AppxPackage -AllUsers -Name 'MicrosoftWindows.Client.CoreAI*' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($null -ne $coreAiPackage -and -not [string]::IsNullOrWhiteSpace($currentUserSid)) {
+                $coreAiEndOfLifePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\EndOfLife\$currentUserSid\$($coreAiPackage.PackageFullName)"
+                New-Item -Path $coreAiEndOfLifePath -Force | Out-Null
+                try {
+                    Remove-AppxPackage -Package $coreAiPackage.PackageFullName -ErrorAction Stop
+                } catch {
+                    Write-Log -Message "Failed to remove CoreAI package $($coreAiPackage.PackageFullName): $_" -Level 'WARN'
+                }
             }
+        } else {
+            Write-Log -Message 'Skipping direct CoreAI AppX cleanup in this session because Appx cmdlets are unavailable; registry-based Copilot disablement will still apply.' -Level 'INFO'
         }
 
         Write-Log -Message "Disabling Copilot via registry..." -Level 'INFO'
