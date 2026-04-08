@@ -40,20 +40,18 @@ if (-not $canUseLocalHunterPrivateLayers) {
 
     foreach ($hunterPrivateRelativePath in $hunterPrivateRelativePaths) {
         $hunterPrivateDestinationPath = Join-Path $script:HunterSourceRoot $hunterPrivateRelativePath
-        if (-not (Test-Path $hunterPrivateDestinationPath)) {
-            $hunterPrivateUri = '{0}/{1}' -f $script:HunterRemoteRoot.TrimEnd('/'), ($hunterPrivateRelativePath -replace '\\', '/')
-            $hunterPrivateContent = (Invoke-WebRequest -Uri $hunterPrivateUri -UseBasicParsing -ErrorAction Stop).Content
-            if ([string]::IsNullOrWhiteSpace([string]$hunterPrivateContent)) {
-                throw "Downloaded bootstrap layer was empty: $hunterPrivateUri"
-            }
-
-            $hunterPrivateDestinationRoot = Split-Path -Parent $hunterPrivateDestinationPath
-            if (-not (Test-Path $hunterPrivateDestinationRoot)) {
-                New-Item -ItemType Directory -Path $hunterPrivateDestinationRoot -Force | Out-Null
-            }
-
-            Set-Content -Path $hunterPrivateDestinationPath -Value ([string]$hunterPrivateContent) -Encoding UTF8 -Force
+        $hunterPrivateUri = '{0}/{1}' -f $script:HunterRemoteRoot.TrimEnd('/'), ($hunterPrivateRelativePath -replace '\\', '/')
+        $hunterPrivateContent = (Invoke-WebRequest -Uri $hunterPrivateUri -UseBasicParsing -ErrorAction Stop).Content
+        if ([string]::IsNullOrWhiteSpace([string]$hunterPrivateContent)) {
+            throw "Downloaded bootstrap layer was empty: $hunterPrivateUri"
         }
+
+        $hunterPrivateDestinationRoot = Split-Path -Parent $hunterPrivateDestinationPath
+        if (-not (Test-Path $hunterPrivateDestinationRoot)) {
+            New-Item -ItemType Directory -Path $hunterPrivateDestinationRoot -Force | Out-Null
+        }
+
+        Set-Content -Path $hunterPrivateDestinationPath -Value ([string]$hunterPrivateContent) -Encoding UTF8 -Force
     }
 }
 
@@ -3456,6 +3454,15 @@ function Test-IsHyperVGuest {
 
     try {
         $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+        $computerSystemMarkers = @(
+            [string]$cs.Manufacturer,
+            [string]$cs.Model
+        ) -join ' '
+
+        if ($computerSystemMarkers -match '(?i)qemu|kvm|proxmox|vmware|virtualbox|xen|parallels') {
+            return $false
+        }
+
         if ($null -ne $cs -and $cs.Model -eq 'Virtual Machine' -and $cs.Manufacturer -eq 'Microsoft Corporation') {
             return $true
         }
@@ -3464,20 +3471,27 @@ function Test-IsHyperVGuest {
     }
 
     try {
-        # Fallback: check for Hyper-V integration services or VMBUS
-        $hyperVService = Get-Service -Name 'vmicheartbeat' -ErrorAction Stop
-        if ($null -ne $hyperVService) {
+        # Fallback: check for explicit Hyper-V/VMBus devices only.
+        $hyperVDevice = Get-CimInstance Win32_PnPEntity -ErrorAction Stop | Where-Object {
+            ([string]$_.Name -match '(?i)hyper-v|vmbus')
+        } | Select-Object -First 1
+        if ($null -ne $hyperVDevice) {
             return $true
         }
-    } catch [Microsoft.PowerShell.Commands.ServiceCommandException] {
     } catch {
-        [void]$probeFailures.Add("vmicheartbeat service probe failed: $($_.Exception.Message)")
+        [void]$probeFailures.Add("Win32_PnPEntity Hyper-V device probe failed: $($_.Exception.Message)")
     }
 
     try {
-        # Fallback: check for Hyper-V BIOS string
+        # Fallback: check for explicit Hyper-V BIOS/manufacturer markers only.
         $bios = Get-CimInstance Win32_BIOS -ErrorAction Stop
-        if ($null -ne $bios -and $bios.Version -like '*VRTUAL*') {
+        $biosMarkers = @(
+            [string]$bios.Manufacturer,
+            [string]$bios.SMBIOSBIOSVersion,
+            [string]$bios.SerialNumber,
+            [string]$bios.Version
+        ) -join ' '
+        if ($biosMarkers -match '(?i)hyper-v|microsoft corporation') {
             return $true
         }
     } catch {
@@ -5987,6 +6001,17 @@ function Invoke-RemoveOneDrive {
 
         $remainingMarkers = @(& $getOneDriveMarkers)
         if ($remainingMarkers.Count -gt 0) {
+            $remainingNonUserDataMarkers = @($remainingMarkers | Where-Object { $_ -ne 'UserFolder' })
+            if ($remainingNonUserDataMarkers.Count -eq 0) {
+                $userFolderReason = 'OneDrive user folder was left in place to avoid deleting user data.'
+                Write-Log -Message $userFolderReason -Level 'WARN'
+                return @{
+                    Success = $true
+                    Status  = 'CompletedWithWarnings'
+                    Reason  = $userFolderReason
+                }
+            }
+
             Write-Log -Message ("OneDrive removal incomplete. Remaining markers: {0}" -f ($remainingMarkers -join ', ')) -Level 'ERROR'
             return $false
         }
@@ -7565,6 +7590,29 @@ function Invoke-ExhaustivePowerTuning {
         }
 
         $powercfgPath = Get-NativeSystemExecutablePath -FileName 'powercfg.exe'
+        $invokePowerSettingBestEffort = {
+            param(
+                [string]$SubGroup,
+                [string]$Setting,
+                [string]$Value,
+                [ValidateSet('AC', 'DC')][string]$Mode,
+                [string]$Description
+            )
+
+            try {
+                return (Invoke-PowerCfgValueBestEffort `
+                    -PowerCfgPath $powercfgPath `
+                    -Scheme $activeSchemeGuid `
+                    -SubGroup $SubGroup `
+                    -Setting $Setting `
+                    -Value $Value `
+                    -Mode $Mode `
+                    -Description $Description)
+            } catch {
+                Write-Log "Skipped power setting ${Description} ($Mode): $($_.Exception.Message)" 'INFO'
+                return $false
+            }
+        }
 
         # Unpark CPU cores - set max parking percentage to 100 (= never park)
         $coreUnparkPath = 'HKLM:\SYSTEM\ControlSet001\Control\Power\PowerSettings\54533251-82be-4824-96c1-47b60b740d00\0cc5b647-c1df-4637-891a-dec35c318583'
@@ -7584,9 +7632,7 @@ function Invoke-ExhaustivePowerTuning {
             @{ Mode = 'AC'; Setting = 'PROCTHROTTLEMAX'; Value = '100'; Description = 'processor maximum performance state' },
             @{ Mode = 'DC'; Setting = 'PROCTHROTTLEMAX'; Value = '100'; Description = 'processor maximum performance state' }
         )) {
-            Invoke-PowerCfgValueBestEffort `
-                -PowerCfgPath $powercfgPath `
-                -Scheme $activeSchemeGuid `
+            & $invokePowerSettingBestEffort `
                 -SubGroup 'SUB_PROCESSOR' `
                 -Setting $processorPowerSetting.Setting `
                 -Value $processorPowerSetting.Value `
@@ -7608,17 +7654,13 @@ function Invoke-ExhaustivePowerTuning {
         }
 
         # Disable console lock timeout (AC and DC)
-        $consoleLockAcUpdated = Invoke-PowerCfgValueBestEffort `
-            -PowerCfgPath $powercfgPath `
-            -Scheme $activeSchemeGuid `
+        $consoleLockAcUpdated = & $invokePowerSettingBestEffort `
             -SubGroup 'SUB_NONE' `
             -Setting 'CONSOLELOCK' `
             -Value '0' `
             -Mode 'AC' `
             -Description 'console lock timeout'
-        $consoleLockDcUpdated = Invoke-PowerCfgValueBestEffort `
-            -PowerCfgPath $powercfgPath `
-            -Scheme $activeSchemeGuid `
+        $consoleLockDcUpdated = & $invokePowerSettingBestEffort `
             -SubGroup 'SUB_NONE' `
             -Setting 'CONSOLELOCK' `
             -Value '0' `
@@ -7673,9 +7715,7 @@ function Invoke-ExhaustivePowerTuning {
         $skippedPowerSettings = 0
         foreach ($pv in $powerValueMatrix) {
             foreach ($powerMode in @('AC', 'DC')) {
-                $wasApplied = Invoke-PowerCfgValueBestEffort `
-                    -PowerCfgPath $powercfgPath `
-                    -Scheme $activeSchemeGuid `
+                $wasApplied = & $invokePowerSettingBestEffort `
                     -SubGroup $pv.SubGroup `
                     -Setting $pv.Setting `
                     -Value $pv.Value `
