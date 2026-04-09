@@ -557,7 +557,19 @@ function Build-Tasks {
         -TaskId 'tweaks-graphics-scheduling' `
         -Phase '7' `
         -ApplyHandler { Invoke-ApplyGraphicsSchedulingTweaks } `
-        -Description 'Apply HAGS, VRR, Game Bar, Auto HDR, and TDR graphics tweaks'
+        -Description 'Apply HAGS, MPO, VRR, Game Bar, Auto HDR, and TDR graphics tweaks'
+
+    $tasks += New-Task `
+        -TaskId 'tweaks-gpu-interrupt-affinity' `
+        -Phase '7' `
+        -ApplyHandler { Invoke-ConfigureGpuInterruptAffinity } `
+        -Description 'Pin GPU interrupts to a non-primary logical processor on supported single-group systems'
+
+    $tasks += New-Task `
+        -TaskId 'tweaks-rebar-audit' `
+        -Phase '7' `
+        -ApplyHandler { Invoke-AuditResizableBarSupport } `
+        -Description 'Audit GPU family compatibility for Resizable BAR and document firmware-managed status'
 
     $tasks += New-Task `
         -TaskId 'tweaks-dwm-frame-interval' `

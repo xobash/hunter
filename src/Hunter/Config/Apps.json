@@ -1,0 +1,288 @@
+{
+  "Version": "1.0",
+  "ProtectedApps": [
+    {
+      "FriendlyName": "Windows Security",
+      "AppIds": ["Microsoft.SecHealthUI"],
+      "Reason": "Required by the Windows Security UI."
+    },
+    {
+      "FriendlyName": "Shell Experience Host",
+      "AppIds": ["Microsoft.Windows.ShellExperienceHost"],
+      "Reason": "Required by the taskbar and shell surface."
+    },
+    {
+      "FriendlyName": "Start Menu Experience Host",
+      "AppIds": ["Microsoft.Windows.StartMenuExperienceHost"],
+      "Reason": "Required by the Start menu."
+    },
+    {
+      "FriendlyName": "Settings",
+      "AppIds": ["windows.immersivecontrolpanel"],
+      "Reason": "Required by the Settings app."
+    },
+    {
+      "FriendlyName": "Windows Store",
+      "AppIds": ["Microsoft.WindowsStore"],
+      "Reason": "Used by Store-backed install and update flows."
+    }
+  ],
+  "Apps": [
+    {
+      "Id": "widgets",
+      "FriendlyName": "Widgets Experience",
+      "Group": "StartUI",
+      "AppIds": ["Microsoft.WidgetsPlatformRuntime", "MicrosoftWindows.Client.WebExperience", "Microsoft.StartExperiencesApp"],
+      "SelectedByDefault": false,
+      "Recommendation": "optional",
+      "MinBuild": 22000,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "AppxPattern",
+          "Patterns": ["Microsoft.WidgetsPlatformRuntime*", "MicrosoftWindows.Client.WebExperience*", "Microsoft.StartExperiencesApp*"]
+        }
+      ]
+    },
+    {
+      "Id": "copilot",
+      "FriendlyName": "Copilot",
+      "Group": "Cloud",
+      "AppIds": ["Microsoft.Copilot", "Microsoft.Windows.Copilot", "MicrosoftWindows.Client.CoreAI"],
+      "SelectedByDefault": false,
+      "Recommendation": "safe",
+      "MinBuild": 22621,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "AppxPattern",
+          "Patterns": ["Microsoft.Copilot*", "Microsoft.Windows.Copilot*", "MicrosoftWindows.Client.CoreAI*"]
+        }
+      ]
+    },
+    {
+      "Id": "edge",
+      "FriendlyName": "Microsoft Edge",
+      "Group": "Cloud",
+      "AppIds": ["Microsoft.Edge", "XPFFTQ037JWMHS"],
+      "SelectedByDefault": false,
+      "Recommendation": "unsafe",
+      "MinBuild": null,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "Winget",
+          "Ids": ["Microsoft.Edge", "XPFFTQ037JWMHS"]
+        }
+      ]
+    },
+    {
+      "Id": "onedrive",
+      "FriendlyName": "Microsoft OneDrive",
+      "Group": "Cloud",
+      "AppIds": ["Microsoft.OneDrive"],
+      "SelectedByDefault": false,
+      "Recommendation": "optional",
+      "MinBuild": null,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "Winget",
+          "Ids": ["Microsoft.OneDrive"]
+        }
+      ]
+    },
+    {
+      "Id": "outlook",
+      "FriendlyName": "Outlook and Mail",
+      "Group": "Phase6Broad",
+      "AppIds": ["Microsoft.OutlookForWindows", "microsoft.windowscommunicationsapps"],
+      "SelectedByDefault": true,
+      "Recommendation": "optional",
+      "MinBuild": null,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "AppxPattern",
+          "Patterns": ["Microsoft.OutlookForWindows*", "microsoft.windowscommunicationsapps*"]
+        }
+      ]
+    },
+    {
+      "Id": "linkedin",
+      "FriendlyName": "LinkedIn",
+      "Group": "Phase6Broad",
+      "AppIds": ["LinkedIn", "LinkedInForWindows"],
+      "SelectedByDefault": true,
+      "Recommendation": "safe",
+      "MinBuild": null,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "AppxPattern",
+          "Patterns": ["*LinkedIn*", "*LinkedInForWindows*"]
+        }
+      ]
+    },
+    {
+      "Id": "xbox",
+      "FriendlyName": "Xbox and Gaming App",
+      "Group": "Phase6Broad",
+      "AppIds": ["Microsoft.XboxIdentityProvider", "Microsoft.XboxSpeechToTextOverlay", "Microsoft.GamingApp", "Microsoft.Xbox.TCUI", "Microsoft.XboxGamingOverlay"],
+      "SelectedByDefault": true,
+      "Recommendation": "optional",
+      "MinBuild": null,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "AppxPattern",
+          "Patterns": ["Microsoft.XboxIdentityProvider*", "Microsoft.XboxSpeechToTextOverlay*", "Microsoft.GamingApp*", "Microsoft.Xbox.TCUI*", "Microsoft.XboxGamingOverlay*"]
+        }
+      ]
+    },
+    {
+      "Id": "games-bundle",
+      "FriendlyName": "Inbox Games Bundle",
+      "Group": "Phase6Broad",
+      "AppIds": ["Microsoft.MicrosoftSolitaireCollection", "king.com", "CandyCrush", "BubbleWitch", "MarchofEmpires"],
+      "SelectedByDefault": true,
+      "Recommendation": "safe",
+      "MinBuild": null,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "AppxPattern",
+          "Patterns": ["Microsoft.MicrosoftSolitaireCollection*", "*king.com*", "*CandyCrush*", "*BubbleWitch*", "*MarchofEmpires*"]
+        }
+      ]
+    },
+    {
+      "Id": "feedback-hub",
+      "FriendlyName": "Feedback Hub",
+      "Group": "Phase6Broad",
+      "AppIds": ["Microsoft.WindowsFeedbackHub"],
+      "SelectedByDefault": true,
+      "Recommendation": "safe",
+      "MinBuild": null,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "AppxPattern",
+          "Patterns": ["Microsoft.WindowsFeedbackHub*"]
+        }
+      ]
+    },
+    {
+      "Id": "office-hub",
+      "FriendlyName": "Office Hub",
+      "Group": "Phase6Broad",
+      "AppIds": ["Microsoft.MicrosoftOfficeHub", "Microsoft.Office.Desktop"],
+      "SelectedByDefault": true,
+      "Recommendation": "safe",
+      "MinBuild": null,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "AppxPattern",
+          "Patterns": ["Microsoft.MicrosoftOfficeHub*", "Microsoft.Office.Desktop*"]
+        }
+      ]
+    },
+    {
+      "Id": "bing-suite",
+      "FriendlyName": "Bing and Microsoft News",
+      "Group": "Phase6Broad",
+      "AppIds": ["Microsoft.BingSearch", "Microsoft.BingWeather", "Microsoft.BingNews", "Microsoft.BingFinance", "Microsoft.BingSports", "Microsoft.MSN.Weather", "Microsoft.News"],
+      "SelectedByDefault": true,
+      "Recommendation": "safe",
+      "MinBuild": null,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "AppxPattern",
+          "Patterns": ["Microsoft.BingSearch*", "Microsoft.BingWeather*", "Microsoft.BingNews*", "Microsoft.BingFinance*", "Microsoft.BingSports*", "Microsoft.MSN.Weather*", "Microsoft.News*"]
+        }
+      ]
+    },
+    {
+      "Id": "clipchamp",
+      "FriendlyName": "Clipchamp",
+      "Group": "Phase6Broad",
+      "AppIds": ["Clipchamp.Clipchamp", "Microsoft.Clipchamp"],
+      "SelectedByDefault": true,
+      "Recommendation": "safe",
+      "MinBuild": null,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "AppxPattern",
+          "Patterns": ["Clipchamp.Clipchamp*", "Microsoft.Clipchamp*"]
+        }
+      ]
+    },
+    {
+      "Id": "teams",
+      "FriendlyName": "Teams",
+      "Group": "Phase6Broad",
+      "AppIds": ["MicrosoftTeams", "Microsoft.Teams", "MSTeams"],
+      "SelectedByDefault": true,
+      "Recommendation": "optional",
+      "MinBuild": null,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "AppxPattern",
+          "Patterns": ["MicrosoftTeams*", "Microsoft.Teams*", "MSTeams*"]
+        }
+      ]
+    },
+    {
+      "Id": "todo",
+      "FriendlyName": "Microsoft To Do",
+      "Group": "Phase6Broad",
+      "AppIds": ["Microsoft.Todos"],
+      "SelectedByDefault": true,
+      "Recommendation": "optional",
+      "MinBuild": null,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "AppxPattern",
+          "Patterns": ["Microsoft.Todos*"]
+        }
+      ]
+    },
+    {
+      "Id": "power-automate",
+      "FriendlyName": "Power Automate Desktop",
+      "Group": "Phase6Broad",
+      "AppIds": ["Microsoft.PowerAutomateDesktop"],
+      "SelectedByDefault": true,
+      "Recommendation": "optional",
+      "MinBuild": null,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "AppxPattern",
+          "Patterns": ["Microsoft.PowerAutomateDesktop*"]
+        }
+      ]
+    },
+    {
+      "Id": "sound-recorder",
+      "FriendlyName": "Sound Recorder",
+      "Group": "Phase6Broad",
+      "AppIds": ["Microsoft.WindowsSoundRecorder"],
+      "SelectedByDefault": true,
+      "Recommendation": "safe",
+      "MinBuild": null,
+      "MaxBuild": null,
+      "RemovalStrategies": [
+        {
+          "Type": "AppxPattern",
+          "Patterns": ["Microsoft.WindowsSoundRecorder*"]
+        }
+      ]
+    }
+  ]
+}

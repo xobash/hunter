@@ -13,18 +13,19 @@ $ErrorActionPreference = 'Stop'
 
 $script:HunterSourceRoot = $null
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/main'
-$hunterPrivateRelativePaths = @(
+$hunterBootstrapRelativePaths = @(
     'src\Hunter\Private\Bootstrap\Config.ps1',
     'src\Hunter\Private\Common\Common.ps1',
     'src\Hunter\Private\Common\PathPolicy.ps1',
     'src\Hunter\Private\Execution\Engine.ps1',
-    'src\Hunter\Private\Infrastructure\NativeSystem.ps1'
+    'src\Hunter\Private\Infrastructure\NativeSystem.ps1',
+    'src\Hunter\Config\Apps.json'
 )
 
 $canUseLocalHunterPrivateLayers = $false
 if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
     $missingHunterPrivateLayers = @(
-        $hunterPrivateRelativePaths | Where-Object {
+        $hunterBootstrapRelativePaths | Where-Object {
             -not (Test-Path (Join-Path $PSScriptRoot $_))
         }
     )
@@ -38,7 +39,7 @@ if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
 if (-not $canUseLocalHunterPrivateLayers) {
     $script:HunterSourceRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'HunterBootstrap'
 
-    foreach ($hunterPrivateRelativePath in $hunterPrivateRelativePaths) {
+    foreach ($hunterPrivateRelativePath in $hunterBootstrapRelativePaths) {
         $hunterPrivateDestinationPath = Join-Path $script:HunterSourceRoot $hunterPrivateRelativePath
         $hunterPrivateUri = '{0}/{1}' -f $script:HunterRemoteRoot.TrimEnd('/'), ($hunterPrivateRelativePath -replace '\\', '/')
         $hunterPrivateContent = (Invoke-WebRequest -Uri $hunterPrivateUri -UseBasicParsing -ErrorAction Stop).Content
@@ -55,8 +56,10 @@ if (-not $canUseLocalHunterPrivateLayers) {
     }
 }
 
-foreach ($hunterPrivateRelativePath in $hunterPrivateRelativePaths) {
-    . (Join-Path $script:HunterSourceRoot $hunterPrivateRelativePath)
+foreach ($hunterPrivateRelativePath in $hunterBootstrapRelativePaths) {
+    if ($hunterPrivateRelativePath -like '*.ps1') {
+        . (Join-Path $script:HunterSourceRoot $hunterPrivateRelativePath)
+    }
 }
 
 Remove-Variable -Name canUseLocalHunterPrivateLayers -ErrorAction SilentlyContinue
@@ -64,7 +67,7 @@ Remove-Variable -Name hunterPrivateContent -ErrorAction SilentlyContinue
 Remove-Variable -Name hunterPrivateDestinationPath -ErrorAction SilentlyContinue
 Remove-Variable -Name hunterPrivateDestinationRoot -ErrorAction SilentlyContinue
 Remove-Variable -Name hunterPrivateRelativePath -ErrorAction SilentlyContinue
-Remove-Variable -Name hunterPrivateRelativePaths -ErrorAction SilentlyContinue
+Remove-Variable -Name hunterBootstrapRelativePaths -ErrorAction SilentlyContinue
 Remove-Variable -Name hunterPrivateUri -ErrorAction SilentlyContinue
 Remove-Variable -Name missingHunterPrivateLayers -ErrorAction SilentlyContinue
 
@@ -1225,6 +1228,328 @@ function Set-DirectXGlobalPreferenceValue {
     }
 
     Set-RegistryValue -Path $path -Name 'DirectXUserGlobalSettings' -Value $serializedValue -Type String
+}
+
+# ==============================================================================
+# WINDOWS BUILD / APP REMOVAL HELPERS
+# ==============================================================================
+
+function Get-WindowsBuildContext {
+    if ($null -ne $script:WindowsBuildContext) {
+        return $script:WindowsBuildContext
+    }
+
+    $currentVersionPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+    $buildNumber = 0
+    $ubr = 0
+    $displayVersion = ''
+    $releaseId = ''
+    $productName = ''
+
+    try {
+        $currentVersion = Get-ItemProperty -Path $currentVersionPath -ErrorAction Stop
+        [void][int]::TryParse([string]$currentVersion.CurrentBuild, [ref]$buildNumber)
+        [void][int]::TryParse([string]$currentVersion.UBR, [ref]$ubr)
+        $displayVersion = [string]$currentVersion.DisplayVersion
+        $releaseId = [string]$currentVersion.ReleaseId
+        $productName = [string]$currentVersion.ProductName
+    } catch {
+        Write-Log "Failed to query Windows build metadata: $($_.Exception.Message)" 'WARN'
+    }
+
+    $script:WindowsBuildContext = [pscustomobject]@{
+        CurrentBuild   = $buildNumber
+        UBR            = $ubr
+        DisplayVersion = $displayVersion
+        ReleaseId      = $releaseId
+        ProductName    = $productName
+        IsWindows11    = ($buildNumber -ge 22000)
+        IsWindows10    = ($buildNumber -ge 10240 -and $buildNumber -lt 22000)
+    }
+
+    return $script:WindowsBuildContext
+}
+
+function Test-WindowsBuildInRange {
+    param(
+        [Nullable[int]]$MinBuild = $null,
+        [Nullable[int]]$MaxBuild = $null
+    )
+
+    $buildContext = Get-WindowsBuildContext
+    $currentBuild = [int]$buildContext.CurrentBuild
+
+    if ($MinBuild -ne $null -and $currentBuild -lt $MinBuild.Value) {
+        return $false
+    }
+
+    if ($MaxBuild -ne $null -and $currentBuild -gt $MaxBuild.Value) {
+        return $false
+    }
+
+    return $true
+}
+
+function Get-HunterEffectiveCustomAppsListPath {
+    if (-not [string]::IsNullOrWhiteSpace($script:CustomAppsListPathOverride)) {
+        return $script:CustomAppsListPathOverride
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:HUNTER_CUSTOM_APPS_LIST)) {
+        return $env:HUNTER_CUSTOM_APPS_LIST
+    }
+
+    return $script:CustomAppsListPath
+}
+
+function Get-HunterAppRemovalCatalog {
+    if ($null -ne $script:AppRemovalCatalog) {
+        return $script:AppRemovalCatalog
+    }
+
+    if ([string]::IsNullOrWhiteSpace($script:AppRemovalCatalogPath) -or -not (Test-Path $script:AppRemovalCatalogPath)) {
+        throw "App removal catalog is unavailable at $($script:AppRemovalCatalogPath)"
+    }
+
+    try {
+        $script:AppRemovalCatalog = Get-Content -Path $script:AppRemovalCatalogPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        return $script:AppRemovalCatalog
+    } catch {
+        throw "Failed to load app removal catalog: $($_.Exception.Message)"
+    }
+}
+
+function Test-HunterProtectedAppSelection {
+    param([Parameter(Mandatory)][string]$Selection)
+
+    $normalizedSelection = $Selection.Trim().Trim('*')
+    if ([string]::IsNullOrWhiteSpace($normalizedSelection)) {
+        return $false
+    }
+
+    foreach ($protectedApp in @((Get-HunterAppRemovalCatalog).ProtectedApps)) {
+        if ([string]$protectedApp.FriendlyName -eq $normalizedSelection) {
+            return $true
+        }
+
+        foreach ($appId in @($protectedApp.AppIds)) {
+            if ([string]$appId -eq $normalizedSelection) {
+                return $true
+            }
+        }
+    }
+
+    return $false
+}
+
+function Test-HunterAppCatalogEntryMatchesSelection {
+    param(
+        [Parameter(Mandatory)][object]$Entry,
+        [Parameter(Mandatory)][string]$Selection
+    )
+
+    $normalizedSelection = $Selection.Trim().Trim('*')
+    if ([string]::IsNullOrWhiteSpace($normalizedSelection)) {
+        return $false
+    }
+
+    if ([string]$Entry.Id -eq $normalizedSelection) {
+        return $true
+    }
+
+    if ([string]$Entry.FriendlyName -eq $normalizedSelection) {
+        return $true
+    }
+
+    foreach ($appId in @($Entry.AppIds)) {
+        if ([string]$appId -eq $normalizedSelection) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Resolve-HunterAppCatalogEntries {
+    param(
+        [string[]]$Groups = @(),
+        [string[]]$Selections = @(),
+        [switch]$SelectedByDefaultOnly
+    )
+
+    $catalog = Get-HunterAppRemovalCatalog
+    $entries = @($catalog.Apps | Where-Object {
+        Test-WindowsBuildInRange -MinBuild $_.MinBuild -MaxBuild $_.MaxBuild
+    })
+
+    if ($Groups.Count -gt 0) {
+        $groupSet = @($Groups | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $entries = @($entries | Where-Object { [string]$_.Group -in $groupSet })
+    }
+
+    if ($SelectedByDefaultOnly) {
+        $entries = @($entries | Where-Object { [bool]$_.SelectedByDefault })
+    }
+
+    if ($Selections.Count -eq 0) {
+        return @($entries)
+    }
+
+    $resolvedEntries = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($selection in @($Selections | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })) {
+        $matchingEntries = @($entries | Where-Object { Test-HunterAppCatalogEntryMatchesSelection -Entry $_ -Selection ([string]$selection) })
+        foreach ($matchingEntry in $matchingEntries) {
+            if (-not ($resolvedEntries | Where-Object { [string]$_.Id -eq [string]$matchingEntry.Id })) {
+                [void]$resolvedEntries.Add($matchingEntry)
+            }
+        }
+    }
+
+    return @($resolvedEntries.ToArray())
+}
+
+function Load-HunterCustomAppsList {
+    $appsListPath = Get-HunterEffectiveCustomAppsListPath
+    if ([string]::IsNullOrWhiteSpace($appsListPath) -or -not (Test-Path $appsListPath)) {
+        return @()
+    }
+
+    $rawSelections = @()
+    try {
+        if ($appsListPath -like '*.json') {
+            $jsonContent = Get-Content -Path $appsListPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            foreach ($appData in @($jsonContent.Apps)) {
+                $appIds = if ($appData.AppId -is [array]) { @($appData.AppId) } else { @($appData.AppId) }
+                if (-not [bool]$appData.SelectedByDefault) {
+                    continue
+                }
+
+                foreach ($appId in @($appIds)) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$appId)) {
+                        $rawSelections += [string]$appId
+                    }
+                }
+            }
+        } else {
+            foreach ($line in @(Get-Content -Path $appsListPath -ErrorAction Stop)) {
+                $selection = [string]$line
+                if ($selection -match '^\s*#' -or [string]::IsNullOrWhiteSpace($selection)) {
+                    continue
+                }
+
+                if ($selection.Contains('#')) {
+                    $selection = $selection.Substring(0, $selection.IndexOf('#'))
+                }
+
+                $selection = $selection.Trim().Trim('*')
+                if (-not [string]::IsNullOrWhiteSpace($selection)) {
+                    $rawSelections += $selection
+                }
+            }
+        }
+    } catch {
+        Write-Log "Failed to read custom apps list at $appsListPath: $($_.Exception.Message)" 'WARN'
+        return @()
+    }
+
+    $validatedSelections = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($selection in @($rawSelections | Select-Object -Unique)) {
+        if (Test-HunterProtectedAppSelection -Selection $selection) {
+            Write-Log "Custom apps list entry '$selection' targets a protected app and will be skipped." 'WARN'
+            continue
+        }
+
+        $matchingEntries = Resolve-HunterAppCatalogEntries -Selections @($selection)
+        if ($matchingEntries.Count -eq 0) {
+            Write-Log "Custom apps list entry '$selection' is not supported by Hunter and will be skipped." 'WARN'
+            continue
+        }
+
+        [void]$validatedSelections.Add([string]$selection)
+    }
+
+    if ($validatedSelections.Count -gt 0) {
+        Write-Log "Loaded custom apps list from $appsListPath with $($validatedSelections.Count) validated selection(s)." 'INFO'
+    }
+
+    return @($validatedSelections.ToArray())
+}
+
+function Invoke-WingetUninstallBestEffort {
+    param(
+        [Parameter(Mandatory)][string]$WingetId,
+        [Parameter(Mandatory)][string]$FriendlyName
+    )
+
+    if ($null -eq (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Log "Skipping WinGet uninstall for $FriendlyName because winget is unavailable." 'INFO'
+        return $false
+    }
+
+    try {
+        $exitCode = Invoke-WingetWithMutex -Arguments @(
+            'uninstall',
+            '--id', $WingetId,
+            '-e',
+            '--accept-source-agreements',
+            '--disable-interactivity'
+        )
+
+        if ([int]$exitCode -eq 0) {
+            Write-Log "WinGet uninstall succeeded for $FriendlyName via id '$WingetId'." 'INFO'
+            return $true
+        }
+
+        Write-Log "WinGet uninstall for $FriendlyName via id '$WingetId' exited with code $exitCode." 'INFO'
+        return $false
+    } catch {
+        Write-Log "Skipping WinGet uninstall for $FriendlyName via id '$WingetId': $($_.Exception.Message)" 'INFO'
+        return $false
+    }
+}
+
+function Invoke-ApplyAppRemovalStrategies {
+    param([object[]]$Entries)
+
+    foreach ($entry in @($Entries)) {
+        if ($null -eq $entry) {
+            continue
+        }
+
+        Write-Log "Applying surgical app removal target: $([string]$entry.FriendlyName)" 'INFO'
+        foreach ($strategy in @($entry.RemovalStrategies)) {
+            switch ([string]$strategy.Type) {
+                'Winget' {
+                    foreach ($wingetId in @($strategy.Ids)) {
+                        if ([string]::IsNullOrWhiteSpace([string]$wingetId)) {
+                            continue
+                        }
+
+                        Invoke-WingetUninstallBestEffort -WingetId ([string]$wingetId) -FriendlyName ([string]$entry.FriendlyName) | Out-Null
+                    }
+                }
+                'AppxPattern' {
+                    Remove-AppxPatterns -Patterns @($strategy.Patterns)
+                }
+            }
+        }
+    }
+
+    return $true
+}
+
+function Get-HunterPhase6AppRemovalEntries {
+    $customSelections = Load-HunterCustomAppsList
+    if ($customSelections.Count -gt 0) {
+        $customEntries = Resolve-HunterAppCatalogEntries -Groups @('Phase6Broad') -Selections $customSelections
+        if ($customEntries.Count -eq 0) {
+            Write-Log 'Custom apps list did not resolve to any supported Phase 6 removal targets; falling back to Hunter defaults.' 'WARN'
+        } else {
+            return @($customEntries)
+        }
+    }
+
+    return @(Resolve-HunterAppCatalogEntries -Groups @('Phase6Broad') -SelectedByDefaultOnly)
 }
 
 # ==============================================================================
@@ -3843,18 +4168,15 @@ function Set-NoSoundsSchemeForAllUsers {
     }
 }
 
-function Invoke-EnableGpuMsiMode {
+function Get-GpuPciDeviceContexts {
     $displayClassGuid = '{4d36e968-e325-11ce-bfc1-08002be10318}'
     $pciEnumPath = 'HKLM:\SYSTEM\CurrentControlSet\Enum\PCI'
 
     if (-not (Test-Path $pciEnumPath)) {
-        Write-Log 'PCI device enumeration path is unavailable; skipping GPU MSI-mode enablement.' 'INFO'
-        return $true
+        return @()
     }
 
-    $gpuDeviceCount = 0
-    $msiEnabledCount = 0
-
+    $gpuContexts = New-Object 'System.Collections.Generic.List[object]'
     foreach ($pciDeviceKey in @(Get-ChildItem -Path $pciEnumPath -ErrorAction SilentlyContinue)) {
         foreach ($pciInstanceKey in @(Get-ChildItem -Path $pciDeviceKey.PSPath -ErrorAction SilentlyContinue)) {
             try {
@@ -3863,25 +4185,140 @@ function Invoke-EnableGpuMsiMode {
                     continue
                 }
 
-                $gpuDeviceCount++
-                $msiPath = "$($pciInstanceKey.PSPath)\Interrupt Management\MessageSignaledInterruptProperties"
-                Set-RegistryValue -Path $msiPath -Name 'MSISupported' -Value 1 -Type DWord | Out-Null
-                if (Test-RegistryValue -Path $msiPath -Name 'MSISupported' -ExpectedValue 1) {
-                    $msiEnabledCount++
+                $friendlyName = @(
+                    [string]$instanceProperties.FriendlyName,
+                    [string]$instanceProperties.DeviceDesc,
+                    [string]$instanceProperties.DriverDesc,
+                    [string]$pciInstanceKey.PSChildName
+                ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+
+                $vendorName = 'Unknown'
+                $hardwareIds = @($instanceProperties.HardwareID)
+                if (([string]::Join(' ', @($hardwareIds))) -match '(?i)VEN_10DE') {
+                    $vendorName = 'NVIDIA'
+                } elseif (([string]::Join(' ', @($hardwareIds))) -match '(?i)VEN_1002|VEN_1022') {
+                    $vendorName = 'AMD'
+                } elseif (([string]::Join(' ', @($hardwareIds))) -match '(?i)VEN_8086') {
+                    $vendorName = 'Intel'
                 }
+
+                [void]$gpuContexts.Add([pscustomobject]@{
+                    Name           = $friendlyName
+                    Vendor         = $vendorName
+                    PciInstancePath = $pciInstanceKey.PSPath
+                    PciInstanceId  = $pciInstanceKey.PSChildName
+                })
             } catch {
-                Write-Log "Failed to enable MSI mode for PCI display device $($pciInstanceKey.PSChildName): $($_.Exception.Message)" 'WARN'
+                Write-Log "Failed to inspect PCI display device $($pciInstanceKey.PSChildName): $($_.Exception.Message)" 'WARN'
             }
         }
     }
 
-    if ($gpuDeviceCount -eq 0) {
+    return @($gpuContexts.ToArray())
+}
+
+function Invoke-EnableGpuMsiMode {
+    $gpuContexts = @(Get-GpuPciDeviceContexts)
+    if ($gpuContexts.Count -eq 0) {
         Write-Log 'No PCI display devices were detected for GPU MSI-mode enablement.' 'INFO'
         return $true
     }
 
-    Write-Log "GPU MSI mode enabled for $msiEnabledCount/$gpuDeviceCount PCI display device(s)." 'INFO'
+    $msiEnabledCount = 0
+    Write-Log ("Detected GPU device(s) for tuning: {0}" -f ((@($gpuContexts | ForEach-Object { '{0} ({1})' -f $_.Name, $_.Vendor }) -join '; '))) 'INFO'
+
+    foreach ($gpuContext in $gpuContexts) {
+        try {
+            $msiPath = "$($gpuContext.PciInstancePath)\Interrupt Management\MessageSignaledInterruptProperties"
+            Set-RegistryValue -Path $msiPath -Name 'MSISupported' -Value 1 -Type DWord | Out-Null
+            if (Test-RegistryValue -Path $msiPath -Name 'MSISupported' -ExpectedValue 1) {
+                $msiEnabledCount++
+            }
+        } catch {
+            Write-Log "Failed to enable MSI mode for PCI display device $($gpuContext.PciInstanceId): $($_.Exception.Message)" 'WARN'
+        }
+    }
+
+    Write-Log "GPU MSI mode enabled for $msiEnabledCount/$($gpuContexts.Count) PCI display device(s)." 'INFO'
     return ($msiEnabledCount -gt 0)
+}
+
+function Invoke-ConfigureGpuInterruptAffinity {
+    $gpuContexts = @(Get-GpuPciDeviceContexts)
+    if ($gpuContexts.Count -eq 0) {
+        return (New-TaskSkipResult -Reason 'No PCI display devices were detected for interrupt-affinity tuning')
+    }
+
+    $logicalProcessorCount = [Environment]::ProcessorCount
+    if ($logicalProcessorCount -le 1) {
+        return (New-TaskSkipResult -Reason 'Interrupt-affinity tuning requires more than one logical processor')
+    }
+
+    if ($logicalProcessorCount -gt 64) {
+        Write-Log "Skipping GPU interrupt-affinity tuning because this system exposes $logicalProcessorCount logical processors and Hunter only applies a single-group affinity mask." 'INFO'
+        return (New-TaskSkipResult -Reason 'Interrupt-affinity tuning is limited to single-group systems (64 logical processors or fewer)')
+    }
+
+    $targetProcessorIndex = $logicalProcessorCount - 1
+    $assignmentMask = [BitConverter]::GetBytes(([UInt64]1 -shl $targetProcessorIndex))
+    $configuredGpuCount = 0
+
+    foreach ($gpuContext in $gpuContexts) {
+        try {
+            $affinityPolicyPath = "$($gpuContext.PciInstancePath)\Interrupt Management\Affinity Policy"
+            Set-RegistryValue -Path $affinityPolicyPath -Name 'DevicePolicy' -Value 4 -Type DWord | Out-Null
+            Set-RegistryValue -Path $affinityPolicyPath -Name 'AssignmentSetOverride' -Value $assignmentMask -Type Binary | Out-Null
+            $configuredGpuCount++
+        } catch {
+            Write-Log "Failed to configure interrupt affinity for GPU device $($gpuContext.PciInstanceId): $($_.Exception.Message)" 'WARN'
+        }
+    }
+
+    if ($configuredGpuCount -eq 0) {
+        return @{
+            Success = $true
+            Status  = 'CompletedWithWarnings'
+            Reason  = 'Interrupt-affinity tuning did not persist for any GPU devices'
+        }
+    }
+
+    Write-Log "GPU interrupt affinity pinned to logical processor $targetProcessorIndex for $configuredGpuCount/$($gpuContexts.Count) GPU device(s)." 'INFO'
+    return $true
+}
+
+function Invoke-AuditResizableBarSupport {
+    $gpuContexts = @(Get-GpuPciDeviceContexts)
+    if ($gpuContexts.Count -eq 0) {
+        return (New-TaskSkipResult -Reason 'No PCI display devices were detected for Resizable BAR auditing')
+    }
+
+    $likelyCapableCount = 0
+    foreach ($gpuContext in $gpuContexts) {
+        $gpuName = [string]$gpuContext.Name
+        $likelyCapable = $false
+
+        switch ([string]$gpuContext.Vendor) {
+            'NVIDIA' {
+                $likelyCapable = ($gpuName -match '\bRTX\s*[345]\d{3}\b')
+            }
+            'AMD' {
+                $likelyCapable = ($gpuName -match '\bRX\s*[6789]\d{3}\b')
+            }
+            'Intel' {
+                $likelyCapable = ($gpuName -match '\bArc\b')
+            }
+        }
+
+        if ($likelyCapable) {
+            $likelyCapableCount++
+            Write-Log "Resizable BAR audit: $gpuName appears to be in a GPU family that commonly supports ReBAR when firmware, VBIOS, and drivers also support it." 'INFO'
+        } else {
+            Write-Log "Resizable BAR audit: no obvious support marker was detected for $gpuName. Firmware and driver validation is still required." 'INFO'
+        }
+    }
+
+    Write-Log 'Resizable BAR audit completed. Hunter does not apply undocumented force-enablement because BAR sizing is negotiated by firmware and display drivers.' 'INFO'
+    return $true
 }
 
 # ==============================================================================
@@ -5572,6 +6009,12 @@ function Invoke-DisableBingStartSearch {
 
 function Invoke-DisableStartRecommendations {
     try {
+        $buildContext = Get-WindowsBuildContext
+        if (-not $buildContext.IsWindows11) {
+            Write-Log "Start recommendations are not applicable on build $($buildContext.CurrentBuild). Skipping." 'INFO'
+            return (New-TaskSkipResult -Reason 'Start recommendations only apply to Windows 11')
+        }
+
         $advPath = 'Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
         $policyPath = 'Software\Policies\Microsoft\Windows\Explorer'
         $policyManagerStartPath = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start'
@@ -5682,24 +6125,30 @@ function Invoke-DisableWidgets {
     }
 
     try {
+        $buildContext = Get-WindowsBuildContext
         Stop-Process -Name Widgets -Force -ErrorAction SilentlyContinue
-        Remove-AppxPatterns -Patterns @('Microsoft.WidgetsPlatformRuntime*', 'MicrosoftWindows.Client.WebExperience*')
-
-        # WinUtil parity: registry keys to fully disable Widgets
-        $widgetsAdvancedPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
-        try {
-            if (-not (Test-Path $widgetsAdvancedPath)) {
-                New-Item -Path (Split-Path -Parent $widgetsAdvancedPath) -Name (Split-Path -Leaf $widgetsAdvancedPath) -Force | Out-Null
-            }
-
-            New-ItemProperty -Path $widgetsAdvancedPath -Name 'TaskbarDa' -Value 0 -PropertyType DWord -Force | Out-Null
-            Write-Log "DWord set for current user: $widgetsAdvancedPath\TaskbarDa = 0"
-        } catch {
-            Write-Log "Skipping per-user Widgets taskbar flag update: $($_.Exception.Message)" 'INFO'
+        $widgetEntries = Resolve-HunterAppCatalogEntries -Selections @('widgets')
+        if ($widgetEntries.Count -gt 0) {
+            Invoke-ApplyAppRemovalStrategies -Entries $widgetEntries | Out-Null
         }
 
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' -Name 'AllowNewsAndInterests' -Value 0 -Type 'DWord'
-        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\NewsAndInterests\AllowNewsAndInterests' -Name 'value' -Value 0 -Type 'DWord'
+
+        if ($buildContext.IsWindows11) {
+            $widgetsAdvancedPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+            try {
+                if (-not (Test-Path $widgetsAdvancedPath)) {
+                    New-Item -Path (Split-Path -Parent $widgetsAdvancedPath) -Name (Split-Path -Leaf $widgetsAdvancedPath) -Force | Out-Null
+                }
+
+                New-ItemProperty -Path $widgetsAdvancedPath -Name 'TaskbarDa' -Value 0 -PropertyType DWord -Force | Out-Null
+                Write-Log "DWord set for current user: $widgetsAdvancedPath\TaskbarDa = 0"
+            } catch {
+                Write-Log "Skipping per-user Widgets taskbar flag update: $($_.Exception.Message)" 'INFO'
+            }
+
+            Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\PolicyManager\default\NewsAndInterests\AllowNewsAndInterests' -Name 'value' -Value 0 -Type 'DWord'
+        }
 
         Request-ExplorerRestart
         return $true
@@ -5716,6 +6165,12 @@ function Invoke-EnableEndTaskOnTaskbar {
     }
 
     try {
+        $buildContext = Get-WindowsBuildContext
+        if (-not (Test-WindowsBuildInRange -MinBuild 22621)) {
+            Write-Log "End Task on taskbar is not applicable on build $($buildContext.CurrentBuild). Skipping." 'INFO'
+            return (New-TaskSkipResult -Reason 'Taskbar End Task is only available on supported Windows 11 builds')
+        }
+
         $taskbarDevPath = 'Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings'
 
         Set-RegistryValue -Path "HKCU:\$taskbarDevPath" -Name 'TaskbarEndTask' -Value 1 -Type DWord
@@ -5795,6 +6250,12 @@ function Invoke-HideSettingsHome {
     WinUtil parity: https://winutil.christitus.com/dev/tweaks/customize-preferences/hidesettingshome/
     #>
     try {
+        $buildContext = Get-WindowsBuildContext
+        if (-not (Test-WindowsBuildInRange -MinBuild 22621)) {
+            Write-Log "Settings home page policy is not applicable on build $($buildContext.CurrentBuild). Skipping." 'INFO'
+            return (New-TaskSkipResult -Reason 'Settings home page policy only applies to supported Windows 11 builds')
+        }
+
         Write-Log 'Hiding Settings home page...' 'INFO'
 
         $regPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'
@@ -5969,6 +6430,7 @@ function Invoke-RemoveEdgeKeepWebView2 {
 
     try {
         Write-Log -Message "Unlocking the official Edge uninstaller and removing Microsoft Edge..." -Level 'INFO'
+        Invoke-ApplyAppRemovalStrategies -Entries (Resolve-HunterAppCatalogEntries -Selections @('edge')) | Out-Null
 
         $setupPath = Get-ChildItem 'C:\Program Files (x86)\Microsoft\Edge\Application\*\Installer\setup.exe' -ErrorAction SilentlyContinue |
             Select-Object -First 1 -ExpandProperty FullName
@@ -5977,6 +6439,12 @@ function Invoke-RemoveEdgeKeepWebView2 {
             'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
         )
         if ([string]::IsNullOrWhiteSpace($setupPath)) {
+            $edgeStillInstalled = @($edgeExecutablePaths | Where-Object { Test-Path $_ }).Count -gt 0
+            if (-not $edgeStillInstalled) {
+                Write-Log -Message 'Edge installer was not found because Edge binaries were already removed.' -Level 'SUCCESS'
+                return $true
+            }
+
             Write-Log -Message 'Edge installer was not found. Skipping Edge removal.' -Level 'INFO'
             return (New-TaskSkipResult -Reason 'Edge installer was not present')
         }
@@ -6075,6 +6543,7 @@ function Invoke-RemoveOneDrive {
 
     try {
         Write-Log -Message "Starting OneDrive removal..." -Level 'INFO'
+        Invoke-ApplyAppRemovalStrategies -Entries (Resolve-HunterAppCatalogEntries -Selections @('onedrive')) | Out-Null
 
         $programFilesRoot = $script:ProgramFilesRoot
         $oneDriveSetup32 = "$env:SystemRoot\SysWOW64\OneDriveSetup.exe"
@@ -6276,22 +6745,27 @@ function Invoke-RemoveCopilot {
     param()
 
     try {
-        Write-Log -Message "Starting Copilot removal..." -Level 'INFO'
+        $buildContext = Get-WindowsBuildContext
+        if (-not (Test-WindowsBuildInRange -MinBuild 22621)) {
+            Write-Log "Copilot removal is not applicable on build $($buildContext.CurrentBuild). Skipping." 'INFO'
+            return (New-TaskSkipResult -Reason 'Copilot is not a supported inbox feature on this Windows build')
+        }
 
-        $copilotAppxPatterns = @('Microsoft.Copilot*', 'Microsoft.Windows.Copilot*')
+        Write-Log -Message "Starting Copilot removal..." -Level 'INFO'
         $copilotRegistrySettings = @(
-            @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot'; Name = 'TurnOffWindowsCopilot'; Value = 1; Type = 'DWord' },
-            @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot'; Name = 'TurnOffWindowsCopilot'; Value = 1; Type = 'DWord' },
-            @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'ShowCopilotButton'; Value = 0; Type = 'DWord' },
-            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\Shell\Copilot'; Name = 'IsCopilotAvailable'; Value = 0; Type = 'DWord' },
-            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\Shell\Copilot'; Name = 'CopilotDisabledReason'; Value = 'IsEnabledForGeographicRegionFailed'; Type = 'String' },
-            @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsCopilot'; Name = 'AllowCopilotRuntime'; Value = 0; Type = 'DWord' },
-            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked'; Name = '{CB3B0003-8088-4EDE-8769-8B354AB2FF8C}'; Value = ''; Type = 'String' },
-            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\Shell\Copilot\BingChat'; Name = 'IsUserEligible'; Value = 0; Type = 'DWord' }
+            @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot'; Name = 'TurnOffWindowsCopilot'; Value = 1; Type = 'DWord'; MinBuild = 22621 },
+            @{ Path = 'HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot'; Name = 'TurnOffWindowsCopilot'; Value = 1; Type = 'DWord'; MinBuild = 22621 },
+            @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'ShowCopilotButton'; Value = 0; Type = 'DWord'; MinBuild = 22621 },
+            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\Shell\Copilot'; Name = 'IsCopilotAvailable'; Value = 0; Type = 'DWord'; MinBuild = 22621 },
+            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\Shell\Copilot'; Name = 'CopilotDisabledReason'; Value = 'IsEnabledForGeographicRegionFailed'; Type = 'String'; MinBuild = 22621 },
+            @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsCopilot'; Name = 'AllowCopilotRuntime'; Value = 0; Type = 'DWord'; MinBuild = 22621 },
+            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked'; Name = '{CB3B0003-8088-4EDE-8769-8B354AB2FF8C}'; Value = ''; Type = 'String'; MinBuild = 22621 },
+            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\Shell\Copilot\BingChat'; Name = 'IsUserEligible'; Value = 0; Type = 'DWord'; MinBuild = 22621 }
         )
 
         Write-Log -Message "Removing Copilot Appx packages..." -Level 'INFO'
-        Remove-AppxPatterns ($copilotAppxPatterns + @('Microsoft.MicrosoftOfficeHub*'))
+        Invoke-ApplyAppRemovalStrategies -Entries (Resolve-HunterAppCatalogEntries -Selections @('copilot')) | Out-Null
+        Remove-AppxPatterns -Patterns @('Microsoft.MicrosoftOfficeHub*')
 
         if (Test-CanUseInlineAppxCommands) {
             $currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -6311,6 +6785,11 @@ function Invoke-RemoveCopilot {
 
         Write-Log -Message "Disabling Copilot via registry..." -Level 'INFO'
         foreach ($setting in $copilotRegistrySettings) {
+            if (-not (Test-WindowsBuildInRange -MinBuild $setting.MinBuild -MaxBuild $setting.MaxBuild)) {
+                Write-Log "Skipping Copilot registry setting $($setting.Path)\$($setting.Name) because it does not apply to build $($buildContext.CurrentBuild)." 'INFO'
+                continue
+            }
+
             Set-RegistryValue -Path $setting.Path -Name $setting.Name -Value $setting.Value -Type $setting.Type
         }
 
@@ -6345,82 +6824,86 @@ function Invoke-NukeBlockApps {
         $startSurfaceShortcutDirs = @(((Get-DesktopShortcutDirectories) + (Get-StartMenuShortcutDirectories)) | Select-Object -Unique)
         $linkedInPatterns = @('*LinkedIn*', '*LinkedInForWindows*')
         $blockedStartPinsPatterns = Get-DefaultBlockedStartPinsPatterns
-
-        # Consolidated AppX removal - single query for all patterns
-        $allAppxRemovalPatterns = @(
-            'Microsoft.OutlookForWindows*', 'microsoft.windowscommunicationsapps*',
-            '*LinkedIn*', '*LinkedInForWindows*',
-            'Microsoft.XboxIdentityProvider*', 'Microsoft.XboxSpeechToTextOverlay*',
-            'Microsoft.GamingApp*', 'Microsoft.Xbox.TCUI*', 'Microsoft.XboxGamingOverlay*',
-            'Microsoft.MicrosoftSolitaireCollection*', '*king.com*', '*CandyCrush*', '*BubbleWitch*', '*MarchofEmpires*',
-            'Microsoft.WindowsFeedbackHub*',
-            'Microsoft.MicrosoftOfficeHub*', 'Microsoft.Office.Desktop*',
-            'Microsoft.BingSearch*', 'Microsoft.BingWeather*', 'Microsoft.BingNews*',
-            'Microsoft.BingFinance*', 'Microsoft.BingSports*', 'Microsoft.MSN.Weather*',
-            'Clipchamp.Clipchamp*', 'Microsoft.Clipchamp*',
-            'Microsoft.News*',
-            'MicrosoftTeams*', 'Microsoft.Teams*', 'MSTeams*',
-            'Microsoft.Todos*',
-            'Microsoft.PowerAutomateDesktop*',
-            'Microsoft.WindowsSoundRecorder*'
-        )
-        Remove-AppxPatterns $allAppxRemovalPatterns
-
-        # LinkedIn specific shortcut/unpin/start-menu operations
-        Write-Log -Message "Removing LinkedIn shortcuts and pins..." -Level 'INFO'
-        Invoke-StartMenuUnpinByPatterns -Patterns $linkedInPatterns
-        Invoke-AppsFolderUninstallByPatterns -Patterns $linkedInPatterns
-        Remove-ShortcutsByPattern -Directories $startSurfaceShortcutDirs -Patterns $linkedInPatterns
-
-        # Disable Game DVR capture (WinUtil parity)
-        Write-Log -Message "Disabling Xbox Game DVR..." -Level 'INFO'
-        Set-DwordBatchForAllUsers -Settings @(
-            @{ SubPath = 'SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR'; Name = 'AppCaptureEnabled'; Value = 0 },
-            @{ SubPath = 'SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR'; Name = 'HistoricalCaptureEnabled'; Value = 0 },
-            @{ SubPath = 'System\GameConfigStore'; Name = 'GameDVR_Enabled'; Value = 0 },
-            @{ SubPath = 'System\GameConfigStore'; Name = 'GameDVR_FSEBehaviorMode'; Value = 2 },
-            @{ SubPath = 'System\GameConfigStore'; Name = 'GameDVR_HonorUserFSEBehaviorMode'; Value = 1 }
-        )
-        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR' -Name 'AllowGameDVR' -Value 0 -Type DWord
-        Set-DwordBatchForAllUsers -Settings @(
-            @{ SubPath = 'Software\Microsoft\GameBar'; Name = 'ShowStartupPanel'; Value = 0 },
-            @{ SubPath = 'Software\Microsoft\GameBar'; Name = 'UseNexusForGameBarEnabled'; Value = 0 }
-        )
-
-        # Teams folder removal
-        Write-Log -Message "Removing Teams folders..." -Level 'INFO'
-        Remove-PathForce "$env:LOCALAPPDATA\Microsoft\Teams"
-        Remove-RegistryValueIfPresent -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'com.squirrel.Teams.Teams'
-        Remove-RegistryValueIfPresent -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Teams'
-        Remove-RegistryValueIfPresent -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'Teams'
-        Remove-ShortcutsByPattern -Directories $startSurfaceShortcutDirs -Patterns @('*Teams*')
-        Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Teams\' -TaskName 'TeamsStartupTask' -DisplayName 'Teams startup task' | Out-Null
-
-        # Start pins policy
-        if (-not (Clear-StaleStartCustomizationPolicies)) {
-            return $false
+        $customSelections = Load-HunterCustomAppsList
+        $usingCustomAppsList = ($customSelections.Count -gt 0)
+        $phase6Targets = if ($usingCustomAppsList) {
+            @(Resolve-HunterAppCatalogEntries -Groups @('Phase6Broad') -Selections $customSelections)
+        } else {
+            @(Resolve-HunterAppCatalogEntries -Groups @('Phase6Broad') -SelectedByDefaultOnly)
         }
 
-        $liveCleanupResult = Invoke-ApplyLiveStartPinCleanup -BlockedPatterns $blockedStartPinsPatterns
-        if (Test-TaskHandlerReturnedFailure -TaskResult $liveCleanupResult) {
-            return $false
+        if ($phase6Targets.Count -eq 0) {
+            Write-Log 'No supported Phase 6 app removal targets were resolved. Skipping broad app removal.' 'INFO'
+            return (New-TaskSkipResult -Reason 'No supported broad app removal targets were selected')
+        }
+
+        $selectedTargetIds = @($phase6Targets | ForEach-Object { [string]$_.Id })
+        Invoke-ApplyAppRemovalStrategies -Entries $phase6Targets | Out-Null
+
+        # LinkedIn specific shortcut/unpin/start-menu operations
+        if ($selectedTargetIds -contains 'linkedin') {
+            Write-Log -Message "Removing LinkedIn shortcuts and pins..." -Level 'INFO'
+            Invoke-StartMenuUnpinByPatterns -Patterns $linkedInPatterns
+            Invoke-AppsFolderUninstallByPatterns -Patterns $linkedInPatterns
+            Remove-ShortcutsByPattern -Directories $startSurfaceShortcutDirs -Patterns $linkedInPatterns
+        }
+
+        # Disable Game DVR capture (WinUtil parity)
+        if ($selectedTargetIds -contains 'xbox') {
+            Write-Log -Message "Disabling Xbox Game DVR..." -Level 'INFO'
+            Set-DwordBatchForAllUsers -Settings @(
+                @{ SubPath = 'SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR'; Name = 'AppCaptureEnabled'; Value = 0 },
+                @{ SubPath = 'SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR'; Name = 'HistoricalCaptureEnabled'; Value = 0 },
+                @{ SubPath = 'System\GameConfigStore'; Name = 'GameDVR_Enabled'; Value = 0 },
+                @{ SubPath = 'System\GameConfigStore'; Name = 'GameDVR_FSEBehaviorMode'; Value = 2 },
+                @{ SubPath = 'System\GameConfigStore'; Name = 'GameDVR_HonorUserFSEBehaviorMode'; Value = 1 }
+            )
+            Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR' -Name 'AllowGameDVR' -Value 0 -Type DWord
+            Set-DwordBatchForAllUsers -Settings @(
+                @{ SubPath = 'Software\Microsoft\GameBar'; Name = 'ShowStartupPanel'; Value = 0 },
+                @{ SubPath = 'Software\Microsoft\GameBar'; Name = 'UseNexusForGameBarEnabled'; Value = 0 }
+            )
+        }
+
+        # Teams folder removal
+        if ($selectedTargetIds -contains 'teams') {
+            Write-Log -Message "Removing Teams folders..." -Level 'INFO'
+            Remove-PathForce "$env:LOCALAPPDATA\Microsoft\Teams"
+            Remove-RegistryValueIfPresent -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'com.squirrel.Teams.Teams'
+            Remove-RegistryValueIfPresent -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Teams'
+            Remove-RegistryValueIfPresent -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'Teams'
+            Remove-ShortcutsByPattern -Directories $startSurfaceShortcutDirs -Patterns @('*Teams*')
+            Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Teams\' -TaskName 'TeamsStartupTask' -DisplayName 'Teams startup task' | Out-Null
+        }
+
+        # Start pins policy
+        $liveCleanupResult = $true
+        if (-not $usingCustomAppsList) {
+            if (-not (Clear-StaleStartCustomizationPolicies)) {
+                return $false
+            }
+
+            $liveCleanupResult = Invoke-ApplyLiveStartPinCleanup -BlockedPatterns $blockedStartPinsPatterns
+            if (Test-TaskHandlerReturnedFailure -TaskResult $liveCleanupResult) {
+                return $false
+            }
         }
 
         # Explorer/Start restart
         Request-ExplorerRestart
 
         # Verification checks
-        if (Test-AppxPatternExists -Patterns $linkedInPatterns) {
+        if (($selectedTargetIds -contains 'linkedin') -and (Test-AppxPatternExists -Patterns $linkedInPatterns)) {
             throw 'LinkedIn packages are still present after removal.'
         }
 
-        if (Test-AppxPatternExists -Patterns @(
+        if (($selectedTargetIds -contains 'xbox') -and (Test-AppxPatternExists -Patterns @(
                 'Microsoft.XboxIdentityProvider*',
                 'Microsoft.XboxSpeechToTextOverlay*',
                 'Microsoft.GamingApp*',
                 'Microsoft.Xbox.TCUI*',
                 'Microsoft.XboxGamingOverlay*'
-            )) {
+            ))) {
             throw 'Xbox or gaming AppX packages are still present after removal.'
         }
 
@@ -7489,7 +7972,7 @@ function Invoke-DisableVirtualizationSecurityOverhead {
 
 function Invoke-ApplyGraphicsSchedulingTweaks {
     try {
-        Write-Log 'Applying graphics scheduling and frame pacing tweaks...' 'INFO'
+        Write-Log 'Applying graphics scheduling, MPO, and frame pacing tweaks...' 'INFO'
 
         $graphicsDriversPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers'
         $dwmPath = 'HKLM:\SOFTWARE\Microsoft\Windows\Dwm'
@@ -7515,6 +7998,8 @@ function Invoke-ApplyGraphicsSchedulingTweaks {
             @{ SubPath = 'System\GameConfigStore'; Name = 'GameDVR_HonorUserFSEBehaviorMode'; Value = 1 }
         )
 
+        Write-Log 'MPO was disabled via OverlayTestMode=5 and windowed-game swap-effect upgrade was enabled.' 'INFO'
+        Write-Log 'Resizable BAR auditing is handled separately because BAR sizing is negotiated by firmware and display drivers on supported hardware.' 'INFO'
         Write-Log 'Graphics scheduling and frame pacing tweaks applied.' 'SUCCESS'
         return $true
     } catch {
@@ -7846,6 +8331,20 @@ function Invoke-ExhaustivePowerTuning {
                 -Value $processorPowerSetting.Value `
                 -Mode $processorPowerSetting.Mode `
                 -Description $processorPowerSetting.Description | Out-Null
+        }
+
+        $buildContext = Get-WindowsBuildContext
+        if ($buildContext.IsWindows11) {
+            foreach ($smtPowerMode in @('AC', 'DC')) {
+                & $invokePowerSettingBestEffort `
+                    -SubGroup 'SUB_PROCESSOR' `
+                    -Setting 'SmtUnparkPolicy' `
+                    -Value '1' `
+                    -Mode $smtPowerMode `
+                    -Description 'SMT thread unpark policy (core-per-thread)' | Out-Null
+            }
+        } else {
+            Write-Log "Skipping SMT unpark policy because build $($buildContext.CurrentBuild) does not expose the Windows 11 SmtUnparkPolicy setting." 'INFO'
         }
 
         # Enable global timer resolution requests
@@ -10235,6 +10734,7 @@ function Register-ResumeTask {
         }
 
         $scriptPath = $MyInvocation.ScriptName
+        $resumeCustomAppsListPath = $null
         if (-not $scriptPath) { $scriptPath = $PSCommandPath }
 
         if (-not $scriptPath) {
@@ -10246,7 +10746,8 @@ function Register-ResumeTask {
                     'src\Hunter\Private\Common\Common.ps1',
                     'src\Hunter\Private\Common\PathPolicy.ps1',
                     'src\Hunter\Private\Execution\Engine.ps1',
-                    'src\Hunter\Private\Infrastructure\NativeSystem.ps1'
+                    'src\Hunter\Private\Infrastructure\NativeSystem.ps1',
+                    'src\Hunter\Config\Apps.json'
                 )
                 $resumeSupportRoot = if (-not [string]::IsNullOrWhiteSpace($script:HunterSourceRoot)) {
                     $script:HunterSourceRoot
@@ -10255,20 +10756,44 @@ function Register-ResumeTask {
                 } else {
                     throw "Could not determine Hunter support root for resume task registration."
                 }
+                $resumeRoot = Split-Path -Parent $script:ResumeScriptPath
                 foreach ($resumeSupportRelativePath in $resumeSupportPaths) {
                     $resumeSupportSourcePath = Join-Path $resumeSupportRoot $resumeSupportRelativePath
-                    $resumeSupportDestinationPath = Join-Path (Split-Path -Parent $script:ResumeScriptPath) $resumeSupportRelativePath
+                    $resumeSupportDestinationPath = Join-Path $resumeRoot $resumeSupportRelativePath
                     Ensure-Directory (Split-Path -Parent $resumeSupportDestinationPath)
                     Copy-Item -Path $resumeSupportSourcePath -Destination $resumeSupportDestinationPath -Force -ErrorAction Stop
                 }
+
+                $effectiveCustomAppsListPath = Get-HunterEffectiveCustomAppsListPath
+                if (-not [string]::IsNullOrWhiteSpace($effectiveCustomAppsListPath) -and (Test-Path $effectiveCustomAppsListPath)) {
+                    $resumeCustomAppsListExtension = [System.IO.Path]::GetExtension($effectiveCustomAppsListPath)
+                    if ([string]::IsNullOrWhiteSpace($resumeCustomAppsListExtension)) {
+                        $resumeCustomAppsListExtension = '.txt'
+                    }
+
+                    $resumeCustomAppsListPath = Join-Path $resumeRoot ("CustomAppsList{0}" -f $resumeCustomAppsListExtension)
+                    Copy-Item -Path $effectiveCustomAppsListPath -Destination $resumeCustomAppsListPath -Force -ErrorAction Stop
+                }
+
                 $scriptPath = $script:ResumeScriptPath
             } else {
                 throw "Could not determine script path for resume task registration."
             }
         }
 
+        $resumeActionArguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -Mode Resume"
+        if (-not [string]::IsNullOrWhiteSpace($resumeCustomAppsListPath)) {
+            $resumeActionArguments += " -CustomAppsListPath `"$resumeCustomAppsListPath`""
+        } elseif (-not [string]::IsNullOrWhiteSpace($script:CustomAppsListPathOverride)) {
+            $resumeActionArguments += " -CustomAppsListPath `"$($script:CustomAppsListPathOverride)`""
+        }
+
+        if ($script:SkipTaskIds.Count -gt 0) {
+            $resumeActionArguments += " -SkipTask `"$((@($script:SkipTaskIds | Select-Object -Unique) -join ','))`""
+        }
+
         $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-            -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -Mode Resume"
+            -Argument $resumeActionArguments
 
         $trigger = New-ScheduledTaskTrigger -AtLogOn
 
@@ -10369,6 +10894,10 @@ function Invoke-Main {
 
     .PARAMETER SkipTask
         Optional task IDs to skip during execution.
+
+    .PARAMETER CustomAppsListPath
+        Optional path to a text or JSON apps list that overrides the default
+        Phase 6 broad-removal catalog selection.
     #>
 
     param(
@@ -10379,7 +10908,9 @@ function Invoke-Main {
 
         [switch]$AutomationSafe,
 
-        [string[]]$SkipTask = @()
+        [string[]]$SkipTask = @(),
+
+        [string]$CustomAppsListPath = ''
     )
 
     $script:StrictMode = [bool]$Strict
@@ -10391,6 +10922,7 @@ function Invoke-Main {
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             Select-Object -Unique
     )
+    $script:CustomAppsListPathOverride = if ([string]::IsNullOrWhiteSpace($CustomAppsListPath)) { $null } else { $CustomAppsListPath }
 
     # Start the run stopwatch immediately — this is the very first executable line
     $script:RunStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -10408,6 +10940,7 @@ function Invoke-Main {
         Ensure-Directory $script:HunterRoot
         Ensure-Directory $script:DownloadDir
         $script:IsAutomationRun = [bool]$AutomationSafe -or $env:GITHUB_ACTIONS -eq 'true' -or $env:HUNTER_AUTOMATION_SAFE -eq '1'
+        $buildContext = Get-WindowsBuildContext
 
         Write-Log "===========================================================" 'INFO'
         Write-Log '              HUNTER v2.0 - Windows Debloater' 'INFO'
@@ -10415,6 +10948,10 @@ function Invoke-Main {
         Write-Log ""
         Write-Log "Execution Mode:  $Mode" 'INFO'
         Write-Log "OS Version:      $([System.Environment]::OSVersion.VersionString)" 'INFO'
+        Write-Log "Windows Build:   $($buildContext.CurrentBuild).$($buildContext.UBR) $(if (-not [string]::IsNullOrWhiteSpace($buildContext.DisplayVersion)) { "($($buildContext.DisplayVersion))" } elseif (-not [string]::IsNullOrWhiteSpace($buildContext.ReleaseId)) { "($($buildContext.ReleaseId))" } else { '' })" 'INFO'
+        if (-not [string]::IsNullOrWhiteSpace($buildContext.ProductName)) {
+            Write-Log "Windows SKU:     $($buildContext.ProductName)" 'INFO'
+        }
         Write-Log "User:            $env:USERNAME on $env:COMPUTERNAME" 'INFO'
         Write-Log "Timestamp:       $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" 'INFO'
         Write-Log "Automation:      $(if ($script:IsAutomationRun) { 'YES' } else { 'NO' })" 'INFO'
@@ -10462,6 +10999,9 @@ function Invoke-Main {
             if ($unknownSkipTaskIds.Count -gt 0) {
                 Write-Log "Unknown task IDs requested for skip: $($unknownSkipTaskIds -join ', ')" 'WARN'
             }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($script:CustomAppsListPathOverride)) {
+            Write-Log "Custom apps list: $($script:CustomAppsListPathOverride)" 'INFO'
         }
 
         Write-Log ""
@@ -10591,6 +11131,7 @@ $scriptStrict = $false
 $scriptLogPath = $null
 $scriptAutomationSafe = $false
 $scriptSkipTasks = @()
+$scriptCustomAppsListPath = $null
 for ($i = 0; $i -lt $args.Count; $i++) {
     if ($args[$i] -eq '-Mode' -and ($i + 1) -lt $args.Count) {
         $scriptMode = $args[$i + 1]
@@ -10611,6 +11152,9 @@ for ($i = 0; $i -lt $args.Count; $i++) {
                 Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
         )
     }
+    elseif ($args[$i] -eq '-CustomAppsListPath' -and ($i + 1) -lt $args.Count) {
+        $scriptCustomAppsListPath = $args[$i + 1]
+    }
 }
 
 # Override log path if provided
@@ -10619,4 +11163,4 @@ if (-not [string]::IsNullOrWhiteSpace($scriptLogPath)) {
 }
 
 # Invoke main orchestrator
-Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -AutomationSafe:$scriptAutomationSafe -SkipTask $scriptSkipTasks
+Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -AutomationSafe:$scriptAutomationSafe -SkipTask $scriptSkipTasks -CustomAppsListPath $scriptCustomAppsListPath
