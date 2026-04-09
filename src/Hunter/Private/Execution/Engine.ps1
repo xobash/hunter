@@ -125,11 +125,20 @@ function Invoke-TaskExecution {
     #>
 
     param(
-        [array]$Tasks
+        [array]$Tasks,
+        [string[]]$SkipTask = @()
     )
 
     try {
         Write-Log "Starting task execution engine..." 'INFO'
+        $requestedSkipTaskIds = @(
+            $SkipTask |
+                ForEach-Object { [string]$_ } |
+                ForEach-Object { $_.Split(',') } |
+                ForEach-Object { $_.Trim() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                Select-Object -Unique
+        )
 
         foreach ($task in $Tasks) {
             $completedCountBeforeTask = @($script:CompletedTasks).Count
@@ -143,6 +152,21 @@ function Invoke-TaskExecution {
                     }
                     $script:TaskResults[$task.TaskId] = @{
                         Status = 'Completed'
+                        Error  = $null
+                    }
+                    Update-ProgressState -Tasks $Tasks
+                    continue
+                }
+
+                if ($requestedSkipTaskIds -contains [string]$task.TaskId) {
+                    Write-Log "Task skipped by user request: $($task.TaskId)" 'INFO'
+                    $task.Status = 'Skipped'
+                    $task.Error = $null
+                    if (-not $script:TaskResults) {
+                        $script:TaskResults = @{}
+                    }
+                    $script:TaskResults[$task.TaskId] = @{
+                        Status = 'Skipped'
                         Error  = $null
                     }
                     Update-ProgressState -Tasks $Tasks

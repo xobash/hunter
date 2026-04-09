@@ -417,19 +417,22 @@ function global:Confirm-InstallerSignature {
     }
 
     $signature = Get-AuthenticodeSignature -FilePath $resolvedFile.Path
-    if ($null -ne $signature -and [string]$signature.Status -eq 'Valid') {
-        return $resolvedFile.Path
-    }
 
     if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
         $actualHash = (Get-FileHash -Path $resolvedFile.Path -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
         $normalizedExpectedHash = $ExpectedSha256.ToLowerInvariant()
-        if ($actualHash -eq $normalizedExpectedHash) {
-            return $resolvedFile.Path
+        if ($actualHash -ne $normalizedExpectedHash) {
+            $signatureStatus = if ($null -eq $signature) { 'Unknown' } else { [string]$signature.Status }
+            throw "$PackageName trust validation failed. Signature status: $signatureStatus. Expected SHA256 $normalizedExpectedHash but received $actualHash"
         }
 
-        $signatureStatus = if ($null -eq $signature) { 'Unknown' } else { [string]$signature.Status }
-        throw "$PackageName trust validation failed. Signature status: $signatureStatus. Expected SHA256 $normalizedExpectedHash but received $actualHash"
+        if ($null -eq $signature -or [string]$signature.Status -ne 'Valid') {
+            return $resolvedFile.Path
+        }
+    }
+
+    if ($null -ne $signature -and [string]$signature.Status -eq 'Valid') {
+        return $resolvedFile.Path
     }
 
     if ($null -eq $signature) {
@@ -1950,8 +1953,9 @@ function Get-ParsecExecutablePath {
 
 function Get-FurMarkDownloadSpec {
     return @{
-        Url      = 'https://geeks3d.com/dl/get/831'
-        FileName = 'FurMarkSetup.exe'
+        Url            = $script:FurMarkDownloadUrl
+        FileName       = $script:FurMarkDownloadFileName
+        ExpectedSha256 = $script:FurMarkSha256
     }
 }
 
@@ -5426,18 +5430,39 @@ function Invoke-ConfigureAutologin {
         }
 
         $autologonPath = Join-Path $script:DownloadDir 'Autologon64.exe'
-        Download-File -Url 'https://live.sysinternals.com/Autologon64.exe' -Destination $autologonPath
+        $validatedAutologonPath = $null
 
-        if (Test-Path $autologonPath) {
-            Ensure-InstallerHelpersLoaded
-            $validatedAutologonPath = Confirm-InstallerSignature -PackageName 'Autologon' -Path $autologonPath
-            Invoke-NativeCommandChecked -FilePath $validatedAutologonPath -ArgumentList @('/accepteula', 'user', '.', $passwordContext.Password) | Out-Null
-            Write-Log "Autologin configured"
-            return $true
-        } else {
-            Write-Log "Autologon64.exe not found after download" 'ERROR'
-            return $false
+        Ensure-InstallerHelpersLoaded
+        $existingAutologon = Get-Item -Path $autologonPath -ErrorAction SilentlyContinue
+        if ($null -ne $existingAutologon -and $existingAutologon.Length -gt 0) {
+            try {
+                $validatedAutologonPath = Confirm-InstallerSignature `
+                    -PackageName 'Autologon' `
+                    -Path $autologonPath `
+                    -ExpectedSha256 $script:Autologon64Sha256
+                Write-Log 'Reusing cached Autologon64.exe after trust validation.' 'INFO'
+            } catch {
+                Write-Log "Cached Autologon64.exe failed trust validation and will be refreshed: $($_.Exception.Message)" 'WARN'
+                Remove-Item -Path $autologonPath -Force -ErrorAction SilentlyContinue
+            }
         }
+
+        if ([string]::IsNullOrWhiteSpace($validatedAutologonPath)) {
+            Download-File -Url 'https://live.sysinternals.com/Autologon64.exe' -Destination $autologonPath -Force:$true | Out-Null
+            if (-not (Test-Path $autologonPath)) {
+                Write-Log "Autologon64.exe not found after download" 'ERROR'
+                return $false
+            }
+
+            $validatedAutologonPath = Confirm-InstallerSignature `
+                -PackageName 'Autologon' `
+                -Path $autologonPath `
+                -ExpectedSha256 $script:Autologon64Sha256
+        }
+
+        Invoke-NativeCommandChecked -FilePath $validatedAutologonPath -ArgumentList @('/accepteula', 'user', '.', $passwordContext.Password) | Out-Null
+        Write-Log "Autologin configured"
+        return $true
 
     } catch {
         Write-Log "Failed to configure autologin : $_" 'ERROR'
@@ -5448,7 +5473,7 @@ function Invoke-ConfigureAutologin {
 function Invoke-EnableDarkMode {
     if (Test-TaskCompleted -TaskId 'core-dark-mode') {
         Write-Log "Dark mode already enabled, skipping"
-        return
+        return (New-TaskSkipResult -Reason 'Dark mode is already enabled')
     }
 
     try {
@@ -5460,8 +5485,10 @@ function Invoke-EnableDarkMode {
         )
 
         Request-ExplorerRestart
+        return $true
     } catch {
         Write-Log "Failed to enable dark mode : $_" 'ERROR'
+        return $false
     }
 }
 
@@ -5521,7 +5548,7 @@ function Invoke-ActivateUltimatePerformance {
 function Invoke-DisableBingStartSearch {
     if (Test-TaskCompleted -TaskId 'startui-bing-search') {
         Write-Log "Bing search already disabled, skipping"
-        return
+        return (New-TaskSkipResult -Reason 'Bing search is already disabled')
     }
 
     try {
@@ -5536,8 +5563,10 @@ function Invoke-DisableBingStartSearch {
             @{ SubPath = $searchPath; Name = 'CortanaConsent'; Value = 0 }
         )
 
+        return $true
     } catch {
         Write-Log "Failed to disable Bing search : $_" 'ERROR'
+        return $false
     }
 }
 
@@ -5611,7 +5640,7 @@ function Invoke-DisableStartRecommendations {
 function Invoke-DisableTaskbarSearchBox {
     if (Test-TaskCompleted -TaskId 'startui-search-box') {
         Write-Log "Taskbar search box already disabled, skipping"
-        return
+        return (New-TaskSkipResult -Reason 'Taskbar search box is already disabled')
     }
 
     try {
@@ -5620,15 +5649,17 @@ function Invoke-DisableTaskbarSearchBox {
         Set-DwordForAllUsers -SubPath $searchPath -Name 'SearchboxTaskbarMode' -Value 0
 
         Request-ExplorerRestart
+        return $true
     } catch {
         Write-Log "Failed to disable taskbar search box : $_" 'ERROR'
+        return $false
     }
 }
 
 function Invoke-DisableTaskViewButton {
     if (Test-TaskCompleted -TaskId 'startui-task-view') {
         Write-Log "Task view button already disabled, skipping"
-        return
+        return (New-TaskSkipResult -Reason 'Task view button is already disabled')
     }
 
     try {
@@ -5637,8 +5668,10 @@ function Invoke-DisableTaskViewButton {
         Set-DwordForAllUsers -SubPath $advPath -Name 'ShowTaskViewButton' -Value 0
 
         Request-ExplorerRestart
+        return $true
     } catch {
         Write-Log "Failed to disable Task view button : $_" 'ERROR'
+        return $false
     }
 }
 
@@ -5699,7 +5732,7 @@ function Invoke-EnableEndTaskOnTaskbar {
 function Invoke-DisableNotificationsTrayCalendar {
     if (Test-TaskCompleted -TaskId 'startui-notifications') {
         Write-Log "Notifications already disabled, skipping"
-        return
+        return (New-TaskSkipResult -Reason 'Notifications are already disabled')
     }
 
     try {
@@ -5841,7 +5874,7 @@ function Invoke-DisableIPv6 {
 function Invoke-SetExplorerHomeThisPC {
     if (Test-TaskCompleted -TaskId 'explorer-home-thispc') {
         Write-Log "Explorer home already set to This PC, skipping"
-        return
+        return (New-TaskSkipResult -Reason 'Explorer home is already set to This PC')
     }
 
     try {
@@ -5885,7 +5918,7 @@ function Invoke-RemoveExplorerGalleryTab {
 function Invoke-RemoveExplorerOneDriveTab {
     if (Test-TaskCompleted -TaskId 'explorer-remove-onedrive') {
         Write-Log "Explorer OneDrive tab already removed, skipping"
-        return
+        return (New-TaskSkipResult -Reason 'Explorer OneDrive tab is already removed')
     }
 
     try {
@@ -5903,7 +5936,7 @@ function Invoke-RemoveExplorerOneDriveTab {
 function Invoke-DisableExplorerAutoFolderDiscovery {
     if (Test-TaskCompleted -TaskId 'explorer-auto-discovery') {
         Write-Log "Explorer auto folder discovery already disabled, skipping"
-        return
+        return (New-TaskSkipResult -Reason 'Explorer auto folder discovery is already disabled')
     }
 
     try {
@@ -8640,6 +8673,11 @@ function Invoke-ParallelInstalls {
                     } else {
                         ''
                     }
+                    $resolvedTarget.ExpectedSha256 = if ($target.ContainsKey('ExpectedSha256') -and -not [string]::IsNullOrWhiteSpace([string]$target.ExpectedSha256)) {
+                        [string]$target.ExpectedSha256
+                    } else {
+                        ''
+                    }
                     $resolvedTarget.DownloadUrl = ''
                     $resolvedTarget.DownloadFileName = ''
 
@@ -8656,6 +8694,11 @@ function Invoke-ParallelInstalls {
 
                         $resolvedTarget.DownloadUrl = $downloadSpec.Url
                         $resolvedTarget.DownloadFileName = $downloadSpec.FileName
+                        if ((($downloadSpec -is [System.Collections.IDictionary] -and $downloadSpec.Contains('ExpectedSha256')) -or
+                            ($null -ne $downloadSpec.PSObject.Properties['ExpectedSha256'])) -and
+                            -not [string]::IsNullOrWhiteSpace([string]$downloadSpec.ExpectedSha256)) {
+                            $resolvedTarget.ExpectedSha256 = [string]$downloadSpec.ExpectedSha256
+                        }
                     }
                 } catch {
                     Write-Log "Failed to resolve install source for $($target.PackageName) : $_" 'ERROR'
@@ -8682,6 +8725,7 @@ function Invoke-ParallelInstalls {
                     RefreshDownloadOnFailure   = $resolvedTarget.RefreshDownloadOnFailure
                     AllowDirectDownloadFallback = $resolvedTarget.AllowDirectDownloadFallback
                     SkipSignatureValidation    = $resolvedTarget.SkipSignatureValidation
+                    ExpectedSha256             = $resolvedTarget.ExpectedSha256
                     AddToPath                  = $resolvedTarget.AddToPath
                     PathProbe                  = $resolvedTarget.PathProbe
                 }
@@ -8777,12 +8821,13 @@ function Invoke-ParallelInstalls {
                             [string]$Path,
                             [string]$InstallerArgs,
                             [int[]]$AdditionalSuccessExitCodes,
-                            [bool]$SkipSignatureValidation = $false
+                            [bool]$SkipSignatureValidation = $false,
+                            [string]$ExpectedSha256 = ''
                         )
 
                         $resolvedFile = Resolve-DownloadedFile -Path $Path
-                        if (-not $SkipSignatureValidation) {
-                            Confirm-InstallerSignature -PackageName $PackageName -Path $resolvedFile.Path | Out-Null
+                        if (-not $SkipSignatureValidation -or -not [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
+                            Confirm-InstallerSignature -PackageName $PackageName -Path $resolvedFile.Path -ExpectedSha256 $ExpectedSha256 | Out-Null
                         }
                         $allowedExitCodes = @((@(0, 3010, 1641) + @($AdditionalSuccessExitCodes)) | Select-Object -Unique)
 
@@ -8833,6 +8878,11 @@ function Invoke-ParallelInstalls {
                             ($null -ne $InstallTarget.PSObject.Properties['SkipSignatureValidation'])) {
                             $skipSignatureValidation = [bool]$InstallTarget.SkipSignatureValidation
                         }
+                        $expectedSha256 = ''
+                        if (($InstallTarget -is [System.Collections.IDictionary] -and $InstallTarget.Contains('ExpectedSha256')) -or
+                            ($null -ne $InstallTarget.PSObject.Properties['ExpectedSha256'])) {
+                            $expectedSha256 = [string]$InstallTarget.ExpectedSha256
+                        }
 
                         switch ($InstallTarget.InstallKind) {
                             'Installer' {
@@ -8841,7 +8891,8 @@ function Invoke-ParallelInstalls {
                                     -Path $FilePath `
                                     -InstallerArgs $InstallTarget.InstallerArgs `
                                     -AdditionalSuccessExitCodes $InstallTarget.AdditionalSuccessExitCodes `
-                                    -SkipSignatureValidation $skipSignatureValidation
+                                    -SkipSignatureValidation $skipSignatureValidation `
+                                    -ExpectedSha256 $expectedSha256
                             }
                             'Portable' {
                                 Install-PortablePackageInternal `
@@ -8943,8 +8994,15 @@ function Invoke-ParallelInstalls {
                             ($null -ne $Target.PSObject.Properties['SkipSignatureValidation'])) {
                             $skipSignatureValidation = [bool]$Target.SkipSignatureValidation
                         }
+                        $expectedSha256 = ''
+                        if (($Target -is [System.Collections.IDictionary] -and $Target.Contains('ExpectedSha256')) -or
+                            ($null -ne $Target.PSObject.Properties['ExpectedSha256'])) {
+                            $expectedSha256 = [string]$Target.ExpectedSha256
+                        }
 
-                        if ($skipSignatureValidation) {
+                        if ($skipSignatureValidation -and -not [string]::IsNullOrWhiteSpace($expectedSha256)) {
+                            $result.Message = "$($Target.PackageName) installed via direct download (SHA256 verified)"
+                        } elseif ($skipSignatureValidation) {
                             $result.Message = "$($Target.PackageName) installed via direct download (signature validation intentionally skipped)"
                         } else {
                             $result.Message = "$($Target.PackageName) installed via direct download"
@@ -9870,7 +9928,10 @@ function Invoke-RunDiskCleanup {
 
         Write-Log "Running Windows Disk Cleanup using the WinUtil sequence..." 'INFO'
 
-        Invoke-NativeCommandChecked -FilePath 'cleanmgr.exe' -ArgumentList @('/d', 'C:', '/VERYLOWDISK') | Out-Null
+        $cleanMgrExitCode = Invoke-NativeCommandChecked -FilePath 'cleanmgr.exe' -ArgumentList @('/d', 'C:', '/VERYLOWDISK') -SuccessExitCodes @(0, 1)
+        if ($cleanMgrExitCode -eq 1) {
+            Write-Log 'Windows Disk Cleanup returned exit code 1; continuing because this is non-fatal on some systems.' 'INFO'
+        }
         Invoke-NativeCommandChecked -FilePath 'Dism.exe' -ArgumentList @('/online', '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase') | Out-Null
 
         Write-Log 'Windows Disk Cleanup sequence completed successfully.' 'SUCCESS'
@@ -10305,6 +10366,9 @@ function Invoke-Main {
     .PARAMETER AutomationSafe
         Suppresses UI-only launches and reboot/sign-out actions so the script can
         complete unattended in automation environments.
+
+    .PARAMETER SkipTask
+        Optional task IDs to skip during execution.
     #>
 
     param(
@@ -10313,10 +10377,20 @@ function Invoke-Main {
 
         [switch]$Strict,
 
-        [switch]$AutomationSafe
+        [switch]$AutomationSafe,
+
+        [string[]]$SkipTask = @()
     )
 
     $script:StrictMode = [bool]$Strict
+    $script:SkipTaskIds = @(
+        $SkipTask |
+            ForEach-Object { [string]$_ } |
+            ForEach-Object { $_.Split(',') } |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Select-Object -Unique
+    )
 
     # Start the run stopwatch immediately — this is the very first executable line
     $script:RunStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -10380,6 +10454,15 @@ function Invoke-Main {
         $tasks = Build-Tasks
         $script:TaskList = @($tasks)
         Write-Log "Task list built: $($tasks.Count) total tasks" 'SUCCESS'
+        if (@($script:SkipTaskIds).Count -gt 0) {
+            Write-Log "User-requested task skips: $($script:SkipTaskIds -join ', ')" 'INFO'
+
+            $knownTaskIds = @($tasks | ForEach-Object { [string]$_.TaskId })
+            $unknownSkipTaskIds = @($script:SkipTaskIds | Where-Object { $_ -notin $knownTaskIds })
+            if ($unknownSkipTaskIds.Count -gt 0) {
+                Write-Log "Unknown task IDs requested for skip: $($unknownSkipTaskIds -join ', ')" 'WARN'
+            }
+        }
 
         Write-Log ""
 
@@ -10407,7 +10490,7 @@ function Invoke-Main {
         # EXECUTE ALL TASKS
         # --------------------------------------------------------------------
 
-        Invoke-TaskExecution -Tasks $tasks
+        Invoke-TaskExecution -Tasks $tasks -SkipTask $script:SkipTaskIds
 
         Write-Log ""
         Write-Log '==== EXECUTION COMPLETE ====' 'INFO'
@@ -10507,6 +10590,7 @@ $scriptMode = 'Execute'
 $scriptStrict = $false
 $scriptLogPath = $null
 $scriptAutomationSafe = $false
+$scriptSkipTasks = @()
 for ($i = 0; $i -lt $args.Count; $i++) {
     if ($args[$i] -eq '-Mode' -and ($i + 1) -lt $args.Count) {
         $scriptMode = $args[$i + 1]
@@ -10520,6 +10604,13 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     elseif ($args[$i] -eq '-AutomationSafe') {
         $scriptAutomationSafe = $true
     }
+    elseif ($args[$i] -eq '-SkipTask' -and ($i + 1) -lt $args.Count) {
+        $scriptSkipTasks += @(
+            [string]$args[$i + 1] -split ',' |
+                ForEach-Object { $_.Trim() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        )
+    }
 }
 
 # Override log path if provided
@@ -10528,4 +10619,4 @@ if (-not [string]::IsNullOrWhiteSpace($scriptLogPath)) {
 }
 
 # Invoke main orchestrator
-Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -AutomationSafe:$scriptAutomationSafe
+Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -AutomationSafe:$scriptAutomationSafe -SkipTask $scriptSkipTasks

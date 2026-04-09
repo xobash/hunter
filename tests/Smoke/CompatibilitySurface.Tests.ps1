@@ -37,6 +37,7 @@ Describe 'Wrapper compatibility surface' {
         $modeParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'Mode' } | Select-Object -First 1
         $strictParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'Strict' } | Select-Object -First 1
         $automationSafeParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'AutomationSafe' } | Select-Object -First 1
+        $skipTaskParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'SkipTask' } | Select-Object -First 1
 
         $validateSetAttribute = $modeParameter.Attributes | Where-Object {
             $_.TypeName.FullName -eq 'ValidateSet'
@@ -46,7 +47,7 @@ Describe 'Wrapper compatibility surface' {
     }
 
     It 'keeps Invoke-Main with the expected parameters' {
-        @($invokeMainParameters.Name.VariablePath.UserPath) -join '|' | Should -BeExactly 'Mode|Strict|AutomationSafe'
+        @($invokeMainParameters.Name.VariablePath.UserPath) -join '|' | Should -BeExactly 'Mode|Strict|AutomationSafe|SkipTask'
     }
 
     It 'keeps Mode defaulted to Execute' {
@@ -57,9 +58,10 @@ Describe 'Wrapper compatibility surface' {
         ($modeValidateSetValues -join '|') | Should -BeExactly 'Execute|Resume'
     }
 
-    It 'keeps Strict and AutomationSafe as switches' {
+    It 'keeps Strict and AutomationSafe as switches and SkipTask as string array' {
         $strictParameter.StaticType.Name | Should -BeExactly 'SwitchParameter'
         $automationSafeParameter.StaticType.Name | Should -BeExactly 'SwitchParameter'
+        $skipTaskParameter.StaticType.Name | Should -BeExactly 'String[]'
     }
 
     It 'keeps raw wrapper defaults intact' {
@@ -67,6 +69,7 @@ Describe 'Wrapper compatibility surface' {
         $sourceText | Should -Match "\\$scriptStrict = \\$false"
         $sourceText | Should -Match "\\$scriptLogPath = \\$null"
         $sourceText | Should -Match "\\$scriptAutomationSafe = \\$false"
+        $sourceText | Should -Match "\\$scriptSkipTasks = @\\("
     }
 
     It 'keeps raw wrapper argument parsing for all supported options' {
@@ -74,6 +77,7 @@ Describe 'Wrapper compatibility surface' {
         $sourceText | Should -Match "\$args\[\$i\] -eq '-Strict'"
         $sourceText | Should -Match "\$args\[\$i\] -eq '-LogPath'"
         $sourceText | Should -Match "\$args\[\$i\] -eq '-AutomationSafe'"
+        $sourceText | Should -Match "\$args\[\$i\] -eq '-SkipTask'"
     }
 
     It 'keeps the LogPath override behavior' {
@@ -81,7 +85,7 @@ Describe 'Wrapper compatibility surface' {
     }
 
     It 'keeps the wrapper invoking Invoke-Main with parsed arguments' {
-        $sourceText | Should -Match 'Invoke-Main -Mode \$scriptMode -Strict:\$scriptStrict -AutomationSafe:\$scriptAutomationSafe'
+        $sourceText | Should -Match 'Invoke-Main -Mode \$scriptMode -Strict:\$scriptStrict -AutomationSafe:\$scriptAutomationSafe -SkipTask \$scriptSkipTasks'
     }
 
     It 'keeps remote bootstrap support for irm pipe iex execution' {
