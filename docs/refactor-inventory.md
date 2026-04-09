@@ -46,7 +46,7 @@ This document records the current observable structure of `hunter.ps1` before an
 
 ## Task Catalog
 
-Current task count in `Build-Tasks`: `62`
+Current task count in `Build-Tasks`: `65`
 
 ### Phase 1
 - `preflight-internet`

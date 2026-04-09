@@ -31,6 +31,7 @@ $script:ExecutableResolverNextAttemptAt = @{}
 $script:WindowsBuildContext = $null
 $script:AppRemovalCatalog = $null
 $script:IsAutomationRun = $false
+$script:DisableIPv6Requested = $false
 $script:TaskbarReconcilePending = $false
 $script:DefaultTaskbarPinsRemoved = $false
 $script:EdgeShortcutsRemoved = $false
@@ -72,6 +73,6 @@ $script:Autologon64Sha256  = '5d96bbc4e5b726d87c7cf547f5fe98f8f05434ec2130bd60cb
 $script:FurMarkDownloadUrl = 'https://geeks3d.com/downloads/2025/fm2/2_10_dbc69dd0a08da5ff09169a4fc759ddaa/FurMark_2.10.2_Win64_Setup.exe'
 $script:FurMarkDownloadFileName = 'FurMark_2.10.2_Win64_Setup.exe'
 $script:FurMarkSha256      = '88C07E0C674676BB486D3D46D73605925983B3AFA8F292A2D9707AD919A3EA9B'
-$script:WallpaperSourceUrl = 'https://drive.google.com/file/d/1YoHVPNm8sfC_ZOETNQP77JbDIlkHTH_O/view?usp=sharing'
+$script:WallpaperSourceUrl = 'https://w.wallhaven.cc/full/85/wallhaven-85vv1y.png'
 $script:ResolvedWallpaperAssetUrl = $null
 $script:SelfScriptContent  = $null

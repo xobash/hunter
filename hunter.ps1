@@ -135,10 +135,16 @@ function New-HunterRandomPassword {
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     try {
         $chars = New-Object 'System.Collections.Generic.List[char]'
+        $alphabetLength = [uint64]$alphabet.Length
+        $unbiasedUpperBound = ([uint64][uint32]::MaxValue + 1) - (([uint64][uint32]::MaxValue + 1) % $alphabetLength)
         for ($i = 0; $i -lt [Math]::Max($Length, 16); $i++) {
             $bytes = New-Object byte[] 4
-            $rng.GetBytes($bytes)
-            $index = [Math]::Abs([BitConverter]::ToUInt32($bytes, 0) % $alphabet.Length)
+            do {
+                $rng.GetBytes($bytes)
+                $candidate = [uint64][BitConverter]::ToUInt32($bytes, 0)
+            } while ($candidate -ge $unbiasedUpperBound)
+
+            $index = [int]($candidate % $alphabetLength)
             [void]$chars.Add($alphabet[$index])
         }
 
@@ -576,11 +582,8 @@ function Set-RegistryValue {
         [string]$Type = 'String'
     )
     try {
-        $parentPath = Split-Path -Parent $Path
-        $leaf = Split-Path -Leaf $Path
-
-        if (-not (Test-Path $Path)) {
-            New-Item -Path $parentPath -Name $leaf -Force | Out-Null
+        if (-not (Ensure-RegistryKeyPath -Path $Path)) {
+            throw "Failed to create registry path $Path"
         }
 
         Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type $Type -Force
@@ -588,6 +591,28 @@ function Set-RegistryValue {
         return $true
     } catch {
         Write-Log "Failed to set registry $Path\$Name : $_" 'ERROR'
+        return $false
+    }
+}
+
+function Ensure-RegistryKeyPath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or (Test-Path $Path)) {
+        return $true
+    }
+
+    $parentPath = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($parentPath) -and $parentPath -ne $Path -and -not (Test-Path $parentPath)) {
+        if (-not (Ensure-RegistryKeyPath -Path $parentPath)) {
+            return $false
+        }
+    }
+
+    try {
+        New-Item -Path $Path -Force | Out-Null
+        return $true
+    } catch {
         return $false
     }
 }
@@ -6306,6 +6331,11 @@ function Invoke-DisableIPv6 {
     WinUtil parity: https://winutil.christitus.com/dev/tweaks/z--advanced-tweaks---caution/disableipv6/
     #>
     try {
+        if (-not $script:DisableIPv6Requested) {
+            Write-Log 'Skipping IPv6 disable by default. Pass -DisableIPv6 or set HUNTER_DISABLE_IPV6=1 to opt in.' 'INFO'
+            return (New-TaskSkipResult -Reason 'IPv6 disable is opt-in because some remote access and gaming services rely on IPv6')
+        }
+
         Write-Log 'Disabling IPv6...' 'INFO'
 
         # Set DisabledComponents = 255 (0xFF) to disable all IPv6 components
@@ -6931,7 +6961,7 @@ function Invoke-DisableInkingTyping {
         if ((Test-RegistryValue -Path $inkingPath -Name 'RestrictImplicitTextCollection' -ExpectedValue 1) -and
             (Test-RegistryValue -Path $inkingPath -Name 'RestrictImplicitInkCollection' -ExpectedValue 1)) {
             Write-Log -Message "Inking/typing already disabled. Skipping." -Level 'INFO'
-            return
+            return $true
         }
 
         Set-DwordBatchForAllUsers -Settings @(
@@ -6942,9 +6972,11 @@ function Invoke-DisableInkingTyping {
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsInkWorkspace' -Name 'AllowWindowsInkWorkspace' -Value 0 -Type DWord
 
         Write-Log -Message "Inking and typing personalization disabled." -Level 'INFO'
+        return $true
     }
     catch {
         Write-Log -Message "Error in Invoke-DisableInkingTyping: $_" -Level 'ERROR'
+        return $false
     }
 }
 
@@ -6962,15 +6994,17 @@ function Invoke-DisableDeliveryOptimization {
         $doPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization'
         if (Test-RegistryValue -Path $doPath -Name 'DODownloadMode' -ExpectedValue 0) {
             Write-Log -Message "Delivery Optimization already disabled. Skipping." -Level 'INFO'
-            return
+            return $true
         }
 
         Set-RegistryValue -Path $doPath -Name 'DODownloadMode' -Value 0 -Type 'DWord'
 
         Write-Log -Message "Delivery Optimization disabled." -Level 'INFO'
+        return $true
     }
     catch {
         Write-Log -Message "Error in Invoke-DisableDeliveryOptimization: $_" -Level 'ERROR'
+        return $false
     }
 }
 
@@ -7091,7 +7125,7 @@ function Invoke-DisableActivityHistory {
             (Test-RegistryValue -Path 'HKCU:\Software\Microsoft\Clipboard' -Name 'EnableCloudClipboard' -ExpectedValue 0) -and
             (Test-RegistryValue -Path 'HKCU:\Software\Microsoft\Clipboard' -Name 'CloudClipboardAutomaticUpload' -ExpectedValue 0)) {
             Write-Log -Message "Activity history already disabled. Skipping." -Level 'INFO'
-            return
+            return $true
         }
 
         Set-RegistryValue -Path $systemPath -Name 'EnableActivityFeed' -Value 0 -Type 'DWord'
@@ -7106,9 +7140,11 @@ function Invoke-DisableActivityHistory {
         )
 
         Write-Log -Message "Activity history disabled." -Level 'INFO'
+        return $true
     }
     catch {
         Write-Log -Message "Error in Invoke-DisableActivityHistory: $_" -Level 'ERROR'
+        return $false
     }
 }
 
@@ -7310,7 +7346,7 @@ function Invoke-DisableHibernation {
         $powerPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Power'
         if (Test-RegistryValue -Path $powerPath -Name 'HibernateEnabled' -ExpectedValue 0) {
             Write-Log -Message "Hibernation already disabled. Skipping." -Level 'INFO'
-            return
+            return $true
         }
 
         # Disable via powercfg
@@ -7540,15 +7576,17 @@ function Invoke-BlockAdobeNetworkTraffic {
 
         if ($alreadyBlocked) {
             Write-Log -Message "Adobe hosts already blocked. Skipping." -Level 'INFO'
-            return
+            return $true
         }
 
         Add-HostsEntries -Hostnames $adobeHosts
 
         Write-Log -Message "Adobe network traffic blocked." -Level 'INFO'
+        return $true
     }
     catch {
         Write-Log -Message "Error in Invoke-BlockAdobeNetworkTraffic: $_" -Level 'ERROR'
+        return $false
     }
 }
 
@@ -7594,7 +7632,6 @@ function Invoke-SetServiceProfileManual {
             'WbioSrvc',                 # Windows Biometric Service — not needed on gaming PCs
             'WerSvc',
             'WpcMonSvc',                # Parental Controls — not needed
-            'WSearch',
             'wisvc',                     # Windows Insider Service — not needed
             'XblAuthManager',
             'xbgm',
@@ -7783,7 +7820,7 @@ function Invoke-SetServiceProfileManual {
             Write-Log 'Printer detected; Print Spooler will remain automatic.' 'INFO'
         }
 
-        $autoDelayedServices = @('BITS')
+        $autoDelayedServices = @('BITS', 'WSearch')
         $alreadyConfigured = $true
 
         foreach ($svc in $disabledServices) {
@@ -10898,6 +10935,10 @@ function Invoke-Main {
     .PARAMETER CustomAppsListPath
         Optional path to a text or JSON apps list that overrides the default
         Phase 6 broad-removal catalog selection.
+
+    .PARAMETER DisableIPv6
+        Opt in to Hunter's legacy IPv6-disable task. By default Hunter now
+        preserves IPv6 because some remote-access and gaming services rely on it.
     #>
 
     param(
@@ -10910,7 +10951,9 @@ function Invoke-Main {
 
         [string[]]$SkipTask = @(),
 
-        [string]$CustomAppsListPath = ''
+        [string]$CustomAppsListPath = '',
+
+        [switch]$DisableIPv6
     )
 
     $script:StrictMode = [bool]$Strict
@@ -10923,6 +10966,7 @@ function Invoke-Main {
             Select-Object -Unique
     )
     $script:CustomAppsListPathOverride = if ([string]::IsNullOrWhiteSpace($CustomAppsListPath)) { $null } else { $CustomAppsListPath }
+    $script:DisableIPv6Requested = [bool]$DisableIPv6 -or $env:HUNTER_DISABLE_IPV6 -eq '1'
 
     # Start the run stopwatch immediately — this is the very first executable line
     $script:RunStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -11132,6 +11176,7 @@ $scriptLogPath = $null
 $scriptAutomationSafe = $false
 $scriptSkipTasks = @()
 $scriptCustomAppsListPath = $null
+$scriptDisableIPv6 = $false
 for ($i = 0; $i -lt $args.Count; $i++) {
     if ($args[$i] -eq '-Mode' -and ($i + 1) -lt $args.Count) {
         $scriptMode = $args[$i + 1]
@@ -11155,6 +11200,9 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     elseif ($args[$i] -eq '-CustomAppsListPath' -and ($i + 1) -lt $args.Count) {
         $scriptCustomAppsListPath = $args[$i + 1]
     }
+    elseif ($args[$i] -eq '-DisableIPv6') {
+        $scriptDisableIPv6 = $true
+    }
 }
 
 # Override log path if provided
@@ -11163,4 +11211,4 @@ if (-not [string]::IsNullOrWhiteSpace($scriptLogPath)) {
 }
 
 # Invoke main orchestrator
-Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -AutomationSafe:$scriptAutomationSafe -SkipTask $scriptSkipTasks -CustomAppsListPath $scriptCustomAppsListPath
+Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -AutomationSafe:$scriptAutomationSafe -SkipTask $scriptSkipTasks -CustomAppsListPath $scriptCustomAppsListPath -DisableIPv6:$scriptDisableIPv6

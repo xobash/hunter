@@ -629,7 +629,7 @@ function Build-Tasks {
         -TaskId 'tweaks-ipv6' `
         -Phase '7' `
         -ApplyHandler { Invoke-DisableIPv6 } `
-        -Description 'Disable IPv6 on all adapters'
+        -Description 'Disable IPv6 on all adapters when explicitly requested'
 
     # -------------------------------------------------------------------------
     # PHASE 8: EXTERNAL TOOLS
