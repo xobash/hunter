@@ -143,16 +143,18 @@ function Invoke-PowerCfgValueBestEffort {
     $operation = if ($Mode -eq 'AC') { '/setacvalueindex' } else { '/setdcvalueindex' }
     $unsupportedPattern = '(?i)does not exist|invalid parameter|not supported|not available'
 
-    $queryOutput = @(& $PowerCfgPath /query $Scheme $SubGroup $Setting 2>&1)
+    $queryOutput = & $PowerCfgPath /query $Scheme $SubGroup $Setting 2>&1
     $queryExitCode = [int]$LASTEXITCODE
+    $queryOutput = @($queryOutput)
     $queryText = [string]::Join(' ', @($queryOutput | ForEach-Object { [string]$_ })).Trim()
     if ($queryExitCode -ne 0 -or $queryText -match $unsupportedPattern) {
         Write-Log "Skipped power setting ${settingLabel} ($Mode): unavailable on this system." 'INFO'
         return $false
     }
 
-    $setOutput = @(& $PowerCfgPath $operation $Scheme $SubGroup $Setting $Value 2>&1)
+    $setOutput = & $PowerCfgPath $operation $Scheme $SubGroup $Setting $Value 2>&1
     $setExitCode = [int]$LASTEXITCODE
+    $setOutput = @($setOutput)
     $setText = [string]::Join(' ', @($setOutput | ForEach-Object { [string]$_ })).Trim()
     if ($setExitCode -ne 0 -or $setText -match $unsupportedPattern) {
         $detail = if ([string]::IsNullOrWhiteSpace($setText)) {

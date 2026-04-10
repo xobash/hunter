@@ -17,10 +17,10 @@ $script:HunterSourceRoot = $null
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/main'
 $script:BootstrapIntegrityHashes = @{
     'src\Hunter\Private\Bootstrap\Config.ps1'       = '69217f9febbc51a96480c4477c20a47e26dabc1f92ae0be571e968fa9e2c98ba'
-    'src\Hunter\Private\Common\Common.ps1'          = 'c986df9289ebfddbb4f7369b7804f9dd2fc980540d97c78a66da669de3cb273f'
+    'src\Hunter\Private\Common\Common.ps1'          = '4bce2aee8a7c56ba188ba9238b495e10b4727727c4330dfa171364185aa57f5b'
     'src\Hunter\Private\Common\PathPolicy.ps1'      = 'b0d41621d6405049efc4b34ce765fd610f26a3c0c0136dfe9d6568a4a15c8df1'
     'src\Hunter\Private\Execution\Engine.ps1'       = '8263ad04324a9d9f764d481ed35f97b7912a970988b6d3229fa04c5819946566'
-    'src\Hunter\Private\Infrastructure\NativeSystem.ps1' = 'fb2a3b2ab5f164922636a9be11a045627203f222d6293504941b6a4e8d1b6970'
+    'src\Hunter\Private\Infrastructure\NativeSystem.ps1' = '326676f71da575447b5d3abf786cd3290dbb7537db12c7cc951996bb2852d467'
     'src\Hunter\Config\Apps.json'                   = '4ae47cb48a5d927245154ca92a4c9898aa076c3b244535cadf68668d92112cfc'
 }
 $hunterBootstrapRelativePaths = @(
@@ -56,7 +56,13 @@ if (-not $canUseLocalHunterPrivateLayers) {
             throw "No embedded bootstrap integrity hash exists for $hunterPrivateRelativePath"
         }
 
-        $hunterPrivateResponse = Invoke-WebRequest -Uri $hunterPrivateUri -UseBasicParsing -ErrorAction Stop
+        $hunterPrivateResponse = Invoke-WebRequest `
+            -Uri $hunterPrivateUri `
+            -UseBasicParsing `
+            -MaximumRedirection 10 `
+            -TimeoutSec 120 `
+            -Headers @{ 'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Hunter/2.0' } `
+            -ErrorAction Stop
         $hunterPrivateContent = $hunterPrivateResponse.Content
         if ($hunterPrivateContent -is [byte[]]) {
             $hunterPrivateContent = [System.Text.Encoding]::UTF8.GetString($hunterPrivateContent)
@@ -379,7 +385,7 @@ function Show-YesNoDialog {
 
         return ($dialogResult -eq [System.Windows.Forms.DialogResult]::Yes)
     } catch {
-        Write-Log "Failed to show confirmation dialog '$Title': $($_.Exception.Message)" 'WARN'
+        Add-RunInfrastructureIssue -Message "Failed to show confirmation dialog '$Title': $($_.Exception.Message). Defaulting to No." -Level 'WARN'
         return $false
     }
 }
@@ -478,8 +484,9 @@ function Test-WingetFunctional {
     }
 
     try {
-        $versionOutput = @(& $wingetCommand.Source --version 2>&1)
+        $versionOutput = & $wingetCommand.Source --version 2>&1
         $exitCode = [int]$LASTEXITCODE
+        $versionOutput = @($versionOutput)
         $versionText = [string]::Join(' ', @($versionOutput | ForEach-Object { [string]$_ })).Trim()
         $parsedVersion = ConvertTo-HunterVersionOrNull -VersionText $versionText
         $minimumWingetVersion = ConvertTo-HunterVersionOrNull -VersionText $script:WingetMinimumVersion
@@ -525,30 +532,18 @@ function Invoke-EnsureWingetMinVersion {
         $minimumWingetVersion = ConvertTo-HunterVersionOrNull -VersionText $script:WingetMinimumVersion
         if ($null -eq $minimumWingetVersion) {
             Write-Log "Hunter could not parse its configured minimum winget version '$($script:WingetMinimumVersion)'." 'WARN'
-            return @{
-                Success = $true
-                Status  = 'CompletedWithWarnings'
-                Reason  = 'Configured minimum winget version could not be parsed'
-            }
+            return (New-TaskWarningResult -Reason 'Configured minimum winget version could not be parsed')
         }
 
         $wingetStatus = Test-WingetFunctional
         if (-not $wingetStatus.Available) {
             Write-Log "winget minimum-version check could not run because winget is unavailable: $($wingetStatus.Message)" 'WARN'
-            return @{
-                Success = $true
-                Status  = 'CompletedWithWarnings'
-                Reason  = 'winget is not currently available for version validation'
-            }
+            return (New-TaskWarningResult -Reason 'winget is not currently available for version validation')
         }
 
         if ($null -eq $wingetStatus.ParsedVersion) {
             Write-Log "winget responded but Hunter could not parse its version string '$($wingetStatus.Version)'." 'WARN'
-            return @{
-                Success = $true
-                Status  = 'CompletedWithWarnings'
-                Reason  = 'winget version string could not be parsed'
-            }
+            return (New-TaskWarningResult -Reason 'winget version string could not be parsed')
         }
 
         if ($wingetStatus.ParsedVersion -ge $minimumWingetVersion) {
@@ -558,11 +553,7 @@ function Invoke-EnsureWingetMinVersion {
 
         Write-Log "winget $($wingetStatus.ParsedVersion) is below Hunter's minimum version requirement of $minimumWingetVersion. Attempting App Installer refresh..." 'WARN'
         if (-not (Install-WingetFromOfficialBundle)) {
-            return @{
-                Success = $true
-                Status  = 'CompletedWithWarnings'
-                Reason  = "winget $($wingetStatus.ParsedVersion) is below the supported minimum version and App Installer refresh failed"
-            }
+            return (New-TaskWarningResult -Reason "winget $($wingetStatus.ParsedVersion) is below the supported minimum version and App Installer refresh failed")
         }
 
         $retestedWingetStatus = Test-WingetFunctional
@@ -572,18 +563,10 @@ function Invoke-EnsureWingetMinVersion {
         }
 
         Write-Log "winget refresh completed but the current version is still '$($retestedWingetStatus.Version)', which does not satisfy Hunter's minimum version requirement of $minimumWingetVersion." 'WARN'
-        return @{
-            Success = $true
-            Status  = 'CompletedWithWarnings'
-            Reason  = 'winget is still below Hunter’s minimum supported version after refresh'
-        }
+        return (New-TaskWarningResult -Reason 'winget is still below Hunter’s minimum supported version after refresh')
     } catch {
         Write-Log "Failed to validate Hunter's minimum winget version: $($_.Exception.Message)" 'WARN'
-        return @{
-            Success = $true
-            Status  = 'CompletedWithWarnings'
-            Reason  = 'winget minimum-version validation failed unexpectedly'
-        }
+        return (New-TaskWarningResult -Reason 'winget minimum-version validation failed unexpectedly')
     }
 }
 
@@ -605,11 +588,13 @@ Add-AppxPackage -Path $BundlePath -ErrorAction Stop
 '@
 
         Set-Content -Path $installerScriptPath -Value $installerScript -Encoding UTF8 -Force
-        $installerOutput = @(& $desktopPowerShellPath -NoProfile -ExecutionPolicy Bypass -File $installerScriptPath -BundlePath $bundlePath 2>&1)
-        if ([int]$LASTEXITCODE -ne 0) {
+        $installerOutput = & $desktopPowerShellPath -NoProfile -ExecutionPolicy Bypass -File $installerScriptPath -BundlePath $bundlePath 2>&1
+        $installerExitCode = [int]$LASTEXITCODE
+        $installerOutput = @($installerOutput)
+        if ($installerExitCode -ne 0) {
             $installerMessage = [string]::Join(' ', @($installerOutput | ForEach-Object { [string]$_ })).Trim()
             if ([string]::IsNullOrWhiteSpace($installerMessage)) {
-                $installerMessage = "App Installer bootstrap exited with code $LASTEXITCODE."
+                $installerMessage = "App Installer bootstrap exited with code $installerExitCode."
             }
 
             throw $installerMessage
@@ -788,7 +773,9 @@ function global:Write-InstallerHelperWarning {
 
     try {
         [Console]::Error.WriteLine("[Hunter] $Message")
-    } catch { }
+    } catch {
+        Write-Host "[Hunter] $Message"
+    }
 }
 
 function global:Invoke-WithNamedSemaphore {
@@ -880,11 +867,46 @@ function global:Get-DownloadedFileType {
     return 'Unknown'
 }
 
+function global:Test-DownloadedFileLooksLikeUnexpectedHtmlResponse {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) {
+        return $false
+    }
+
+    $extension = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
+    if ($extension -in @('.htm', '.html', '.mhtml')) {
+        return $false
+    }
+
+    $sampleLength = 4096
+    $buffer = New-Object byte[] $sampleLength
+    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+
+    try {
+        $bytesRead = $stream.Read($buffer, 0, $buffer.Length)
+    } finally {
+        $stream.Dispose()
+    }
+
+    if ($bytesRead -le 0) {
+        return $false
+    }
+
+    $sampleText = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $bytesRead)
+    $trimmedText = $sampleText.TrimStart([char]0xFEFF, [char]0x0000, ' ', "`t", "`r", "`n")
+    return ($trimmedText -match '^(?i)(<!doctype\s+html|<html\b|<head\b|<body\b|<title\b)')
+}
+
 function global:Resolve-DownloadedFile {
     param([string]$Path)
 
     if (-not (Test-Path $Path)) {
         throw "Downloaded file not found: $Path"
+    }
+
+    if (Test-DownloadedFileLooksLikeUnexpectedHtmlResponse -Path $Path) {
+        throw "Downloaded file at $Path appears to be an HTML error page rather than the expected package payload."
     }
 
     $type = Get-DownloadedFileType -Path $Path
@@ -1090,6 +1112,9 @@ function Set-RegistryValue {
         }
 
         Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type $Type -Force
+        if (-not (Test-RegistryValue -Path $Path -Name $Name -ExpectedValue $Value)) {
+            throw "Registry read-back verification failed for $Path\$Name"
+        }
         Write-Log "Registry set: $Path\$Name = $Value ($Type)"
         return $true
     } catch {
@@ -1149,10 +1174,49 @@ function Test-RegistryValue {
         if ($null -eq $ExpectedValue) {
             return $true
         }
-        return $prop.$Name -eq $ExpectedValue
+        return (Test-HunterValueEquals -ActualValue $prop.$Name -ExpectedValue $ExpectedValue)
     } catch {
         return $false
     }
+}
+
+function Test-HunterValueEquals {
+    param(
+        [object]$ActualValue,
+        [object]$ExpectedValue
+    )
+
+    if ($ActualValue -is [byte[]] -and $ExpectedValue -is [byte[]]) {
+        if ($ActualValue.Length -ne $ExpectedValue.Length) {
+            return $false
+        }
+
+        for ($index = 0; $index -lt $ActualValue.Length; $index++) {
+            if ($ActualValue[$index] -ne $ExpectedValue[$index]) {
+                return $false
+            }
+        }
+
+        return $true
+    }
+
+    if (($ActualValue -is [System.Array]) -or ($ExpectedValue -is [System.Array])) {
+        $actualItems = @($ActualValue)
+        $expectedItems = @($ExpectedValue)
+        if ($actualItems.Count -ne $expectedItems.Count) {
+            return $false
+        }
+
+        for ($index = 0; $index -lt $actualItems.Count; $index++) {
+            if (-not (Test-HunterValueEquals -ActualValue $actualItems[$index] -ExpectedValue $expectedItems[$index])) {
+                return $false
+            }
+        }
+
+        return $true
+    }
+
+    return ($ActualValue -eq $ExpectedValue)
 }
 
 function Set-DwordForAllUsers {
@@ -1293,15 +1357,44 @@ function Invoke-RegHiveCommandWithRetry {
         [int]$MaxAttempts = 5
     )
 
+    $regExePath = Get-NativeSystemExecutablePath -FileName 'reg.exe'
+    $resolvedHivePath = Resolve-RegistryHivePath -HiveName $HiveName
+
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-        if ($Action -eq 'Load') {
-            & reg load $HiveName $HivePath 2>$null
+        $hiveIsLoaded = if (-not [string]::IsNullOrWhiteSpace($resolvedHivePath)) {
+            Test-Path $resolvedHivePath
         } else {
-            & reg unload $HiveName 2>$null
+            $false
         }
 
-        $exitCode = $LASTEXITCODE
-        if ($exitCode -eq 0) {
+        if ($Action -eq 'Load' -and $hiveIsLoaded) {
+            return $true
+        }
+
+        if ($Action -eq 'Unload' -and -not $hiveIsLoaded) {
+            return $true
+        }
+
+        try {
+            $regArguments = @($Action.ToLowerInvariant(), $HiveName)
+            if ($Action -eq 'Load') {
+                $regArguments += $HivePath
+            }
+
+            $regProcess = Start-Process -FilePath $regExePath -ArgumentList $regArguments -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+            $exitCode = [int]$regProcess.ExitCode
+        } catch {
+            $exitCode = -1
+        }
+
+        $hiveStateMatches = if (-not [string]::IsNullOrWhiteSpace($resolvedHivePath)) {
+            $currentlyLoaded = Test-Path $resolvedHivePath
+            (($Action -eq 'Load' -and $currentlyLoaded) -or ($Action -eq 'Unload' -and -not $currentlyLoaded))
+        } else {
+            ($exitCode -eq 0)
+        }
+
+        if ($hiveStateMatches) {
             return $true
         }
 
@@ -1312,6 +1405,24 @@ function Invoke-RegHiveCommandWithRetry {
     }
 
     return $false
+}
+
+function Resolve-RegistryHivePath {
+    param([string]$HiveName)
+
+    if ([string]::IsNullOrWhiteSpace($HiveName)) {
+        return $null
+    }
+
+    if ($HiveName -match '^HKU\\(.+)$') {
+        return "Registry::HKEY_USERS\$($Matches[1])"
+    }
+
+    if ($HiveName -match '^HKLM\\(.+)$') {
+        return "Registry::HKEY_LOCAL_MACHINE\$($Matches[1])"
+    }
+
+    return $null
 }
 
 function Set-RegistryValueForAllUsers {
@@ -1333,6 +1444,9 @@ function Set-RegistryValueForAllUsers {
         }
 
         New-ItemProperty -Path $currentUserPath -Name $Name -Value $Value -PropertyType $Type -Force | Out-Null
+        if (-not (Test-RegistryValue -Path $currentUserPath -Name $Name -ExpectedValue $Value)) {
+            throw "Registry read-back verification failed for current user ${currentUserPath}\$Name"
+        }
         Write-Log "$Type set for current user: $currentUserPath\$Name = $Value"
     } catch {
         Write-Log "Failed to set $Type for current user $SubPath\$Name : $_" 'ERROR'
@@ -1363,6 +1477,9 @@ function Set-RegistryValueForAllUsers {
             }
 
             New-ItemProperty -Path $regPath -Name $Name -Value $Value -PropertyType $Type -Force | Out-Null
+            if (-not (Test-RegistryValue -Path $regPath -Name $Name -ExpectedValue $Value)) {
+                throw "Registry read-back verification failed for Default user ${regPath}\$Name"
+            }
             Write-Log "$Type set for Default user: $SubPath\$Name = $Value"
         }
     } catch {
@@ -1399,6 +1516,9 @@ function Set-DwordBatchForAllUsers {
             }
 
             New-ItemProperty -Path $currentUserPath -Name $setting.Name -Value $setting.Value -PropertyType DWord -Force | Out-Null
+            if (-not (Test-RegistryValue -Path $currentUserPath -Name $setting.Name -ExpectedValue $setting.Value)) {
+                throw "Registry read-back verification failed for current user ${currentUserPath}\$($setting.Name)"
+            }
             Write-Log "DWord set for current user: $currentUserPath\$($setting.Name) = $($setting.Value)"
         } catch {
             Write-Log "Failed to set DWord for current user $($setting.SubPath)\$($setting.Name) : $_" 'ERROR'
@@ -1433,6 +1553,9 @@ function Set-DwordBatchForAllUsers {
                     }
 
                     New-ItemProperty -Path $regPath -Name $setting.Name -Value $setting.Value -PropertyType DWord -Force | Out-Null
+                    if (-not (Test-RegistryValue -Path $regPath -Name $setting.Name -ExpectedValue $setting.Value)) {
+                        throw "Registry read-back verification failed for Default user ${regPath}\$($setting.Name)"
+                    }
                     Write-Log "DWord set for Default user: $($setting.SubPath)\$($setting.Name) = $($setting.Value)"
                 } catch {
                     Write-Log "Failed to set DWord for Default user $($setting.SubPath)\$($setting.Name) : $_" 'ERROR'
@@ -1482,24 +1605,34 @@ function Remove-PathForce {
         }
 
         if (Test-Path $Path) {
-            $allowedTargets = @(
-                "$env:LOCALAPPDATA\Microsoft\OneDrive",
-                "$env:ProgramData\Microsoft OneDrive",
-                (Join-Path $script:ProgramFilesRoot 'Microsoft OneDrive'),
-                "$env:LOCALAPPDATA\Microsoft\Teams"
-            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            $programFilesX86Root = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+            $approvedRoots = @(
+                $(if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { Join-Path $env:LOCALAPPDATA 'Microsoft' }),
+                $env:ProgramData,
+                $script:ProgramFilesRoot,
+                $programFilesX86Root
+            ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+            $approvedMarkers = @('OneDrive', 'Microsoft OneDrive', 'Teams', 'EdgeUpdate')
 
             $resolvedPath = [System.IO.Path]::GetFullPath($Path)
-            $isAllowed = $false
-            foreach ($allowedTarget in $allowedTargets) {
-                $resolvedAllowedTarget = [System.IO.Path]::GetFullPath($allowedTarget)
-                if ($resolvedPath.StartsWith($resolvedAllowedTarget, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    $isAllowed = $true
+            $isUnderApprovedRoot = $false
+            foreach ($approvedRoot in $approvedRoots) {
+                $resolvedApprovedRoot = [System.IO.Path]::GetFullPath($approvedRoot)
+                if ($resolvedPath.StartsWith($resolvedApprovedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $isUnderApprovedRoot = $true
                     break
                 }
             }
 
-            if (-not $isAllowed) {
+            $hasApprovedMarker = $false
+            foreach ($approvedMarker in $approvedMarkers) {
+                if ($resolvedPath -match ("(?i)(?:\\|/){0}(?:\\|/|$)" -f [regex]::Escape($approvedMarker))) {
+                    $hasApprovedMarker = $true
+                    break
+                }
+            }
+
+            if (-not ($isUnderApprovedRoot -and $hasApprovedMarker)) {
                 throw "Refusing privileged delete outside approved application cleanup roots: $Path"
             }
 
@@ -2159,7 +2292,7 @@ function Invoke-WingetUninstallBestEffort {
     )
 
     if ($null -eq (Get-Command winget -ErrorAction SilentlyContinue)) {
-        Write-Log "Skipping WinGet uninstall for $FriendlyName because winget is unavailable." 'INFO'
+        Write-Log "Skipping WinGet uninstall for $FriendlyName because winget is unavailable." 'WARN'
         return $false
     }
 
@@ -2177,10 +2310,10 @@ function Invoke-WingetUninstallBestEffort {
             return $true
         }
 
-        Write-Log "WinGet uninstall for $FriendlyName via id '$WingetId' exited with code $exitCode." 'INFO'
+        Write-Log "WinGet uninstall for $FriendlyName via id '$WingetId' exited with code $exitCode." 'WARN'
         return $false
     } catch {
-        Write-Log "Skipping WinGet uninstall for $FriendlyName via id '$WingetId': $($_.Exception.Message)" 'INFO'
+        Write-Log "Skipping WinGet uninstall for $FriendlyName via id '$WingetId': $($_.Exception.Message)" 'WARN'
         return $false
     }
 }
@@ -2188,12 +2321,16 @@ function Invoke-WingetUninstallBestEffort {
 function Invoke-ApplyAppRemovalStrategies {
     param([object[]]$Entries)
 
+    $completedWithWarnings = $false
+    $completedWithFailures = $false
     foreach ($entry in @($Entries)) {
         if ($null -eq $entry) {
             continue
         }
 
         Write-Log "Applying surgical app removal target: $([string]$entry.FriendlyName)" 'INFO'
+        $entryAttemptedStrategy = $false
+        $entryConfirmedStrategy = $false
         foreach ($strategy in @($entry.RemovalStrategies)) {
             switch ([string]$strategy.Type) {
                 'Winget' {
@@ -2202,18 +2339,53 @@ function Invoke-ApplyAppRemovalStrategies {
                             continue
                         }
 
-                        Invoke-WingetUninstallBestEffort -WingetId ([string]$wingetId) -FriendlyName ([string]$entry.FriendlyName) | Out-Null
+                        $entryAttemptedStrategy = $true
+                        if (Invoke-WingetUninstallBestEffort -WingetId ([string]$wingetId) -FriendlyName ([string]$entry.FriendlyName)) {
+                            $entryConfirmedStrategy = $true
+                        } else {
+                            $completedWithWarnings = $true
+                        }
                     }
                 }
                 'AppxPattern' {
+                    $entryAttemptedStrategy = $true
                     if ($null -ne $strategy.PSObject.Properties['PatternJustification'] -and
                         -not [string]::IsNullOrWhiteSpace([string]$strategy.PatternJustification)) {
                         Write-Log "Wildcard AppX match rationale for $([string]$entry.FriendlyName): $([string]$strategy.PatternJustification)" 'INFO'
                     }
-                    Remove-AppxPatterns -Patterns @($strategy.Patterns)
+
+                    $appxResult = Remove-AppxPatterns -Patterns @($strategy.Patterns)
+                    if ($null -ne $appxResult) {
+                        if ([bool]$appxResult.Success) {
+                            $entryConfirmedStrategy = $true
+                        } else {
+                            $completedWithFailures = $true
+                        }
+
+                        if (@($appxResult.Warnings).Count -gt 0) {
+                            $completedWithWarnings = $true
+                        }
+
+                        if (@($appxResult.Failures).Count -gt 0) {
+                            $completedWithFailures = $true
+                        }
+                    }
                 }
             }
         }
+
+        if ($entryAttemptedStrategy -and -not $entryConfirmedStrategy) {
+            Write-Log "Hunter could not confirm removal for $([string]$entry.FriendlyName); one or more best-effort strategies failed or returned warnings." 'WARN'
+            $completedWithWarnings = $true
+        }
+    }
+
+    if ($completedWithFailures) {
+        return $false
+    }
+
+    if ($completedWithWarnings) {
+        return (New-TaskWarningResult -Reason 'One or more surgical app removal operations completed with warnings')
     }
 
     return $true
@@ -2343,9 +2515,16 @@ $result | ConvertTo-Json -Depth 6 -Compress
 '@
 
         Set-Content -Path $runnerPath -Value $runnerScript -Encoding UTF8 -Force
-        $operationOutput = @(& $desktopPowerShellPath -NoProfile -ExecutionPolicy Bypass -File $runnerPath -PatternsPath $patternsPath -Mode $Mode 2>&1)
-        if ([int]$LASTEXITCODE -ne 0) {
-            throw "$desktopPowerShellPath exited with code $LASTEXITCODE"
+        $operationOutput = & $desktopPowerShellPath -NoProfile -ExecutionPolicy Bypass -File $runnerPath -PatternsPath $patternsPath -Mode $Mode 2>&1
+        $operationExitCode = [int]$LASTEXITCODE
+        $operationOutput = @($operationOutput)
+        if ($operationExitCode -ne 0) {
+            $operationMessage = [string]::Join(' ', @($operationOutput | ForEach-Object { [string]$_ })).Trim()
+            if ([string]::IsNullOrWhiteSpace($operationMessage)) {
+                $operationMessage = "$desktopPowerShellPath exited with code $operationExitCode"
+            }
+
+            throw $operationMessage
         }
 
         $operationJson = [string]::Join([Environment]::NewLine, @($operationOutput | ForEach-Object { [string]$_ })).Trim()
@@ -2362,27 +2541,40 @@ $result | ConvertTo-Json -Depth 6 -Compress
 
 function Remove-AppxPatterns {
     param([string[]]$Patterns)
-    if ($null -eq $Patterns -or $Patterns.Count -eq 0) { return }
+    $summary = [ordered]@{
+        Success             = $true
+        RemovedInstalled    = @()
+        RemovedProvisioned  = @()
+        Warnings            = @()
+        Failures            = @()
+    }
+    if ($null -eq $Patterns -or $Patterns.Count -eq 0) { return [pscustomobject]$summary }
 
     if (-not (Test-CanUseInlineAppxCommands)) {
         try {
             $desktopResult = Invoke-AppxPatternOperationViaWindowsPowerShell -Patterns $Patterns -Mode Remove
             foreach ($removedPackageName in @($desktopResult.RemovedInstalled)) {
                 Write-Log "AppX package removed: $removedPackageName"
+                $summary.RemovedInstalled += @($removedPackageName)
             }
 
             foreach ($removedProvisionedName in @($desktopResult.RemovedProvisioned)) {
                 Write-Log "AppX provisioned package removed: $removedProvisionedName"
+                $summary.RemovedProvisioned += @($removedProvisionedName)
             }
 
             foreach ($warning in @($desktopResult.Warnings)) {
-                Write-Log $warning 'INFO'
+                Write-Log $warning 'WARN'
+                $summary.Warnings += @($warning)
             }
         } catch {
-            Write-Log "Skipping AppX package removal because the desktop AppX helper failed: $($_.Exception.Message)" 'WARN'
+            $failureMessage = "AppX package removal helper failed: $($_.Exception.Message)"
+            Write-Log $failureMessage 'ERROR'
+            $summary.Success = $false
+            $summary.Failures += @($failureMessage)
         }
 
-        return
+        return [pscustomobject]$summary
     }
 
     $installedPackages = @(Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue)
@@ -2395,12 +2587,17 @@ function Remove-AppxPatterns {
                 try {
                     Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction Stop
                     Write-Log "AppX package removed: $($package.Name)"
+                    $summary.RemovedInstalled += @([string]$package.Name)
                 } catch {
                     $errorMessage = $_.Exception.Message
                     if ($errorMessage -match '0x80070032|part of Windows and cannot be uninstalled|The request is not supported|The system cannot find the path specified|cannot find the file specified') {
-                        Write-Log "Skipping built-in AppX package $($package.Name): $errorMessage" 'INFO'
+                        $warningMessage = "Skipping built-in AppX package $($package.Name): $errorMessage"
+                        Write-Log $warningMessage 'WARN'
+                        $summary.Warnings += @($warningMessage)
                     } else {
-                        Write-Log "Failed to remove AppX package $($package.Name) : $_" 'WARN'
+                        $warningMessage = "Failed to remove AppX package $($package.Name) : $_"
+                        Write-Log $warningMessage 'WARN'
+                        $summary.Warnings += @($warningMessage)
                     }
                 }
             }
@@ -2410,19 +2607,29 @@ function Remove-AppxPatterns {
                 try {
                     Remove-AppxProvisionedPackage -Online -PackageName $package.PackageName -ErrorAction Stop
                     Write-Log "AppX provisioned package removed: $($package.DisplayName)"
+                    $summary.RemovedProvisioned += @([string]$package.DisplayName)
                 } catch {
                     $errorMessage = $_.Exception.Message
                     if ($errorMessage -match '0x80070032|part of Windows and cannot be uninstalled|The request is not supported|The system cannot find the path specified|cannot find the file specified') {
-                        Write-Log "Skipping built-in AppX provisioned package $($package.DisplayName): $errorMessage" 'INFO'
+                        $warningMessage = "Skipping built-in AppX provisioned package $($package.DisplayName): $errorMessage"
+                        Write-Log $warningMessage 'WARN'
+                        $summary.Warnings += @($warningMessage)
                     } else {
-                        Write-Log "Failed to remove AppX provisioned package $($package.DisplayName) : $_" 'WARN'
+                        $warningMessage = "Failed to remove AppX provisioned package $($package.DisplayName) : $_"
+                        Write-Log $warningMessage 'WARN'
+                        $summary.Warnings += @($warningMessage)
                     }
                 }
             }
         } catch {
-            Write-Log "Failed to process AppX pattern $pattern : $_" 'ERROR'
+            $failureMessage = "Failed to process AppX pattern $pattern : $_"
+            Write-Log $failureMessage 'ERROR'
+            $summary.Success = $false
+            $summary.Failures += @($failureMessage)
         }
     }
+
+    return [pscustomobject]$summary
 }
 
 function Test-AppxPatternExists {
@@ -2460,6 +2667,58 @@ function Test-AppxPatternExists {
 # ==============================================================================
 # DOWNLOAD HELPER
 # ==============================================================================
+
+function Test-DownloadedFileLooksLikeUnexpectedHtmlResponse {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) {
+        return $false
+    }
+
+    $extension = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
+    if ($extension -in @('.htm', '.html', '.mhtml')) {
+        return $false
+    }
+
+    try {
+        $sampleLength = 4096
+        $buffer = New-Object byte[] $sampleLength
+        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            $bytesRead = $stream.Read($buffer, 0, $buffer.Length)
+        } finally {
+            $stream.Dispose()
+        }
+
+        if ($bytesRead -le 0) {
+            return $false
+        }
+
+        $sampleText = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $bytesRead)
+        $trimmedText = $sampleText.TrimStart([char]0xFEFF, [char]0x0000, ' ', "`t", "`r", "`n")
+        return ($trimmedText -match '^(?i)(<!doctype\s+html|<html\b|<head\b|<body\b|<title\b)')
+    } catch {
+        return $false
+    }
+}
+
+function Assert-DownloadedFileLooksValid {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$SourceDescription = 'download'
+    )
+
+    $fileInfo = Get-Item -Path $Path -ErrorAction Stop
+    if ($fileInfo.Length -le 0) {
+        throw 'Downloaded file is empty'
+    }
+
+    if (Test-DownloadedFileLooksLikeUnexpectedHtmlResponse -Path $Path) {
+        throw "$SourceDescription returned an HTML response instead of the expected payload."
+    }
+
+    return $fileInfo
+}
 
 function Download-File {
     param(
@@ -2502,10 +2761,7 @@ function Download-File {
                 throw "curl.exe exited with code $LASTEXITCODE"
             }
 
-            $curlFile = Get-Item -Path $Destination -ErrorAction Stop
-            if ($curlFile.Length -le 0) {
-                throw 'Downloaded file is empty'
-            }
+            Assert-DownloadedFileLooksValid -Path $Destination -SourceDescription "curl.exe download from $Url" | Out-Null
 
             Write-Log "File downloaded: $Destination"
             return $Destination
@@ -2516,7 +2772,7 @@ function Download-File {
     }
 
     try {
-        Invoke-WebRequest `
+        $webResponse = Invoke-WebRequest `
             -Uri $Url `
             -OutFile $Destination `
             -UseBasicParsing `
@@ -2525,11 +2781,16 @@ function Download-File {
             -Headers @{ 'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Hunter/2.0' } `
             -ErrorAction Stop
 
-        $webFile = Get-Item -Path $Destination -ErrorAction Stop
-        if ($webFile.Length -le 0) {
-            throw 'Downloaded file is empty'
+        $contentType = ''
+        if ($null -ne $webResponse -and $null -ne $webResponse.Headers -and $null -ne $webResponse.Headers['Content-Type']) {
+            $contentType = [string]$webResponse.Headers['Content-Type']
         }
 
+        if (-not [string]::IsNullOrWhiteSpace($contentType) -and $contentType -match '(?i)text/html|application/xhtml\+xml') {
+            throw "Unexpected HTTP content type '$contentType' returned for $Url"
+        }
+
+        Assert-DownloadedFileLooksValid -Path $Destination -SourceDescription "Invoke-WebRequest download from $Url" | Out-Null
         Write-Log "File downloaded: $Destination"
         return $Destination
     } catch {
@@ -2584,10 +2845,42 @@ function Start-ExternalAssetPrefetchJob {
         Set-StrictMode -Version Latest
         $ErrorActionPreference = 'Stop'
         $ProgressPreference = 'SilentlyContinue'
+        $tlsWarning = $null
 
         try {
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        } catch { }
+        } catch {
+            $tlsWarning = "TLS 1.2 enforcement failed: $($_.Exception.Message)"
+        }
+
+        function Test-PrefetchFileLooksLikeUnexpectedHtmlResponse {
+            param([string]$Path)
+
+            if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) {
+                return $false
+            }
+
+            $extension = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
+            if ($extension -in @('.htm', '.html', '.mhtml')) {
+                return $false
+            }
+
+            $buffer = New-Object byte[] 4096
+            $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            try {
+                $bytesRead = $stream.Read($buffer, 0, $buffer.Length)
+            } finally {
+                $stream.Dispose()
+            }
+
+            if ($bytesRead -le 0) {
+                return $false
+            }
+
+            $sampleText = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $bytesRead)
+            $trimmedText = $sampleText.TrimStart([char]0xFEFF, [char]0x0000, ' ', "`t", "`r", "`n")
+            return ($trimmedText -match '^(?i)(<!doctype\s+html|<html\b|<head\b|<body\b|<title\b)')
+        }
 
         $tempPath = "$Destination.prefetch"
 
@@ -2618,35 +2911,57 @@ function Start-ExternalAssetPrefetchJob {
                 throw 'Downloaded file is empty'
             }
 
+            if (Test-PrefetchFileLooksLikeUnexpectedHtmlResponse -Path $tempPath) {
+                throw 'Downloaded response was HTML instead of the expected asset payload.'
+            }
+
             $finalFile = Get-Item -Path $Destination -ErrorAction SilentlyContinue
             if ($null -ne $finalFile -and $finalFile.Length -gt 0) {
                 Remove-Item -Path $tempPath -Force -ErrorAction SilentlyContinue
+                $successMessage = 'Already downloaded by another task.'
+                if (-not [string]::IsNullOrWhiteSpace($tlsWarning)) {
+                    $successMessage = "$successMessage $tlsWarning"
+                }
                 return [pscustomobject]@{
                     AssetKey    = $AssetKey
                     AssetName   = $AssetName
                     Destination = $Destination
                     Success     = $true
-                    Message     = 'Already downloaded by another task.'
+                    HadWarning  = (-not [string]::IsNullOrWhiteSpace($tlsWarning))
+                    Message     = $successMessage
                 }
             }
 
             Move-Item -Path $tempPath -Destination $Destination -Force
+            $successMessage = 'Prefetch completed.'
+            if (-not [string]::IsNullOrWhiteSpace($tlsWarning)) {
+                $successMessage = "$successMessage $tlsWarning"
+            }
 
             return [pscustomobject]@{
                 AssetKey    = $AssetKey
                 AssetName   = $AssetName
                 Destination = $Destination
                 Success     = $true
-                Message     = 'Prefetch completed.'
+                HadWarning  = (-not [string]::IsNullOrWhiteSpace($tlsWarning))
+                Message     = $successMessage
             }
         } catch {
             Remove-Item -Path $tempPath -Force -ErrorAction SilentlyContinue
+            $errorMessages = New-Object 'System.Collections.Generic.List[string]'
+            if (-not [string]::IsNullOrWhiteSpace($tlsWarning)) {
+                [void]$errorMessages.Add($tlsWarning)
+            }
+            if (-not [string]::IsNullOrWhiteSpace($_.Exception.Message)) {
+                [void]$errorMessages.Add($_.Exception.Message)
+            }
             return [pscustomobject]@{
                 AssetKey    = $AssetKey
                 AssetName   = $AssetName
                 Destination = $Destination
                 Success     = $false
-                Message     = $_.Exception.Message
+                HadWarning  = (-not [string]::IsNullOrWhiteSpace($tlsWarning))
+                Message     = (($errorMessages | Select-Object -Unique) -join ' | ')
             }
         }
     } -ArgumentList $AssetKey, $AssetName, $Url, $Destination
@@ -2686,6 +3001,14 @@ function Invoke-CollectCompletedExternalAssetPrefetchJobs {
                     continue
                 }
 
+                if ($outputItem -is [System.Collections.IDictionary] -and
+                    $outputItem.Contains('AssetKey') -and
+                    $outputItem.Contains('Success') -and
+                    $outputItem.Contains('Message')) {
+                    $result = [pscustomobject]$outputItem
+                    continue
+                }
+
                 $propertyNames = @($outputItem.PSObject.Properties | Select-Object -ExpandProperty Name)
                 if (($propertyNames -contains 'AssetKey') -and
                     ($propertyNames -contains 'Success') -and
@@ -2695,35 +3018,28 @@ function Invoke-CollectCompletedExternalAssetPrefetchJobs {
             }
 
             if ($null -eq $result) {
-                $finalFile = Get-Item -Path $jobInfo.Destination -ErrorAction SilentlyContinue
-                if ($null -ne $finalFile -and $finalFile.Length -gt 0) {
-                    $result = [pscustomobject]@{
-                        AssetKey    = $jobInfo.AssetKey
-                        AssetName   = $jobInfo.AssetName
-                        Destination = $jobInfo.Destination
-                        Success     = $true
-                        Message     = 'Prefetch completed.'
-                    }
+                $receiveMessage = if ($jobReceiveErrors.Count -gt 0) {
+                    ($jobReceiveErrors | ForEach-Object { $_.ToString() }) -join ' | '
                 } else {
-                    $receiveMessage = if ($jobReceiveErrors.Count -gt 0) {
-                        ($jobReceiveErrors | ForEach-Object { $_.ToString() }) -join ' | '
-                    } else {
-                        "Job finished in state $($jobInfo.Job.State) without returning a result."
-                    }
+                    "Job finished in state $($jobInfo.Job.State) without returning a structured result."
+                }
 
-                    $result = [pscustomobject]@{
-                        AssetKey    = $jobInfo.AssetKey
-                        AssetName   = $jobInfo.AssetName
-                        Destination = $jobInfo.Destination
-                        Success     = $false
-                        Message     = $receiveMessage
-                    }
+                $result = [pscustomobject]@{
+                    AssetKey    = $jobInfo.AssetKey
+                    AssetName   = $jobInfo.AssetName
+                    Destination = $jobInfo.Destination
+                    Success     = $false
+                    Message     = $receiveMessage
                 }
             }
 
-            if ($result.Success) {
+            $resultHadWarning = ($null -ne $result.PSObject.Properties['HadWarning'] -and [bool]$result.HadWarning)
+            if ($result.Success -and -not $resultHadWarning) {
                 $script:PrefetchedExternalAssets[$result.AssetKey] = $true
                 Write-Log "Background asset ready: $($jobInfo.AssetName) after $elapsed - $($result.Message)" 'SUCCESS'
+            } elseif ($result.Success -and $resultHadWarning) {
+                $script:PrefetchedExternalAssets[$result.AssetKey] = $true
+                Write-Log "Background asset ready with warnings: $($jobInfo.AssetName) after $elapsed - $($result.Message)" 'WARN'
             } else {
                 Write-Log "Background asset prefetch failed: $($jobInfo.AssetName) after $elapsed - $($result.Message)" 'WARN'
             }
@@ -7461,64 +7777,66 @@ function Invoke-RemoveOneDrive {
         }
 
         $aclOverrideApplied = $false
-        if (-not [string]::IsNullOrWhiteSpace($oneDriveUserFolder) -and (Test-Path $oneDriveUserFolder)) {
-            $denyRule = 'Administrators:(D,DC)'
-            & icacls $oneDriveUserFolder /deny $denyRule 2>$null | Out-Null
-            if ($LASTEXITCODE -eq 0) {
-                $aclOverrideApplied = $true
+        try {
+            if (-not [string]::IsNullOrWhiteSpace($oneDriveUserFolder) -and (Test-Path $oneDriveUserFolder)) {
+                $denyRule = 'Administrators:(D,DC)'
+                & icacls $oneDriveUserFolder /deny $denyRule 2>$null | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    $aclOverrideApplied = $true
+                } else {
+                    Write-Log -Message "Failed to apply OneDrive folder ACL protection." -Level 'WARN'
+                }
+            }
+
+            Write-Log -Message "Uninstalling OneDrive..." -Level 'INFO'
+            $uninstallIssue = $null
+            if (Test-Path $oneDriveSetup64) {
+                try {
+                    $uninstallProcess = Start-Process -FilePath $oneDriveSetup64 -ArgumentList @('/uninstall') -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+                    if ($null -eq $uninstallProcess) {
+                        throw "Failed to start process $oneDriveSetup64"
+                    }
+
+                    if ([int]$uninstallProcess.ExitCode -ne 0) {
+                        $uninstallIssue = "$oneDriveSetup64 exited with code $($uninstallProcess.ExitCode)"
+                        Write-Log -Message "OneDrive uninstaller reported a non-zero exit code: $uninstallIssue" -Level 'WARN'
+                    }
+                } catch {
+                    $uninstallIssue = $_.Exception.Message
+                    Write-Log -Message "OneDrive uninstall attempt failed: $uninstallIssue" -Level 'WARN'
+                }
+            } elseif (Test-Path $oneDriveSetup32) {
+                try {
+                    $uninstallProcess = Start-Process -FilePath $oneDriveSetup32 -ArgumentList @('/uninstall') -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+                    if ($null -eq $uninstallProcess) {
+                        throw "Failed to start process $oneDriveSetup32"
+                    }
+
+                    if ([int]$uninstallProcess.ExitCode -ne 0) {
+                        $uninstallIssue = "$oneDriveSetup32 exited with code $($uninstallProcess.ExitCode)"
+                        Write-Log -Message "OneDrive uninstaller reported a non-zero exit code: $uninstallIssue" -Level 'WARN'
+                    }
+                } catch {
+                    $uninstallIssue = $_.Exception.Message
+                    Write-Log -Message "OneDrive uninstall attempt failed: $uninstallIssue" -Level 'WARN'
+                }
             } else {
-                Write-Log -Message "Failed to apply OneDrive folder ACL protection." -Level 'WARN'
+                $uninstallIssue = 'OneDrive setup binary was not present; continuing with leftover cleanup only.'
+                Write-Log -Message $uninstallIssue -Level 'WARN'
             }
-        }
+            Start-Sleep -Seconds 3
 
-        Write-Log -Message "Uninstalling OneDrive..." -Level 'INFO'
-        $uninstallIssue = $null
-        if (Test-Path $oneDriveSetup64) {
-            try {
-                $uninstallProcess = Start-Process -FilePath $oneDriveSetup64 -ArgumentList @('/uninstall') -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
-                if ($null -eq $uninstallProcess) {
-                    throw "Failed to start process $oneDriveSetup64"
+            Write-Log -Message "Removing leftover OneDrive files..." -Level 'INFO'
+            Stop-Process -Name 'FileCoAuth', 'explorer', 'OneDrive', 'OneDriveSetup' -Force -ErrorAction SilentlyContinue
+            Remove-PathForce $oneDriveLocalAppData -WarnOnly
+            Remove-PathForce "$env:ProgramData\Microsoft OneDrive" -WarnOnly
+            Remove-PathForce $oneDriveProgramFiles -WarnOnly
+        } finally {
+            if ($aclOverrideApplied -and (Test-Path $oneDriveUserFolder)) {
+                & icacls $oneDriveUserFolder /remove:d 'Administrators' *> $null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Log -Message "Failed to restore OneDrive folder ACLs." -Level 'WARN'
                 }
-
-                if ([int]$uninstallProcess.ExitCode -ne 0) {
-                    $uninstallIssue = "$oneDriveSetup64 exited with code $($uninstallProcess.ExitCode)"
-                    Write-Log -Message "OneDrive uninstaller reported a non-zero exit code: $uninstallIssue" -Level 'WARN'
-                }
-            } catch {
-                $uninstallIssue = $_.Exception.Message
-                Write-Log -Message "OneDrive uninstall attempt failed: $uninstallIssue" -Level 'WARN'
-            }
-        } elseif (Test-Path $oneDriveSetup32) {
-            try {
-                $uninstallProcess = Start-Process -FilePath $oneDriveSetup32 -ArgumentList @('/uninstall') -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
-                if ($null -eq $uninstallProcess) {
-                    throw "Failed to start process $oneDriveSetup32"
-                }
-
-                if ([int]$uninstallProcess.ExitCode -ne 0) {
-                    $uninstallIssue = "$oneDriveSetup32 exited with code $($uninstallProcess.ExitCode)"
-                    Write-Log -Message "OneDrive uninstaller reported a non-zero exit code: $uninstallIssue" -Level 'WARN'
-                }
-            } catch {
-                $uninstallIssue = $_.Exception.Message
-                Write-Log -Message "OneDrive uninstall attempt failed: $uninstallIssue" -Level 'WARN'
-            }
-        } else {
-            $uninstallIssue = 'OneDrive setup binary was not present; continuing with leftover cleanup only.'
-            Write-Log -Message $uninstallIssue -Level 'WARN'
-        }
-        Start-Sleep -Seconds 3
-
-        Write-Log -Message "Removing leftover OneDrive files..." -Level 'INFO'
-        Stop-Process -Name 'FileCoAuth', 'explorer', 'OneDrive', 'OneDriveSetup' -Force -ErrorAction SilentlyContinue
-        Remove-PathForce $oneDriveLocalAppData -WarnOnly
-        Remove-PathForce "$env:ProgramData\Microsoft OneDrive" -WarnOnly
-        Remove-PathForce $oneDriveProgramFiles -WarnOnly
-
-        if ($aclOverrideApplied -and (Test-Path $oneDriveUserFolder)) {
-            & icacls $oneDriveUserFolder /grant 'Administrators:(D,DC)' *> $null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Log -Message "Failed to restore OneDrive folder ACLs." -Level 'WARN'
             }
         }
 
@@ -9919,7 +10237,8 @@ function Invoke-CollectCompletedParallelInstallJobs {
 function Receive-ParallelInstallerJobResult {
     param(
         [object]$JobInfo,
-        [hashtable]$ResultsByPackageId
+        [hashtable]$ResultsByPackageId,
+        [switch]$TreatAsTimeout
     )
 
     $packageResult = @{
@@ -9932,7 +10251,7 @@ function Receive-ParallelInstallerJobResult {
     }
 
     try {
-        $jobState = [string]$JobInfo.Job.State
+        $jobState = if ($TreatAsTimeout) { 'TimedOut' } else { [string]$JobInfo.Job.State }
         $jobStateIndicatesFailure = $jobState -in @('Failed', 'Stopped')
         $jobReceiveErrors = @()
         $jobOutput = @(Receive-Job -Job $JobInfo.Job -Keep -ErrorAction Continue -ErrorVariable +jobReceiveErrors)
@@ -9965,7 +10284,7 @@ function Receive-ParallelInstallerJobResult {
             } else {
                 10
             }
-            if ($JobInfo.Target.ContainsKey('GetExecutable') -and $null -ne $JobInfo.Target.GetExecutable) {
+            if (-not $TreatAsTimeout -and $JobInfo.Target.ContainsKey('GetExecutable') -and $null -ne $JobInfo.Target.GetExecutable) {
                 try {
                     $verifiedExecutablePath = Wait-ForExecutablePath -Resolver $JobInfo.Target.GetExecutable -TimeoutSeconds $verificationTimeoutSeconds
                     if ($JobInfo.Target.PackageId -eq 'cinebench-r23' -and (Test-IsLegacyHunterCinebenchPath -Path $verifiedExecutablePath)) {
@@ -10024,7 +10343,7 @@ function Receive-ParallelInstallerJobResult {
             } | Select-Object -Unique)
         }
 
-        if (-not $packageResult.Success -and $JobInfo.Target.ContainsKey('GetExecutable') -and $null -ne $JobInfo.Target.GetExecutable) {
+        if (-not $TreatAsTimeout -and -not $packageResult.Success -and $JobInfo.Target.ContainsKey('GetExecutable') -and $null -ne $JobInfo.Target.GetExecutable) {
             $existingExecutablePath = $null
             $verificationTimeoutSeconds = if ($JobInfo.Target.ContainsKey('VerificationTimeoutSeconds') -and [int]$JobInfo.Target.VerificationTimeoutSeconds -gt 0) {
                 [int]$JobInfo.Target.VerificationTimeoutSeconds
@@ -10069,6 +10388,22 @@ function Receive-ParallelInstallerJobResult {
                 $packageResult.Message = "$($packageResult.Message) (job state: $jobState; diagnostics: $diagnosticText)"
             } else {
                 $packageResult.Message = "$($packageResult.Message) (job state: $jobState)"
+            }
+        }
+
+        if ($TreatAsTimeout) {
+            $diagnosticText = @(
+                @($jobReceiveErrors | ForEach-Object { $_.ToString() })
+                @($JobInfo.Job.ChildJobs | ForEach-Object { $_.Error } | ForEach-Object { $_.ToString() })
+                @([string]$packageResult.Message)
+            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+
+            $packageResult.Success = $false
+            $packageResult.Skipped = $false
+            $packageResult.PathEntries = @()
+            $packageResult.Message = 'Installer job timed out before completion and was stopped.'
+            if (@($diagnosticText).Count -gt 0) {
+                $packageResult.Message = "$($packageResult.Message) Diagnostics: $($diagnosticText -join ' | ')"
             }
         }
 
@@ -10587,7 +10922,9 @@ function Invoke-ParallelInstalls {
                             if (-not (Test-Path $downloadPath) -or ((Get-Item -Path $downloadPath -ErrorAction SilentlyContinue).Length -le 0)) {
                                 try {
                                     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                                } catch { }
+                                } catch {
+                                    Write-InstallerHelperWarning "Failed to enforce TLS 1.2 for $($Target.PackageName) download: $($_.Exception.Message)"
+                                }
 
                                 Invoke-WebRequest -Uri $Target.DownloadUrl -OutFile $downloadPath -UseBasicParsing -MaximumRedirection 10 -TimeoutSec 300 -ErrorAction Stop -Headers @{ 'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
                             }
@@ -10710,13 +11047,21 @@ function Invoke-ParallelInstalls {
 
             if ($timedOutJobs -and $pendingJobs.Count -gt 0) {
                 $timedOutNames = @($pendingJobs | ForEach-Object { $_.Target.PackageName })
-                Write-Log "Installer finalize timed out after 30:00. Collecting partial results for still-running job(s): $($timedOutNames -join ', ')" 'WARN'
+                Write-Log "Installer finalize timed out after 30:00. Stopping still-running job(s): $($timedOutNames -join ', ')" 'WARN'
             }
 
             foreach ($jobInfo in @($pendingJobs)) {
                 $elapsed = Format-ElapsedDuration -Duration ((Get-Date) - $jobInfo.StartedAt)
-                Write-Log "Collecting partial installer result: $($jobInfo.Target.PackageName) after $elapsed" 'INFO'
-                $jobResult = Receive-ParallelInstallerJobResult -JobInfo $jobInfo -ResultsByPackageId $resultsByPackageId
+                if ($jobInfo.Job.State -notin @('Completed', 'Failed', 'Stopped')) {
+                    try {
+                        Stop-Job -Job $jobInfo.Job -ErrorAction Stop | Out-Null
+                    } catch {
+                        Write-Log "Failed to stop timed-out installer job $($jobInfo.Target.PackageName) cleanly: $($_.Exception.Message)" 'WARN'
+                    }
+                }
+
+                Write-Log "Collecting timed-out installer result: $($jobInfo.Target.PackageName) after $elapsed" 'INFO'
+                $jobResult = Receive-ParallelInstallerJobResult -JobInfo $jobInfo -ResultsByPackageId $resultsByPackageId -TreatAsTimeout
                 $level = if ($jobResult.Success) { 'SUCCESS' } else { 'ERROR' }
                 Write-Log "Installer finalize result: $($jobInfo.Target.PackageName) - $($jobResult.Message)" $level
                 [void]$pendingJobs.Remove($jobInfo)

@@ -67,6 +67,15 @@ function New-TaskSkipResult {
     }
 }
 
+function New-TaskWarningResult {
+    param([string]$Reason = '')
+
+    return [ordered]@{
+        Status = 'CompletedWithWarnings'
+        Reason = $Reason
+    }
+}
+
 function Get-TaskResultField {
     param(
         [object]$TaskResult,
