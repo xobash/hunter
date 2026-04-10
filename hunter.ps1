@@ -15,6 +15,14 @@ try {
 
 $script:HunterSourceRoot = $null
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/main'
+$script:BootstrapIntegrityHashes = @{
+    'src\Hunter\Private\Bootstrap\Config.ps1'       = '69217f9febbc51a96480c4477c20a47e26dabc1f92ae0be571e968fa9e2c98ba'
+    'src\Hunter\Private\Common\Common.ps1'          = 'c986df9289ebfddbb4f7369b7804f9dd2fc980540d97c78a66da669de3cb273f'
+    'src\Hunter\Private\Common\PathPolicy.ps1'      = 'b0d41621d6405049efc4b34ce765fd610f26a3c0c0136dfe9d6568a4a15c8df1'
+    'src\Hunter\Private\Execution\Engine.ps1'       = '8263ad04324a9d9f764d481ed35f97b7912a970988b6d3229fa04c5819946566'
+    'src\Hunter\Private\Infrastructure\NativeSystem.ps1' = 'fb2a3b2ab5f164922636a9be11a045627203f222d6293504941b6a4e8d1b6970'
+    'src\Hunter\Config\Apps.json'                   = '4ae47cb48a5d927245154ca92a4c9898aa076c3b244535cadf68668d92112cfc'
+}
 $hunterBootstrapRelativePaths = @(
     'src\Hunter\Private\Bootstrap\Config.ps1',
     'src\Hunter\Private\Common\Common.ps1',
@@ -44,8 +52,19 @@ if (-not $canUseLocalHunterPrivateLayers) {
     foreach ($hunterPrivateRelativePath in $hunterBootstrapRelativePaths) {
         $hunterPrivateDestinationPath = Join-Path $script:HunterSourceRoot $hunterPrivateRelativePath
         $hunterPrivateUri = '{0}/{1}' -f $script:HunterRemoteRoot.TrimEnd('/'), ($hunterPrivateRelativePath -replace '\\', '/')
-        $hunterPrivateContent = (Invoke-WebRequest -Uri $hunterPrivateUri -UseBasicParsing -ErrorAction Stop).Content
-        if ([string]::IsNullOrWhiteSpace([string]$hunterPrivateContent)) {
+        if (-not $script:BootstrapIntegrityHashes.ContainsKey($hunterPrivateRelativePath)) {
+            throw "No embedded bootstrap integrity hash exists for $hunterPrivateRelativePath"
+        }
+
+        $hunterPrivateResponse = Invoke-WebRequest -Uri $hunterPrivateUri -UseBasicParsing -ErrorAction Stop
+        $hunterPrivateContent = $hunterPrivateResponse.Content
+        if ($hunterPrivateContent -is [byte[]]) {
+            $hunterPrivateContent = [System.Text.Encoding]::UTF8.GetString($hunterPrivateContent)
+        } else {
+            $hunterPrivateContent = [string]$hunterPrivateContent
+        }
+
+        if ([string]::IsNullOrWhiteSpace($hunterPrivateContent)) {
             throw "Downloaded bootstrap layer was empty: $hunterPrivateUri"
         }
 
@@ -54,7 +73,14 @@ if (-not $canUseLocalHunterPrivateLayers) {
             New-Item -ItemType Directory -Path $hunterPrivateDestinationRoot -Force | Out-Null
         }
 
-        Set-Content -Path $hunterPrivateDestinationPath -Value ([string]$hunterPrivateContent) -Encoding UTF8 -Force
+        $utf8NoBomEncoding = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($hunterPrivateDestinationPath, $hunterPrivateContent, $utf8NoBomEncoding)
+
+        $actualHash = (Get-FileHash -Path $hunterPrivateDestinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+        $expectedHash = ([string]$script:BootstrapIntegrityHashes[$hunterPrivateRelativePath]).ToLowerInvariant()
+        if ($actualHash -ne $expectedHash) {
+            throw "Integrity check failed for $hunterPrivateRelativePath. Expected $expectedHash, got $actualHash"
+        }
     }
 }
 
@@ -85,14 +111,14 @@ try {
 # DIRECTORY HELPER
 # ==============================================================================
 
-function Ensure-Directory {
+function Initialize-HunterDirectory {
     param([string]$Path)
     if (-not (Test-Path $Path)) {
         New-Item -ItemType Directory -Path $Path -Force | Out-Null
     }
 }
 
-function Ensure-ProtectedDataAvailable {
+function Assert-HunterProtectedDataAvailable {
     $protectedDataType = [System.Type]::GetType('System.Security.Cryptography.ProtectedData, System.Security', $false)
     if ($null -ne $protectedDataType) {
         return $true
@@ -105,7 +131,7 @@ function Ensure-ProtectedDataAvailable {
 function Protect-StringForLocalMachine {
     param([Parameter(Mandatory)][string]$Value)
 
-    Ensure-ProtectedDataAvailable | Out-Null
+    Assert-HunterProtectedDataAvailable | Out-Null
     $plainBytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
     $protectedBytes = [System.Security.Cryptography.ProtectedData]::Protect(
         $plainBytes,
@@ -119,7 +145,7 @@ function Protect-StringForLocalMachine {
 function Unprotect-StringForLocalMachine {
     param([Parameter(Mandatory)][string]$Value)
 
-    Ensure-ProtectedDataAvailable | Out-Null
+    Assert-HunterProtectedDataAvailable | Out-Null
     $protectedBytes = [Convert]::FromBase64String($Value)
     $plainBytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
         $protectedBytes,
@@ -159,7 +185,7 @@ function New-HunterRandomPassword {
 function Set-HunterManagedLocalUserPassword {
     param([Parameter(Mandatory)][string]$Password)
 
-    Ensure-Directory $script:SecretsRoot
+    Initialize-HunterDirectory $script:SecretsRoot
     $payload = [ordered]@{
         Version   = 1
         UserName  = 'user'
@@ -228,7 +254,7 @@ function Migrate-HunterStateToProgramData {
         (Test-Path $legacyCheckpointPath) -and
         -not (Test-Path $script:CheckpointPath)) {
         try {
-            Ensure-Directory (Split-Path -Parent $script:CheckpointPath)
+            Initialize-HunterDirectory (Split-Path -Parent $script:CheckpointPath)
             Copy-Item -Path $legacyCheckpointPath -Destination $script:CheckpointPath -Force -ErrorAction Stop
             Write-Log "Migrated legacy checkpoint state from $legacyCheckpointPath to $($script:CheckpointPath)." 'INFO'
         } catch {
@@ -244,13 +270,86 @@ function Migrate-HunterStateToProgramData {
         }
 
         try {
-            Ensure-Directory (Split-Path -Parent $script:LocalUserSecretPath)
+            Initialize-HunterDirectory (Split-Path -Parent $script:LocalUserSecretPath)
             Copy-Item -Path $legacySecretPath -Destination $script:LocalUserSecretPath -Force -ErrorAction Stop
             Write-Log "Migrated legacy local-user secret from $legacySecretPath to $($script:LocalUserSecretPath)." 'INFO'
             break
         } catch {
             Add-RunInfrastructureIssue -Message "Failed to migrate legacy local-user secret from $legacySecretPath: $($_.Exception.Message)" -Level 'WARN'
         }
+    }
+}
+
+function Clear-HunterManagedLocalUserPassword {
+    if (-not (Test-Path $script:LocalUserSecretPath)) {
+        return $true
+    }
+
+    try {
+        Remove-Item -Path $script:LocalUserSecretPath -Force -ErrorAction Stop
+        Write-Log 'Managed local-user secret file removed from disk.' 'SUCCESS'
+        return $true
+    } catch {
+        Write-Log "Failed to remove the managed local-user secret file: $($_.Exception.Message)" 'WARN'
+        return $false
+    }
+}
+
+function Invoke-ClearAutologinSecrets {
+    try {
+        Write-Log 'Clearing Winlogon autologin values and Hunter-managed secrets...' 'INFO'
+
+        $winlogonPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+        $autologinValueNames = @('DefaultPassword', 'AutoAdminLogon', 'DefaultUserName', 'DefaultDomainName')
+        $removedValueCount = 0
+        $warnings = New-Object 'System.Collections.Generic.List[string]'
+
+        foreach ($valueName in $autologinValueNames) {
+            try {
+                $existingValue = Get-ItemProperty -Path $winlogonPath -Name $valueName -ErrorAction SilentlyContinue
+                if ($null -eq $existingValue -or -not ($existingValue.PSObject.Properties.Name -contains $valueName)) {
+                    continue
+                }
+
+                Remove-ItemProperty -Path $winlogonPath -Name $valueName -ErrorAction Stop
+                $removedValueCount++
+                Write-Log "Removed Winlogon autologin value: $valueName" 'INFO'
+            } catch {
+                [void]$warnings.Add("Failed to remove Winlogon autologin value ${valueName}: $($_.Exception.Message)")
+            }
+        }
+
+        $secretRemoved = Clear-HunterManagedLocalUserPassword
+        if (-not $secretRemoved) {
+            [void]$warnings.Add('Hunter-managed local-user secret could not be removed from disk.')
+        }
+
+        if (Test-Path $script:LocalUserSecretPath) {
+            [void]$warnings.Add("Hunter-managed local-user secret still exists at $($script:LocalUserSecretPath).")
+        }
+
+        foreach ($warning in @($warnings)) {
+            Write-Log $warning 'WARN'
+        }
+
+        if ($warnings.Count -gt 0) {
+            return @{
+                Success = $true
+                Status  = 'CompletedWithWarnings'
+                Reason  = 'Autologin cleanup completed with warnings'
+            }
+        }
+
+        if ($removedValueCount -eq 0 -and -not (Test-Path $script:LocalUserSecretPath)) {
+            Write-Log 'No Winlogon autologin values or Hunter-managed local-user secrets were present.' 'INFO'
+        } else {
+            Write-Log 'Autologin registry values and Hunter-managed secrets were cleared.' 'SUCCESS'
+        }
+
+        return $true
+    } catch {
+        Write-Log "Failed to clear autologin secrets: $($_.Exception.Message)" 'ERROR'
+        return $false
     }
 }
 
@@ -351,13 +450,30 @@ function Get-WindowsActivationStateSummary {
     }
 }
 
+function ConvertTo-HunterVersionOrNull {
+    param([string]$VersionText)
+
+    $normalizedVersionText = ([string]$VersionText) -replace '[^0-9.]', ''
+    if ([string]::IsNullOrWhiteSpace($normalizedVersionText)) {
+        return $null
+    }
+
+    try {
+        return [version]$normalizedVersionText
+    } catch {
+        return $null
+    }
+}
+
 function Test-WingetFunctional {
     $wingetCommand = Get-Command winget -ErrorAction SilentlyContinue
     if ($null -eq $wingetCommand) {
         return [pscustomobject]@{
-            Available = $false
-            Version   = ''
-            Message   = 'winget.exe was not found on PATH.'
+            Available           = $false
+            Version             = ''
+            ParsedVersion       = $null
+            MeetsMinimumVersion = $false
+            Message             = 'winget.exe was not found on PATH.'
         }
     }
 
@@ -365,11 +481,15 @@ function Test-WingetFunctional {
         $versionOutput = @(& $wingetCommand.Source --version 2>&1)
         $exitCode = [int]$LASTEXITCODE
         $versionText = [string]::Join(' ', @($versionOutput | ForEach-Object { [string]$_ })).Trim()
+        $parsedVersion = ConvertTo-HunterVersionOrNull -VersionText $versionText
+        $minimumWingetVersion = ConvertTo-HunterVersionOrNull -VersionText $script:WingetMinimumVersion
         if ($exitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($versionText)) {
             return [pscustomobject]@{
-                Available = $true
-                Version   = $versionText
-                Message   = ''
+                Available           = $true
+                Version             = $versionText
+                ParsedVersion       = $parsedVersion
+                MeetsMinimumVersion = ($null -ne $parsedVersion -and $null -ne $minimumWingetVersion -and $parsedVersion -ge $minimumWingetVersion)
+                Message             = ''
             }
         }
 
@@ -378,15 +498,91 @@ function Test-WingetFunctional {
         }
 
         return [pscustomobject]@{
-            Available = $false
-            Version   = ''
-            Message   = $versionText
+            Available           = $false
+            Version             = ''
+            ParsedVersion       = $null
+            MeetsMinimumVersion = $false
+            Message             = $versionText
         }
     } catch {
         return [pscustomobject]@{
-            Available = $false
-            Version   = ''
-            Message   = $_.Exception.Message
+            Available           = $false
+            Version             = ''
+            ParsedVersion       = $null
+            MeetsMinimumVersion = $false
+            Message             = $_.Exception.Message
+        }
+    }
+}
+
+function Invoke-EnsureWingetMinVersion {
+    try {
+        if ($script:IsUnsupportedEdition) {
+            Write-Log 'Skipping winget minimum-version enforcement because this Windows edition is not a supported Store-backed consumer build.' 'INFO'
+            return (New-TaskSkipResult -Reason 'winget minimum-version enforcement is skipped on unsupported Windows editions')
+        }
+
+        $minimumWingetVersion = ConvertTo-HunterVersionOrNull -VersionText $script:WingetMinimumVersion
+        if ($null -eq $minimumWingetVersion) {
+            Write-Log "Hunter could not parse its configured minimum winget version '$($script:WingetMinimumVersion)'." 'WARN'
+            return @{
+                Success = $true
+                Status  = 'CompletedWithWarnings'
+                Reason  = 'Configured minimum winget version could not be parsed'
+            }
+        }
+
+        $wingetStatus = Test-WingetFunctional
+        if (-not $wingetStatus.Available) {
+            Write-Log "winget minimum-version check could not run because winget is unavailable: $($wingetStatus.Message)" 'WARN'
+            return @{
+                Success = $true
+                Status  = 'CompletedWithWarnings'
+                Reason  = 'winget is not currently available for version validation'
+            }
+        }
+
+        if ($null -eq $wingetStatus.ParsedVersion) {
+            Write-Log "winget responded but Hunter could not parse its version string '$($wingetStatus.Version)'." 'WARN'
+            return @{
+                Success = $true
+                Status  = 'CompletedWithWarnings'
+                Reason  = 'winget version string could not be parsed'
+            }
+        }
+
+        if ($wingetStatus.ParsedVersion -ge $minimumWingetVersion) {
+            Write-Log "winget $($wingetStatus.ParsedVersion) satisfies Hunter's minimum version requirement of $minimumWingetVersion." 'SUCCESS'
+            return $true
+        }
+
+        Write-Log "winget $($wingetStatus.ParsedVersion) is below Hunter's minimum version requirement of $minimumWingetVersion. Attempting App Installer refresh..." 'WARN'
+        if (-not (Install-WingetFromOfficialBundle)) {
+            return @{
+                Success = $true
+                Status  = 'CompletedWithWarnings'
+                Reason  = "winget $($wingetStatus.ParsedVersion) is below the supported minimum version and App Installer refresh failed"
+            }
+        }
+
+        $retestedWingetStatus = Test-WingetFunctional
+        if ($retestedWingetStatus.Available -and $retestedWingetStatus.MeetsMinimumVersion) {
+            Write-Log "winget refreshed successfully to $($retestedWingetStatus.ParsedVersion)." 'SUCCESS'
+            return $true
+        }
+
+        Write-Log "winget refresh completed but the current version is still '$($retestedWingetStatus.Version)', which does not satisfy Hunter's minimum version requirement of $minimumWingetVersion." 'WARN'
+        return @{
+            Success = $true
+            Status  = 'CompletedWithWarnings'
+            Reason  = 'winget is still below Hunter’s minimum supported version after refresh'
+        }
+    } catch {
+        Write-Log "Failed to validate Hunter's minimum winget version: $($_.Exception.Message)" 'WARN'
+        return @{
+            Success = $true
+            Status  = 'CompletedWithWarnings'
+            Reason  = 'winget minimum-version validation failed unexpectedly'
         }
     }
 }
@@ -398,7 +594,7 @@ function Install-WingetFromOfficialBundle {
     $installerScriptPath = Join-Path $script:DownloadDir 'Install-WingetBundle.ps1'
 
     try {
-        Ensure-Directory $script:DownloadDir
+        Initialize-HunterDirectory $script:DownloadDir
         Write-Log "Attempting App Installer bootstrap from $bundleUrl" 'INFO'
         Invoke-WebRequest -Uri $bundleUrl -OutFile $bundlePath -UseBasicParsing -MaximumRedirection 10 -TimeoutSec 300 -ErrorAction Stop
 
@@ -438,15 +634,45 @@ function Ensure-WingetFunctional {
 
     $wingetStatus = Test-WingetFunctional
     if ($wingetStatus.Available) {
-        $script:PackagePipelineBlocked = $false
-        $script:PackagePipelineBlockReason = ''
-        Write-Log "winget functional check passed: $($wingetStatus.Version)" 'INFO'
-        return $true
+        if ($wingetStatus.MeetsMinimumVersion) {
+            $script:PackagePipelineBlocked = $false
+            $script:PackagePipelineBlockReason = ''
+            Write-Log "winget functional check passed: $($wingetStatus.Version)" 'INFO'
+            return $true
+        }
+
+        Write-Log "winget functional check passed, but version '$($wingetStatus.Version)' is below the supported minimum of $($script:WingetMinimumVersion)." 'WARN'
+        if (-not (Install-WingetFromOfficialBundle)) {
+            $script:PackagePipelineBlocked = $true
+            $script:PackagePipelineBlockReason = "winget is available but below the minimum supported version of $($script:WingetMinimumVersion)"
+            return $false
+        }
+
+        $wingetStatus = Test-WingetFunctional
+        if ($wingetStatus.Available -and $wingetStatus.MeetsMinimumVersion) {
+            $script:PackagePipelineBlocked = $false
+            $script:PackagePipelineBlockReason = ''
+            Write-Log "winget functional check passed after refresh: $($wingetStatus.Version)" 'INFO'
+            return $true
+        }
     }
 
     $script:PackagePipelineBlocked = $true
-    $script:PackagePipelineBlockReason = 'winget is not functional and Hunter could not safely prepare the package pipeline.'
-    Write-Log "winget preflight failed: $($wingetStatus.Message)" 'WARN'
+    $script:PackagePipelineBlockReason = if ($wingetStatus.Available) {
+        "winget is below the minimum supported version of $($script:WingetMinimumVersion) and Hunter could not safely prepare the package pipeline."
+    } else {
+        'winget is not functional and Hunter could not safely prepare the package pipeline.'
+    }
+    $wingetFailureMessage = if ([string]::IsNullOrWhiteSpace($wingetStatus.Message)) {
+        if ($wingetStatus.Available -and -not [string]::IsNullOrWhiteSpace($wingetStatus.Version)) {
+            "winget $($wingetStatus.Version) is below the minimum supported version of $($script:WingetMinimumVersion)."
+        } else {
+            'winget did not return a usable version result.'
+        }
+    } else {
+        $wingetStatus.Message
+    }
+    Write-Log "winget preflight failed: $wingetFailureMessage" 'WARN'
     Write-Log 'Package installs that rely on App Installer may fail until winget is repaired.' 'WARN'
 
     if ($script:IsAutomationRun) {
@@ -539,7 +765,7 @@ function Resolve-DisableHagsPreference {
 
     $disableHags = Show-YesNoDialog `
         -Title 'Hunter HAGS Policy' `
-        -Message "Disable Hardware-Accelerated GPU Scheduling (HAGS)?`n`nDetected GPU(s):`n$gpuSummary`n`nOn many newer driver stacks, preserving HAGS is the safer default. Choose Yes only if you specifically want Hunter's legacy HAGS disable behavior." `
+        -Message "Disable Hardware-Accelerated GPU Scheduling (HAGS)? Recommended: No for DX12/Vulkan games, Yes for older titles or AMD GPUs with driver issues.`n`nDetected GPU(s):`n$gpuSummary`n`nPreserving HAGS is the safer default on most modern Windows 10/11 gaming stacks. Choose Yes only if you explicitly want Hunter's legacy HAGS disable behavior." `
         -DefaultToNo $true
 
     $script:HagsDisableResolvedValue = [bool]$disableHags
@@ -761,7 +987,7 @@ function global:Invoke-DirectInstallerWithMutex {
 
 Initialize-InstallerJobHelpers
 
-function Ensure-InstallerHelpersLoaded {
+function Initialize-InstallerHelpers {
     if ($null -eq (Get-Command -Name 'Confirm-InstallerSignature' -ErrorAction SilentlyContinue)) {
         Initialize-InstallerJobHelpers
     }
@@ -859,7 +1085,7 @@ function Set-RegistryValue {
         [string]$Type = 'String'
     )
     try {
-        if (-not (Ensure-RegistryKeyPath -Path $Path)) {
+        if (-not (Initialize-RegistryKeyPath -Path $Path)) {
             throw "Failed to create registry path $Path"
         }
 
@@ -872,7 +1098,7 @@ function Set-RegistryValue {
     }
 }
 
-function Ensure-RegistryKeyPath {
+function Initialize-RegistryKeyPath {
     param([string]$Path)
 
     if ([string]::IsNullOrWhiteSpace($Path) -or (Test-Path $Path)) {
@@ -881,7 +1107,7 @@ function Ensure-RegistryKeyPath {
 
     $parentPath = Split-Path -Parent $Path
     if (-not [string]::IsNullOrWhiteSpace($parentPath) -and $parentPath -ne $Path -and -not (Test-Path $parentPath)) {
-        if (-not (Ensure-RegistryKeyPath -Path $parentPath)) {
+        if (-not (Initialize-RegistryKeyPath -Path $parentPath)) {
             return $false
         }
     }
@@ -1225,7 +1451,7 @@ function Set-DwordBatchForAllUsers {
     }
 }
 
-function Ensure-GlobalTimerResolutionRequestsEnabled {
+function Enable-GlobalTimerResolutionRequests {
     param([switch]$LogIfAlreadyEnabled)
 
     $kernelPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel'
@@ -1474,6 +1700,64 @@ function Disable-ScheduledTaskIfPresent {
     }
 }
 
+function Enable-ScheduledTaskIfPresent {
+    param(
+        [string]$TaskPath,
+        [string]$TaskName,
+        [string]$DisplayName = $TaskName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($TaskPath) -or [string]::IsNullOrWhiteSpace($TaskName)) {
+        return $false
+    }
+
+    try {
+        $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
+        if ($null -eq $task) {
+            return $false
+        }
+
+        if ($task.State -ne 'Disabled') {
+            Write-Log "Scheduled task already enabled: $DisplayName" 'INFO'
+            return $true
+        }
+
+        Enable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
+        Write-Log "Scheduled task enabled: $DisplayName" 'INFO'
+        return $true
+    } catch {
+        Write-Log "Failed to enable scheduled task ${DisplayName}: $($_.Exception.Message)" 'WARN'
+        return $false
+    }
+}
+
+function Set-ScheduledTaskStartTimeIfPresent {
+    param(
+        [string]$TaskFullName,
+        [string]$StartTime,
+        [string]$DisplayName = $TaskFullName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($TaskFullName) -or [string]::IsNullOrWhiteSpace($StartTime)) {
+        return $false
+    }
+
+    try {
+        $taskQueryArgs = @('/Query', '/TN', $TaskFullName)
+        & schtasks.exe @taskQueryArgs *> $null
+        if ([int]$LASTEXITCODE -ne 0) {
+            return $false
+        }
+
+        Invoke-NativeCommandChecked -FilePath 'schtasks.exe' -ArgumentList @('/Change', '/TN', $TaskFullName, '/ST', $StartTime) | Out-Null
+        Write-Log "Scheduled task start time set: $DisplayName -> $StartTime" 'INFO'
+        return $true
+    } catch {
+        Write-Log "Failed to set scheduled task start time for ${DisplayName}: $($_.Exception.Message)" 'WARN'
+        return $false
+    }
+}
+
 function Test-ScheduledTaskDisabledOrMissing {
     param(
         [string]$TaskPath,
@@ -1535,6 +1819,59 @@ function Set-DirectXGlobalPreferenceValue {
 # ==============================================================================
 # WINDOWS BUILD / APP REMOVAL HELPERS
 # ==============================================================================
+
+function Get-WindowsEditionContext {
+    if ($null -ne $script:WindowsEditionContext) {
+        return $script:WindowsEditionContext
+    }
+
+    $currentVersionPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+    $editionId = ''
+    $installationType = ''
+    $productName = ''
+    $onlineEdition = ''
+
+    try {
+        $currentVersion = Get-ItemProperty -Path $currentVersionPath -ErrorAction Stop
+        $editionId = [string]$currentVersion.EditionID
+        $installationType = [string]$currentVersion.InstallationType
+        $productName = [string]$currentVersion.ProductName
+    } catch {
+        Write-Log "Failed to query Windows edition metadata from the registry: $($_.Exception.Message)" 'WARN'
+    }
+
+    try {
+        $getWindowsEditionCommand = Get-Command Get-WindowsEdition -ErrorAction SilentlyContinue
+        if ($null -ne $getWindowsEditionCommand) {
+            $onlineEditionInfo = Get-WindowsEdition -Online -ErrorAction Stop
+            if ($null -ne $onlineEditionInfo) {
+                $onlineEdition = [string]$onlineEditionInfo.Edition
+            }
+        }
+    } catch {
+        Write-Log "Failed to query Get-WindowsEdition -Online: $($_.Exception.Message)" 'INFO'
+    }
+
+    $combinedEditionText = (@($onlineEdition, $editionId, $installationType, $productName) | Where-Object {
+        -not [string]::IsNullOrWhiteSpace([string]$_)
+    }) -join ' '
+
+    $isServer = ($combinedEditionText -match '(?i)\bserver\b') -or ([string]$installationType -match '(?i)\bserver\b')
+    $isLtsc = ($combinedEditionText -match '(?i)\bltsc\b') -or ([string]$editionId -in @('EnterpriseS', 'EnterpriseSN', 'IoTEnterpriseS', 'IoTEnterpriseSK'))
+    $isSupportedConsumerEdition = -not $isServer -and -not $isLtsc
+
+    $script:WindowsEditionContext = [pscustomobject]@{
+        EditionId                  = $editionId
+        InstallationType           = $installationType
+        ProductName                = $productName
+        OnlineEdition              = $onlineEdition
+        IsServer                   = $isServer
+        IsLtsc                     = $isLtsc
+        IsSupportedConsumerEdition = $isSupportedConsumerEdition
+    }
+
+    return $script:WindowsEditionContext
+}
 
 function Get-WindowsBuildContext {
     if ($null -ne $script:WindowsBuildContext) {
@@ -1777,6 +2114,44 @@ function Load-HunterCustomAppsList {
     return @($validatedSelections.ToArray())
 }
 
+function Invoke-ValidateSupportedWindowsEdition {
+    try {
+        $editionContext = Get-WindowsEditionContext
+        $editionSummary = (@(
+            [string]$editionContext.ProductName,
+            [string]$editionContext.EditionId,
+            [string]$editionContext.InstallationType
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }) -join ' | '
+
+        if ([string]::IsNullOrWhiteSpace($editionSummary)) {
+            $editionSummary = 'Unknown edition'
+        }
+
+        if (-not $editionContext.IsSupportedConsumerEdition) {
+            $script:IsUnsupportedEdition = $true
+            $script:SkipStoreAndAppxTasks = $true
+            Write-Log "Unsupported Windows edition detected: $editionSummary. Hunter is designed for consumer Home/Pro-style installs; Store/AppX consumer-removal tasks will be skipped." 'WARN'
+            return @{
+                Success = $true
+                Status  = 'CompletedWithWarnings'
+                Reason  = 'Unsupported Windows edition detected; Store/AppX consumer tasks will be skipped'
+            }
+        }
+
+        $script:IsUnsupportedEdition = $false
+        $script:SkipStoreAndAppxTasks = $false
+        Write-Log "Windows edition compatibility check passed: $editionSummary" 'INFO'
+        return $true
+    } catch {
+        Write-Log "Failed to validate Windows edition compatibility: $($_.Exception.Message)" 'WARN'
+        return @{
+            Success = $true
+            Status  = 'CompletedWithWarnings'
+            Reason  = 'Windows edition compatibility could not be verified'
+        }
+    }
+}
+
 function Invoke-WingetUninstallBestEffort {
     param(
         [Parameter(Mandatory)][string]$WingetId,
@@ -1906,7 +2281,7 @@ function Invoke-AppxPatternOperationViaWindowsPowerShell {
 
     $desktopPowerShellPath = Get-NativeSystemExecutablePath -FileName 'powershell.exe'
     $tempRoot = Join-Path $script:HunterRoot 'Temp'
-    Ensure-Directory $tempRoot
+    Initialize-HunterDirectory $tempRoot
 
     $operationId = [guid]::NewGuid().ToString('N')
     $patternsPath = Join-Path $tempRoot "appx-patterns-$operationId.json"
@@ -2107,7 +2482,7 @@ function Download-File {
         }
     }
 
-    Ensure-Directory (Split-Path -Parent $Destination)
+    Initialize-HunterDirectory (Split-Path -Parent $Destination)
 
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -2196,7 +2571,7 @@ function Start-ExternalAssetPrefetchJob {
         return $false
     }
 
-    Ensure-Directory (Split-Path -Parent $Destination)
+    Initialize-HunterDirectory (Split-Path -Parent $Destination)
 
     $job = Start-Job -ScriptBlock {
         param(
@@ -3220,7 +3595,7 @@ function Complete-InstalledApp {
         $ShortcutName = $PackageName
     }
 
-    $shortcutPaths = Ensure-CachedAppShortcutSet `
+    $shortcutPaths = Initialize-CachedAppShortcutSet `
         -ShortcutName $ShortcutName `
         -TargetPath $ExecutablePath `
         -Description $PackageName `
@@ -3463,7 +3838,7 @@ function New-WindowsShortcut {
             }
         }
 
-        Ensure-Directory (Split-Path -Parent $ShortcutPath)
+        Initialize-HunterDirectory (Split-Path -Parent $ShortcutPath)
         $shell = New-Object -ComObject WScript.Shell
         $shortcut = $shell.CreateShortcut($ShortcutPath)
         $shortcut.TargetPath = $TargetPath
@@ -3512,7 +3887,7 @@ function Find-ExistingShortcutByTarget {
     return $null
 }
 
-function Ensure-DesktopShortcut {
+function Initialize-DesktopShortcut {
     param(
         [string]$ShortcutName,
         [string]$TargetPath,
@@ -3526,7 +3901,7 @@ function Ensure-DesktopShortcut {
     return (New-WindowsShortcut -ShortcutPath $shortcutPath -TargetPath $TargetPath -Arguments $Arguments -Description $Description -IconLocation $IconLocation)
 }
 
-function Ensure-AppShortcutSet {
+function Initialize-AppShortcutSet {
     param(
         [string]$ShortcutName,
         [string]$TargetPath,
@@ -3582,7 +3957,7 @@ function Get-AppShortcutSetCacheKey {
     return @($ShortcutName, $TargetPath, $Arguments, $Description, $IconLocation) -join '|'
 }
 
-function Ensure-CachedAppShortcutSet {
+function Initialize-CachedAppShortcutSet {
     param(
         [string]$ShortcutName,
         [string]$TargetPath,
@@ -3607,7 +3982,7 @@ function Ensure-CachedAppShortcutSet {
         }
     }
 
-    $shortcutPaths = Ensure-AppShortcutSet `
+    $shortcutPaths = Initialize-AppShortcutSet `
         -ShortcutName $ShortcutName `
         -TargetPath $TargetPath `
         -Arguments $Arguments `
@@ -3640,7 +4015,7 @@ function Get-PreparedTaskbarPinnedApps {
             continue
         }
 
-        $shortcutPaths = Ensure-CachedAppShortcutSet `
+        $shortcutPaths = Initialize-CachedAppShortcutSet `
             -ShortcutName $pinSpec.ShortcutName `
             -TargetPath $executablePath `
             -Description $pinSpec.PackageName `
@@ -5501,7 +5876,7 @@ function Invoke-ReconcileTaskbarPins {
 
         # Ensure shortcuts exist for all apps that need pinning (required for both
         # the direct placement approach and the Group Policy XML layout).
-        Ensure-Directory $taskbarPinPath
+        Initialize-HunterDirectory $taskbarPinPath
         $preparedPinnedApps = Get-PreparedTaskbarPinnedApps -LogMissingExecutable $true
         foreach ($preparedPin in @($preparedPinnedApps)) {
             $pinSpec = $preparedPin.PinSpec
@@ -5677,7 +6052,7 @@ if (`$hadFailure) {
 }
 "@
 
-        Ensure-Directory (Split-Path -Parent $scriptPath)
+        Initialize-HunterDirectory (Split-Path -Parent $scriptPath)
         Set-Content -Path $scriptPath -Value $logonScript -Encoding UTF8 -Force
 
         $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
@@ -6238,7 +6613,7 @@ function Invoke-ConfigureAutologin {
         $autologonPath = Join-Path $script:DownloadDir 'Autologon64.exe'
         $validatedAutologonPath = $null
 
-        Ensure-InstallerHelpersLoaded
+        Initialize-InstallerHelpers
         $existingAutologon = Get-Item -Path $autologonPath -ErrorAction SilentlyContinue
         if ($null -ne $existingAutologon -and $existingAutologon.Length -gt 0) {
             try {
@@ -6494,6 +6869,11 @@ function Invoke-DisableWidgets {
     }
 
     try {
+        if ($script:SkipStoreAndAppxTasks) {
+            Write-Log 'Skipping Widgets removal because this Windows edition is not a supported consumer Store/AppX build.' 'INFO'
+            return (New-TaskSkipResult -Reason 'Widgets removal is skipped on unsupported LTSC/Server editions')
+        }
+
         $buildContext = Get-WindowsBuildContext
         Stop-Process -Name Widgets -Force -ErrorAction SilentlyContinue
         $widgetEntries = Resolve-HunterAppCatalogEntries -Selections @('widgets')
@@ -6646,6 +7026,11 @@ function Invoke-DisableStoreSearch {
     WinUtil parity: https://winutil.christitus.com/dev/tweaks/essential-tweaks/disablestoresearch/
     #>
     try {
+        if ($script:SkipStoreAndAppxTasks) {
+            Write-Log 'Skipping Microsoft Store search suppression because this Windows edition does not expose the consumer Store/AppX baseline Hunter expects.' 'INFO'
+            return (New-TaskSkipResult -Reason 'Microsoft Store search tuning is skipped on unsupported LTSC/Server editions')
+        }
+
         Write-Log 'Disabling Microsoft Store search results...' 'INFO'
 
         $storeDbPath = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsStore_8wekyb3d8bbwe\LocalState\store.db'
@@ -6870,6 +7255,89 @@ function Invoke-RemoveEdgeKeepWebView2 {
     }
     catch {
         Write-Log -Message "Error in Invoke-RemoveEdgeKeepWebView2: $_" -Level 'ERROR'
+        return $false
+    }
+}
+
+function Invoke-DisableEdgeUpdateInfrastructure {
+    try {
+        Write-Log 'Disabling Edge update infrastructure while preserving WebView2...' 'INFO'
+
+        $warnings = New-Object 'System.Collections.Generic.List[string]'
+        $edgeTasks = @(
+            Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+                $_.TaskName -like 'MicrosoftEdgeUpdateTaskMachine*' -or
+                $_.TaskPath -like '\MicrosoftEdgeUpdate*'
+            }
+        )
+
+        foreach ($edgeTask in $edgeTasks) {
+            try {
+                if ($edgeTask.State -eq 'Disabled') {
+                    Write-Log "Scheduled task already disabled: $($edgeTask.TaskPath)$($edgeTask.TaskName)" 'INFO'
+                    continue
+                }
+
+                Disable-ScheduledTask -TaskPath $edgeTask.TaskPath -TaskName $edgeTask.TaskName -ErrorAction Stop | Out-Null
+                Write-Log "Scheduled task disabled: $($edgeTask.TaskPath)$($edgeTask.TaskName)" 'INFO'
+            } catch {
+                [void]$warnings.Add("Failed to disable Edge scheduled task $($edgeTask.TaskPath)$($edgeTask.TaskName): $($_.Exception.Message)")
+            }
+        }
+
+        foreach ($serviceName in @('edgeupdate', 'edgeupdatem', 'MicrosoftEdgeElevationService')) {
+            try {
+                Stop-ServiceIfPresent -Name $serviceName
+                Set-ServiceStartType -Name $serviceName -StartType Disabled
+            } catch {
+                [void]$warnings.Add("Failed to hard-disable Edge service ${serviceName}: $($_.Exception.Message)")
+            }
+        }
+
+        $edgeUpdatePaths = @(
+            (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\EdgeUpdate'),
+            (Join-Path $script:ProgramFilesRoot 'Microsoft\EdgeUpdate')
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique
+
+        foreach ($edgeUpdatePath in $edgeUpdatePaths) {
+            if (-not (Test-Path $edgeUpdatePath)) {
+                continue
+            }
+
+            try {
+                Remove-Item -Path $edgeUpdatePath -Recurse -Force -ErrorAction Stop
+                Write-Log "Removed Edge update directory: $edgeUpdatePath" 'INFO'
+            } catch {
+                [void]$warnings.Add("Failed to remove Edge update directory $edgeUpdatePath: $($_.Exception.Message)")
+            }
+        }
+
+        $webView2RegPath = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+        $webView2Exists = (Test-Path $webView2RegPath) -or
+            (Test-Path 'C:\Program Files (x86)\Microsoft\EdgeWebView') -or
+            (Test-Path 'C:\Program Files\Microsoft\EdgeWebView')
+        if ($webView2Exists) {
+            Write-Log 'WebView2 runtime remains present after Edge update cleanup.' 'INFO'
+        } else {
+            [void]$warnings.Add('WebView2 runtime could not be verified after Edge update cleanup.')
+        }
+
+        foreach ($warning in @($warnings)) {
+            Write-Log $warning 'WARN'
+        }
+
+        if ($warnings.Count -gt 0) {
+            return @{
+                Success = $true
+                Status  = 'CompletedWithWarnings'
+                Reason  = 'Edge update infrastructure cleanup completed with warnings'
+            }
+        }
+
+        Write-Log 'Edge update infrastructure disabled while preserving WebView2.' 'SUCCESS'
+        return $true
+    } catch {
+        Write-Log "Error in Invoke-DisableEdgeUpdateInfrastructure: $_" 'ERROR'
         return $false
     }
 }
@@ -7130,6 +7598,11 @@ function Invoke-RemoveCopilot {
     param()
 
     try {
+        if ($script:SkipStoreAndAppxTasks) {
+            Write-Log 'Skipping Copilot removal because this Windows edition is not a supported consumer Store/AppX build.' 'INFO'
+            return (New-TaskSkipResult -Reason 'Copilot removal is skipped on unsupported LTSC/Server editions')
+        }
+
         $buildContext = Get-WindowsBuildContext
         if (-not (Test-WindowsBuildInRange -MinBuild 22621)) {
             Write-Log "Copilot removal is not applicable on build $($buildContext.CurrentBuild). Skipping." 'INFO'
@@ -7204,6 +7677,11 @@ function Invoke-NukeBlockApps {
     param()
 
     try {
+        if ($script:SkipStoreAndAppxTasks) {
+            Write-Log 'Skipping broad AppX removal because this Windows edition is not a supported consumer Store/AppX build.' 'INFO'
+            return (New-TaskSkipResult -Reason 'Broad AppX removal is skipped on unsupported LTSC/Server editions')
+        }
+
         Write-Log -Message "Starting comprehensive app NUKE+BLOCK removal..." -Level 'INFO'
 
         $startSurfaceShortcutDirs = @(((Get-DesktopShortcutDirectories) + (Get-StartMenuShortcutDirectories)) | Select-Object -Unique)
@@ -7530,13 +8008,16 @@ function Invoke-DisableTelemetry {
         $telemetryScheduledTasks = @(
             @{ TaskPath = '\Microsoft\Windows\Application Experience\'; TaskName = 'Microsoft Compatibility Appraiser'; DisplayName = 'Microsoft Compatibility Appraiser' },
             @{ TaskPath = '\Microsoft\Windows\Application Experience\'; TaskName = 'ProgramDataUpdater'; DisplayName = 'ProgramDataUpdater' },
+            @{ TaskPath = '\Microsoft\Windows\Application Experience\'; TaskName = 'StartupAppTask'; DisplayName = 'Application Experience StartupAppTask' },
+            @{ TaskPath = '\Microsoft\Windows\Application Experience\'; TaskName = 'PcaPatchDbTask'; DisplayName = 'Application Experience PcaPatchDbTask' },
             @{ TaskPath = '\Microsoft\Windows\Autochk\'; TaskName = 'Proxy'; DisplayName = 'Autochk Proxy' },
             @{ TaskPath = '\Microsoft\Windows\Customer Experience Improvement Program\'; TaskName = 'Consolidator'; DisplayName = 'CEIP Consolidator' },
             @{ TaskPath = '\Microsoft\Windows\Customer Experience Improvement Program\'; TaskName = 'KernelCeipTask'; DisplayName = 'CEIP KernelCeipTask' },
             @{ TaskPath = '\Microsoft\Windows\Customer Experience Improvement Program\'; TaskName = 'UsbCeip'; DisplayName = 'CEIP UsbCeip' },
             @{ TaskPath = '\Microsoft\Windows\DiskDiagnostic\'; TaskName = 'Microsoft-Windows-DiskDiagnosticDataCollector'; DisplayName = 'Disk Diagnostic Data Collector' },
             @{ TaskPath = '\Microsoft\Windows\Feedback\Siuf\'; TaskName = 'DmClient'; DisplayName = 'Feedback DmClient' },
-            @{ TaskPath = '\Microsoft\Windows\Feedback\Siuf\'; TaskName = 'DmClientOnScenarioDownload'; DisplayName = 'Feedback DmClientOnScenarioDownload' }
+            @{ TaskPath = '\Microsoft\Windows\Feedback\Siuf\'; TaskName = 'DmClientOnScenarioDownload'; DisplayName = 'Feedback DmClientOnScenarioDownload' },
+            @{ TaskPath = '\Microsoft\Windows\Windows Error Reporting\'; TaskName = 'QueueReporting'; DisplayName = 'Windows Error Reporting QueueReporting' }
         )
         $telemetryTasksDisabled = $true
         foreach ($telemetryTask in $telemetryScheduledTasks) {
@@ -8557,23 +9038,37 @@ function Invoke-ApplyUiDesktopPerformanceTweaks {
 function Invoke-ApplyInputAndMaintenanceTweaks {
     try {
         Write-Log 'Applying input latency and maintenance tweaks...' 'INFO'
+        $maintenancePath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'
+        $maintenanceStartTime = '03:00'
 
         Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseSpeed' -Value '0'
         Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseThreshold1' -Value '0'
         Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseThreshold2' -Value '0'
         Set-StringForAllUsers -SubPath 'Control Panel\Accessibility\Keyboard Response' -Name 'Flags' -Value '0'
 
-        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance' -Name 'MaintenanceDisabled' -Value 1 -Type DWord
+        Set-RegistryValue -Path $maintenancePath -Name 'MaintenanceDisabled' -Value 0 -Type DWord
+        Set-RegistryValue -Path $maintenancePath -Name 'MaintenanceStartTime' -Value 10800 -Type DWord
+        Set-RegistryValue -Path $maintenancePath -Name 'MaintenanceMaxCpuPercent' -Value 20 -Type DWord
 
-        Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Regular Maintenance' -DisplayName 'Regular Maintenance' | Out-Null
-        Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Idle Maintenance' -DisplayName 'Idle Maintenance' | Out-Null
-        Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Maintenance Configurator' -DisplayName 'Maintenance Configurator' | Out-Null
-        Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\Defrag\' -TaskName 'ScheduledDefrag' -DisplayName 'Scheduled Defrag' | Out-Null
+        Enable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Regular Maintenance' -DisplayName 'Regular Maintenance' | Out-Null
+        Enable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Idle Maintenance' -DisplayName 'Idle Maintenance' | Out-Null
+        Enable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Maintenance Configurator' -DisplayName 'Maintenance Configurator' | Out-Null
+        Enable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\Defrag\' -TaskName 'ScheduledDefrag' -DisplayName 'Scheduled Defrag' | Out-Null
+
+        Set-ScheduledTaskStartTimeIfPresent -TaskFullName '\Microsoft\Windows\TaskScheduler\Regular Maintenance' -StartTime $maintenanceStartTime -DisplayName 'Regular Maintenance' | Out-Null
+        Set-ScheduledTaskStartTimeIfPresent -TaskFullName '\Microsoft\Windows\TaskScheduler\Idle Maintenance' -StartTime $maintenanceStartTime -DisplayName 'Idle Maintenance' | Out-Null
+        Set-ScheduledTaskStartTimeIfPresent -TaskFullName '\Microsoft\Windows\Defrag\ScheduledDefrag' -StartTime $maintenanceStartTime -DisplayName 'Scheduled Defrag' | Out-Null
 
         Invoke-BCDEditBestEffort -ArgumentList @('/timeout', '0') -Description 'Boot manager timeout set to 0 seconds.' | Out-Null
         Invoke-BCDEditBestEffort -ArgumentList @('/deletevalue', 'useplatformclock') -Description 'HPET platform clock override removed.' | Out-Null
-        Invoke-BCDEditBestEffort -ArgumentList @('/set', 'disabledynamictick', 'yes') -Description 'Dynamic ticks disabled.' | Out-Null
         Invoke-BCDEditBestEffort -ArgumentList @('/deletevalue', 'tscsyncpolicy') -Description 'TSC sync policy override removed.' | Out-Null
+
+        if ($script:IsHyperVGuest) {
+            Write-Log 'Skipping useplatformtick/disabledynamictick on a Hyper-V guest.' 'INFO'
+        } else {
+            Invoke-BCDEditBestEffort -ArgumentList @('/set', 'useplatformtick', 'yes') -Description 'Platform tick forced to hardware timer resolution.' | Out-Null
+            Invoke-BCDEditBestEffort -ArgumentList @('/set', 'disabledynamictick', 'yes') -Description 'Dynamic ticks disabled.' | Out-Null
+        }
 
         Write-Log 'Input latency and maintenance tweaks applied.' 'SUCCESS'
         return $true
@@ -8755,7 +9250,7 @@ function Invoke-ExhaustivePowerTuning {
         }
 
         # Enable global timer resolution requests
-        Ensure-GlobalTimerResolutionRequestsEnabled -LogIfAlreadyEnabled | Out-Null
+        Enable-GlobalTimerResolutionRequests -LogIfAlreadyEnabled | Out-Null
 
         $hubSelectiveSuspendTimeoutPath = 'HKLM:\SYSTEM\ControlSet001\Control\Power\PowerSettings\2a737441-1930-4402-8d77-b2bebba308a3\0853a681-27c8-4100-a2fd-82013e970683'
         if (-not (Test-RegistryValue -Path $hubSelectiveSuspendTimeoutPath -Name 'Attributes' -ExpectedValue 2)) {
@@ -8970,6 +9465,86 @@ function Invoke-ExhaustivePowerTuning {
     }
 }
 
+function Invoke-DisableNicPowerManagement {
+    try {
+        Write-Log 'Disabling NIC power-management and wake policies on active physical adapters...' 'INFO'
+
+        if ($null -eq (Get-Command Get-NetAdapter -ErrorAction SilentlyContinue) -or
+            $null -eq (Get-Command Disable-NetAdapterPowerManagement -ErrorAction SilentlyContinue) -or
+            $null -eq (Get-Command Set-NetAdapterPowerManagement -ErrorAction SilentlyContinue)) {
+            Write-Log 'Skipping NIC power-management tuning because required NetAdapter cmdlets are unavailable on this Windows build.' 'WARN'
+            return @{
+                Success = $true
+                Status  = 'CompletedWithWarnings'
+                Reason  = 'NetAdapter power-management cmdlets are unavailable on this system'
+            }
+        }
+
+        $adapters = @(
+            Get-NetAdapter -Physical -ErrorAction SilentlyContinue |
+                Where-Object { $_.Status -eq 'Up' }
+        )
+
+        if ($adapters.Count -eq 0) {
+            Write-Log 'No active physical network adapters were detected for NIC power-management tuning.' 'INFO'
+            return (New-TaskSkipResult -Reason 'No active physical network adapters were detected')
+        }
+
+        $warningMessages = New-Object 'System.Collections.Generic.List[string]'
+        $configuredAdapterCount = 0
+
+        foreach ($adapter in $adapters) {
+            $adapterConfigured = $false
+
+            try {
+                Disable-NetAdapterPowerManagement -Name $adapter.Name -NoRestart -ErrorAction Stop | Out-Null
+                Write-Log "Disabled generic power-management offloads for NIC: $($adapter.Name)" 'INFO'
+                $adapterConfigured = $true
+            } catch {
+                [void]$warningMessages.Add("Could not disable generic power management for NIC '$($adapter.Name)': $($_.Exception.Message)")
+            }
+
+            try {
+                Set-NetAdapterPowerManagement -Name $adapter.Name -WakeOnMagicPacket Disabled -WakeOnPattern Disabled -NoRestart -ErrorAction Stop | Out-Null
+                Write-Log "Disabled NIC wake triggers for: $($adapter.Name)" 'INFO'
+                $adapterConfigured = $true
+            } catch {
+                [void]$warningMessages.Add("Could not disable wake policies for NIC '$($adapter.Name)': $($_.Exception.Message)")
+            }
+
+            if ($adapterConfigured) {
+                $configuredAdapterCount++
+            }
+        }
+
+        foreach ($warningMessage in @($warningMessages | Select-Object -Unique)) {
+            Write-Log $warningMessage 'WARN'
+        }
+
+        if ($configuredAdapterCount -eq 0) {
+            return @{
+                Success = $true
+                Status  = 'CompletedWithWarnings'
+                Reason  = 'NIC power-management cmdlets did not persist changes for any active physical adapter'
+            }
+        }
+
+        if ($warningMessages.Count -gt 0) {
+            return @{
+                Success = $true
+                Status  = 'CompletedWithWarnings'
+                Reason  = 'NIC power-management tuning completed with warnings'
+            }
+        }
+
+        Write-Log "NIC power-management disabled for $configuredAdapterCount/$($adapters.Count) active physical adapter(s)." 'SUCCESS'
+        return $true
+    } catch {
+        Write-Log "Error disabling NIC power-management: $($_.Exception.Message)" 'ERROR'
+        return $false
+    }
+}
+
 function Invoke-InstallTimerResolutionService {
     <#
     .SYNOPSIS
@@ -8991,10 +9566,10 @@ function Invoke-InstallTimerResolutionService {
         $exePath = Join-Path $serviceDir "$serviceName.exe"
         $existingSvc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 
-        Ensure-Directory $serviceDir
+        Initialize-HunterDirectory $serviceDir
 
         if ($null -ne $existingSvc -and (Test-Path $exePath)) {
-            Ensure-GlobalTimerResolutionRequestsEnabled | Out-Null
+            Enable-GlobalTimerResolutionRequests | Out-Null
 
             if ($existingSvc.Status -ne 'Running') {
                 try {
@@ -9282,7 +9857,7 @@ namespace HunterTimerResolution
         Invoke-NativeCommandChecked -FilePath 'sc.exe' -ArgumentList @('description', $serviceName, 'Mirrors the WinSux timer-resolution service and holds the system timer at maximum resolution, or only while configured processes are running.') | Out-Null
         Start-Service -Name $serviceName -ErrorAction Stop
 
-        Ensure-GlobalTimerResolutionRequestsEnabled | Out-Null
+        Enable-GlobalTimerResolutionRequests | Out-Null
 
         try {
             Invoke-NativeCommandChecked -FilePath 'cmd.exe' -ArgumentList @('/c', 'cd /d %systemroot%\system32 && lodctr /R >nul 2>&1') | Out-Null
@@ -9357,6 +9932,8 @@ function Receive-ParallelInstallerJobResult {
     }
 
     try {
+        $jobState = [string]$JobInfo.Job.State
+        $jobStateIndicatesFailure = $jobState -in @('Failed', 'Stopped')
         $jobReceiveErrors = @()
         $jobOutput = @(Receive-Job -Job $JobInfo.Job -Keep -ErrorAction Continue -ErrorVariable +jobReceiveErrors)
         $result = $null
@@ -9402,7 +9979,7 @@ function Receive-ParallelInstallerJobResult {
             if (-not [string]::IsNullOrWhiteSpace($verifiedExecutablePath) -and (Test-Path $verifiedExecutablePath)) {
                 $JobInfo.Target['ExistingExecutablePath'] = $verifiedExecutablePath
                 $packageResult.Success = $true
-                $packageResult.Message = "$($JobInfo.Target.PackageName) installation verified after background job completion"
+                $packageResult.Message = "$($JobInfo.Target.PackageName) installation verified after background job state $jobState"
                 $ResultsByPackageId[$JobInfo.Target.PackageId] = @{
                     Success = $packageResult.Success
                     Message = $packageResult.Message
@@ -9422,6 +9999,10 @@ function Receive-ParallelInstallerJobResult {
             $jobMessage = @($jobMessages | Select-Object -Unique) -join ' | '
             if ([string]::IsNullOrWhiteSpace($jobMessage)) {
                 $jobMessage = 'No result returned from installer job.'
+            }
+
+            if ($jobStateIndicatesFailure) {
+                $jobMessage = "Installer job ended in state $jobState. $jobMessage".Trim()
             }
 
             $packageResult.Message = $jobMessage
@@ -9462,7 +10043,32 @@ function Receive-ParallelInstallerJobResult {
             if (-not [string]::IsNullOrWhiteSpace($existingExecutablePath) -and (Test-Path $existingExecutablePath)) {
                 $JobInfo.Target['ExistingExecutablePath'] = $existingExecutablePath
                 $packageResult.Success = $true
-                $packageResult.Message = "$($JobInfo.Target.PackageName) installation verified after background job completion"
+                $packageResult.Message = "$($JobInfo.Target.PackageName) installation verified after background job state $jobState"
+            }
+        }
+
+        $jobDiagnostics = @(
+            @($jobReceiveErrors | ForEach-Object { $_.ToString() })
+            @($JobInfo.Job.ChildJobs | ForEach-Object { $_.Error } | ForEach-Object { $_.ToString() })
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+
+        if ($jobStateIndicatesFailure -and -not $packageResult.Success) {
+            $diagnosticText = @($jobDiagnostics) -join ' | '
+            if ([string]::IsNullOrWhiteSpace($diagnosticText)) {
+                $diagnosticText = $packageResult.Message
+            }
+
+            if ([string]::IsNullOrWhiteSpace($diagnosticText)) {
+                $diagnosticText = 'Installer job did not return a structured result before failing.'
+            }
+
+            $packageResult.Message = "Installer job ended in state $jobState. $diagnosticText".Trim()
+        } elseif ($jobStateIndicatesFailure -and $packageResult.Success) {
+            $diagnosticText = @($jobDiagnostics) -join ' | '
+            if (-not [string]::IsNullOrWhiteSpace($diagnosticText)) {
+                $packageResult.Message = "$($packageResult.Message) (job state: $jobState; diagnostics: $diagnosticText)"
+            } else {
+                $packageResult.Message = "$($packageResult.Message) (job state: $jobState)"
             }
         }
 
@@ -10511,10 +11117,10 @@ function Invoke-ApplyTcpOptimizerTutorialProfile {
             Write-Log 'Downloading TCP Optimizer...' 'INFO'
             Download-File -Url 'https://www.speedguide.net/files/TCPOptimizer.exe' -Destination $tcpOptimizerPath
         }
-        Ensure-InstallerHelpersLoaded
+        Initialize-InstallerHelpers
         Confirm-InstallerSignature -PackageName 'TCP Optimizer' -Path $tcpOptimizerPath -ExpectedSha256 $script:TcpOptimizerSha256 | Out-Null
 
-        Ensure-DesktopShortcut -ShortcutName 'TCP Optimizer' -TargetPath $tcpOptimizerPath -Description 'TCP Optimizer' | Out-Null
+        Initialize-DesktopShortcut -ShortcutName 'TCP Optimizer' -TargetPath $tcpOptimizerPath -Description 'TCP Optimizer' | Out-Null
         if ($script:IsAutomationRun) {
             Write-Log 'Automation-safe mode enabled; skipping TCP Optimizer UI launch.' 'INFO'
         } else {
@@ -10552,7 +11158,7 @@ function Invoke-ApplyOOSUSilentRecommendedPlusSomewhat {
             Write-Log "Downloading O&O ShutUp10..." 'INFO'
             Download-File -Url 'https://dl5.oo-software.com/files/ooshutup10/OOSU10.exe' -Destination $oosuPath
         }
-        Ensure-InstallerHelpersLoaded
+        Initialize-InstallerHelpers
         Confirm-InstallerSignature -PackageName 'O&O ShutUp10' -Path $oosuPath -ExpectedSha256 $script:OOSUSha256 | Out-Null
 
         Write-Log "Downloading O&O ShutUp10 preset..." 'INFO'
@@ -10562,7 +11168,7 @@ function Invoke-ApplyOOSUSilentRecommendedPlusSomewhat {
         Write-Log "Importing O&O ShutUp10 preset silently..." 'INFO'
         Start-ProcessChecked -FilePath $oosuPath -ArgumentList @($oosuConfigPath, '/quiet', '/force') -WindowStyle Hidden | Out-Null
 
-        Ensure-DesktopShortcut -ShortcutName 'O&O ShutUp10' -TargetPath $oosuPath -Description 'O&O ShutUp10' | Out-Null
+        Initialize-DesktopShortcut -ShortcutName 'O&O ShutUp10' -TargetPath $oosuPath -Description 'O&O ShutUp10' | Out-Null
         if ($script:IsAutomationRun) {
             Write-Log 'Automation-safe mode enabled; skipping O&O ShutUp10 UI launch.' 'INFO'
         } else {
@@ -10801,7 +11407,7 @@ function Invoke-CreateNetworkConnectionsShortcut {
         $description = 'View and manage network connections'
 
         # Create desktop shortcut
-        Ensure-DesktopShortcut `
+        Initialize-DesktopShortcut `
             -ShortcutName $shortcutName `
             -TargetPath $controlExe `
             -Arguments 'ncpa.cpl' `
@@ -11252,7 +11858,7 @@ function Register-ResumeTask {
 
         if (-not $scriptPath) {
             if (-not [string]::IsNullOrWhiteSpace($script:SelfScriptContent)) {
-                Ensure-Directory (Split-Path -Parent $script:ResumeScriptPath)
+                Initialize-HunterDirectory (Split-Path -Parent $script:ResumeScriptPath)
                 Set-Content -Path $script:ResumeScriptPath -Value $script:SelfScriptContent -Force
                 $resumeSupportPaths = @(
                     'src\Hunter\Private\Bootstrap\Config.ps1',
@@ -11273,7 +11879,7 @@ function Register-ResumeTask {
                 foreach ($resumeSupportRelativePath in $resumeSupportPaths) {
                     $resumeSupportSourcePath = Join-Path $resumeSupportRoot $resumeSupportRelativePath
                     $resumeSupportDestinationPath = Join-Path $resumeRoot $resumeSupportRelativePath
-                    Ensure-Directory (Split-Path -Parent $resumeSupportDestinationPath)
+                    Initialize-HunterDirectory (Split-Path -Parent $resumeSupportDestinationPath)
                     Copy-Item -Path $resumeSupportSourcePath -Destination $resumeSupportDestinationPath -Force -ErrorAction Stop
                 }
 
@@ -11490,11 +12096,17 @@ function Invoke-Main {
         $ProgressPreference = 'SilentlyContinue'
 
         # Ensure directories exist
-        Ensure-Directory $script:HunterRoot
-        Ensure-Directory $script:DownloadDir
+        Initialize-HunterDirectory $script:HunterRoot
+        Initialize-HunterDirectory $script:DownloadDir
         Migrate-HunterStateToProgramData
         $script:IsAutomationRun = [bool]$AutomationSafe -or $env:GITHUB_ACTIONS -eq 'true' -or $env:HUNTER_AUTOMATION_SAFE -eq '1'
         $buildContext = Get-WindowsBuildContext
+        $editionContext = Get-WindowsEditionContext
+        $editionSummary = (@(
+            [string]$editionContext.ProductName,
+            [string]$editionContext.EditionId,
+            [string]$editionContext.InstallationType
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }) -join ' | '
 
         Write-Log "===========================================================" 'INFO'
         Write-Log '              HUNTER v2.0 - Windows Debloater' 'INFO'
@@ -11505,6 +12117,9 @@ function Invoke-Main {
         Write-Log "Windows Build:   $($buildContext.CurrentBuild).$($buildContext.UBR) $(if (-not [string]::IsNullOrWhiteSpace($buildContext.DisplayVersion)) { "($($buildContext.DisplayVersion))" } elseif (-not [string]::IsNullOrWhiteSpace($buildContext.ReleaseId)) { "($($buildContext.ReleaseId))" } else { '' })" 'INFO'
         if (-not [string]::IsNullOrWhiteSpace($buildContext.ProductName)) {
             Write-Log "Windows SKU:     $($buildContext.ProductName)" 'INFO'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($editionSummary)) {
+            Write-Log "Edition:         $editionSummary" 'INFO'
         }
         Write-Log "User:            $env:USERNAME on $env:COMPUTERNAME" 'INFO'
         Write-Log "Timestamp:       $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" 'INFO'

@@ -65,12 +65,14 @@ function Load-Checkpoint {
 
 function Save-Checkpoint {
     try {
-        Ensure-Directory (Split-Path -Parent $script:CheckpointPath)
+        Initialize-HunterDirectory (Split-Path -Parent $script:CheckpointPath)
+        $tmpCheckpointPath = '{0}.tmp' -f $script:CheckpointPath
         [ordered]@{
             SchemaVersion = [int]$script:CheckpointSchemaVersion
             SavedAt       = (Get-Date).ToString('o')
             CompletedTasks = @($script:CompletedTasks)
-        } | ConvertTo-Json -Depth 3 | Set-Content -Path $script:CheckpointPath -Force
+        } | ConvertTo-Json -Depth 3 | Set-Content -Path $tmpCheckpointPath -Encoding UTF8 -Force
+        Move-Item -Path $tmpCheckpointPath -Destination $script:CheckpointPath -Force
         Write-Log "Checkpoint saved: $($script:CompletedTasks.Count) tasks"
     } catch {
         Add-RunInfrastructureIssue -Message "Failed to persist checkpoint state: $($_.Exception.Message)" -Level 'ERROR'
@@ -324,10 +326,22 @@ function Build-Tasks {
         -Description 'Verify internet connectivity'
 
     $tasks += New-Task `
+        -TaskId 'preflight-edition-compatibility' `
+        -Phase '1' `
+        -ApplyHandler { Invoke-ValidateSupportedWindowsEdition } `
+        -Description 'Validate supported Windows edition and set Store/AppX compatibility gates'
+
+    $tasks += New-Task `
         -TaskId 'preflight-restore-point' `
         -Phase '1' `
         -ApplyHandler { Invoke-CreateRestorePoint } `
         -Description 'Create Windows System Restore point'
+
+    $tasks += New-Task `
+        -TaskId 'preflight-winget-version' `
+        -Phase '1' `
+        -ApplyHandler { Invoke-EnsureWingetMinVersion } `
+        -Description 'Validate Hunter minimum winget version and refresh App Installer if needed'
 
     $tasks += New-Task `
         -TaskId 'preflight-app-downloads' `
@@ -484,6 +498,12 @@ function Build-Tasks {
         -Description 'Remove Edge pins and shortcuts'
 
     $tasks += New-Task `
+        -TaskId 'cloud-edge-update-block' `
+        -Phase '5' `
+        -ApplyHandler { Invoke-DisableEdgeUpdateInfrastructure } `
+        -Description 'Disable Edge update tasks and services while preserving WebView2'
+
+    $tasks += New-Task `
         -TaskId 'cloud-onedrive-remove' `
         -Phase '5' `
         -ApplyHandler { Invoke-RemoveOneDrive } `
@@ -636,6 +656,12 @@ function Build-Tasks {
         -Description 'Exhaustive power tuning (throttling, fast boot, core parking, device PM)'
 
     $tasks += New-Task `
+        -TaskId 'tweaks-nic-power-management' `
+        -Phase '7' `
+        -ApplyHandler { Invoke-DisableNicPowerManagement } `
+        -Description 'Disable NIC power-management and wake policies on active physical adapters'
+
+    $tasks += New-Task `
         -TaskId 'tweaks-memory-disk' `
         -Phase '7' `
         -ApplyHandler { Invoke-ApplyMemoryDiskBehaviorTweaks } `
@@ -645,7 +671,7 @@ function Build-Tasks {
         -TaskId 'tweaks-input-maintenance' `
         -Phase '7' `
         -ApplyHandler { Invoke-ApplyInputAndMaintenanceTweaks } `
-        -Description 'Disable mouse acceleration, HPET override, dynamic ticks, and maintenance tasks'
+        -Description 'Disable mouse acceleration, tune timer policy, and defer maintenance tasks to 3am'
 
     $tasks += New-Task `
         -TaskId 'tweaks-timer-resolution' `
@@ -720,6 +746,12 @@ function Build-Tasks {
         -Phase '9' `
         -ApplyHandler { Invoke-RetryFailedTasks } `
         -Description 'Retry any failed tasks'
+
+    $tasks += New-Task `
+        -TaskId 'cleanup-autologin-secrets' `
+        -Phase '9' `
+        -ApplyHandler { Invoke-ClearAutologinSecrets } `
+        -Description 'Remove autologin registry values and Hunter-managed secrets after setup completes'
 
     $tasks += New-Task `
         -TaskId 'cleanup-disk-cleanup' `
