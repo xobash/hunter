@@ -2,6 +2,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+try {
+
 # Force TLS 1.2+ for all .NET HTTP requests. Windows 10 ships with .NET 4.x
 # which defaults to TLS 1.0/1.1 — rejected by most CDNs and GitHub.
 # Ref: https://learn.microsoft.com/en-us/dotnet/framework/network-programming/tls
@@ -220,6 +222,38 @@ function Resolve-HunterLocalUserPassword {
     }
 }
 
+function Migrate-HunterStateToProgramData {
+    $legacyCheckpointPath = [string]$script:LegacyCheckpointPath
+    if (-not [string]::IsNullOrWhiteSpace($legacyCheckpointPath) -and
+        (Test-Path $legacyCheckpointPath) -and
+        -not (Test-Path $script:CheckpointPath)) {
+        try {
+            Ensure-Directory (Split-Path -Parent $script:CheckpointPath)
+            Copy-Item -Path $legacyCheckpointPath -Destination $script:CheckpointPath -Force -ErrorAction Stop
+            Write-Log "Migrated legacy checkpoint state from $legacyCheckpointPath to $($script:CheckpointPath)." 'INFO'
+        } catch {
+            Add-RunInfrastructureIssue -Message "Failed to migrate legacy checkpoint state from $legacyCheckpointPath: $($_.Exception.Message)" -Level 'WARN'
+        }
+    }
+
+    foreach ($legacySecretPath in @($script:LegacyLocalUserSecretPaths)) {
+        if ([string]::IsNullOrWhiteSpace([string]$legacySecretPath) -or
+            -not (Test-Path $legacySecretPath) -or
+            (Test-Path $script:LocalUserSecretPath)) {
+            continue
+        }
+
+        try {
+            Ensure-Directory (Split-Path -Parent $script:LocalUserSecretPath)
+            Copy-Item -Path $legacySecretPath -Destination $script:LocalUserSecretPath -Force -ErrorAction Stop
+            Write-Log "Migrated legacy local-user secret from $legacySecretPath to $($script:LocalUserSecretPath)." 'INFO'
+            break
+        } catch {
+            Add-RunInfrastructureIssue -Message "Failed to migrate legacy local-user secret from $legacySecretPath: $($_.Exception.Message)" -Level 'WARN'
+        }
+    }
+}
+
 function Show-YesNoDialog {
     param(
         [Parameter(Mandatory)][string]$Title,
@@ -273,6 +307,249 @@ function Resolve-SkipAppDownloadsPreference {
     }
 
     return [bool]$script:SkipAppDownloads
+}
+
+function Get-WindowsActivationStateSummary {
+    $statusMap = @{
+        0 = 'Unlicensed'
+        1 = 'Licensed'
+        2 = 'OOBGrace'
+        3 = 'OOTGrace'
+        4 = 'NonGenuineGrace'
+        5 = 'Notification'
+        6 = 'ExtendedGrace'
+    }
+
+    try {
+        $activationProducts = @(
+            Get-CimInstance -ClassName SoftwareLicensingProduct `
+                -Filter "ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f' AND PartialProductKey IS NOT NULL" `
+                -ErrorAction Stop
+        )
+        if ($activationProducts.Count -eq 0) {
+            return 'Unknown (no activation product instance exposed)'
+        }
+
+        $licensedProduct = @($activationProducts | Where-Object { [int]$_.LicenseStatus -eq 1 } | Select-Object -First 1)
+        if ($licensedProduct.Count -gt 0) {
+            return 'Licensed'
+        }
+
+        $sampleProduct = @($activationProducts | Select-Object -First 1)
+        if ($sampleProduct.Count -eq 0) {
+            return 'Unknown'
+        }
+
+        $statusCode = [int]$sampleProduct[0].LicenseStatus
+        if ($statusMap.ContainsKey($statusCode)) {
+            return $statusMap[$statusCode]
+        }
+
+        return "Unknown ($statusCode)"
+    } catch {
+        return "Unknown ($($_.Exception.Message))"
+    }
+}
+
+function Test-WingetFunctional {
+    $wingetCommand = Get-Command winget -ErrorAction SilentlyContinue
+    if ($null -eq $wingetCommand) {
+        return [pscustomobject]@{
+            Available = $false
+            Version   = ''
+            Message   = 'winget.exe was not found on PATH.'
+        }
+    }
+
+    try {
+        $versionOutput = @(& $wingetCommand.Source --version 2>&1)
+        $exitCode = [int]$LASTEXITCODE
+        $versionText = [string]::Join(' ', @($versionOutput | ForEach-Object { [string]$_ })).Trim()
+        if ($exitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($versionText)) {
+            return [pscustomobject]@{
+                Available = $true
+                Version   = $versionText
+                Message   = ''
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($versionText)) {
+            $versionText = "winget exited with code $exitCode."
+        }
+
+        return [pscustomobject]@{
+            Available = $false
+            Version   = ''
+            Message   = $versionText
+        }
+    } catch {
+        return [pscustomobject]@{
+            Available = $false
+            Version   = ''
+            Message   = $_.Exception.Message
+        }
+    }
+}
+
+function Install-WingetFromOfficialBundle {
+    $bundleUrl = 'https://aka.ms/getwinget'
+    $desktopPowerShellPath = Get-NativeSystemExecutablePath -FileName 'powershell.exe'
+    $bundlePath = Join-Path $script:DownloadDir 'Microsoft.DesktopAppInstaller.msixbundle'
+    $installerScriptPath = Join-Path $script:DownloadDir 'Install-WingetBundle.ps1'
+
+    try {
+        Ensure-Directory $script:DownloadDir
+        Write-Log "Attempting App Installer bootstrap from $bundleUrl" 'INFO'
+        Invoke-WebRequest -Uri $bundleUrl -OutFile $bundlePath -UseBasicParsing -MaximumRedirection 10 -TimeoutSec 300 -ErrorAction Stop
+
+        $installerScript = @'
+param([Parameter(Mandatory)][string]$BundlePath)
+$ErrorActionPreference = 'Stop'
+Add-AppxPackage -Path $BundlePath -ErrorAction Stop
+'@
+
+        Set-Content -Path $installerScriptPath -Value $installerScript -Encoding UTF8 -Force
+        $installerOutput = @(& $desktopPowerShellPath -NoProfile -ExecutionPolicy Bypass -File $installerScriptPath -BundlePath $bundlePath 2>&1)
+        if ([int]$LASTEXITCODE -ne 0) {
+            $installerMessage = [string]::Join(' ', @($installerOutput | ForEach-Object { [string]$_ })).Trim()
+            if ([string]::IsNullOrWhiteSpace($installerMessage)) {
+                $installerMessage = "App Installer bootstrap exited with code $LASTEXITCODE."
+            }
+
+            throw $installerMessage
+        }
+
+        Write-Log 'App Installer bootstrap completed. Re-checking winget availability...' 'INFO'
+        return $true
+    } catch {
+        Write-Log "Winget bootstrap failed: $($_.Exception.Message)" 'ERROR'
+        return $false
+    } finally {
+        Remove-Item -Path $installerScriptPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Ensure-WingetFunctional {
+    if (Resolve-SkipAppDownloadsPreference) {
+        $script:PackagePipelineBlocked = $false
+        $script:PackagePipelineBlockReason = ''
+        return $true
+    }
+
+    $wingetStatus = Test-WingetFunctional
+    if ($wingetStatus.Available) {
+        $script:PackagePipelineBlocked = $false
+        $script:PackagePipelineBlockReason = ''
+        Write-Log "winget functional check passed: $($wingetStatus.Version)" 'INFO'
+        return $true
+    }
+
+    $script:PackagePipelineBlocked = $true
+    $script:PackagePipelineBlockReason = 'winget is not functional and Hunter could not safely prepare the package pipeline.'
+    Write-Log "winget preflight failed: $($wingetStatus.Message)" 'WARN'
+    Write-Log 'Package installs that rely on App Installer may fail until winget is repaired.' 'WARN'
+
+    if ($script:IsAutomationRun) {
+        Write-Log 'Automation-safe mode will not attempt interactive winget bootstrap. Install App Installer manually or rerun after winget is repaired.' 'ERROR'
+        return $false
+    }
+
+    $shouldBootstrapWinget = Show-YesNoDialog `
+        -Title 'Hunter winget Repair' `
+        -Message "Hunter could not run 'winget --version'.`n`nError:`n$($wingetStatus.Message)`n`nWould you like Hunter to try installing App Installer from https://aka.ms/getwinget now?" `
+        -DefaultToNo $true
+
+    if (-not $shouldBootstrapWinget) {
+        Write-Log 'winget is required for parts of the package pipeline. The user declined App Installer bootstrap, so app downloads cannot proceed safely.' 'ERROR'
+        return $false
+    }
+
+    if (-not (Install-WingetFromOfficialBundle)) {
+        return $false
+    }
+
+    $postBootstrapWingetStatus = Test-WingetFunctional
+    if (-not $postBootstrapWingetStatus.Available) {
+        Write-Log "winget is still not functional after App Installer bootstrap: $($postBootstrapWingetStatus.Message)" 'ERROR'
+        return $false
+    }
+
+    $script:PackagePipelineBlocked = $false
+    $script:PackagePipelineBlockReason = ''
+    Write-Log "winget functional check passed after bootstrap: $($postBootstrapWingetStatus.Version)" 'SUCCESS'
+    return $true
+}
+
+function Resolve-DisableTeredoPreference {
+    if ($script:TeredoPreferenceResolved) {
+        return [bool]$script:TeredoDisableResolvedValue
+    }
+
+    $script:TeredoPreferenceResolved = $true
+
+    if ([bool]$script:DisableTeredoRequested -or $env:HUNTER_DISABLE_TEREDO -eq '1') {
+        $script:DisableTeredoRequested = $true
+        $script:TeredoDisableResolvedValue = $true
+        return $true
+    }
+
+    if ($script:IsAutomationRun) {
+        Write-Log 'Skipping Teredo disable by default in automation-safe mode. Set HUNTER_DISABLE_TEREDO=1 or pass -DisableTeredo to opt in.' 'INFO'
+        $script:TeredoDisableResolvedValue = $false
+        return $false
+    }
+
+    $script:DisableTeredoRequested = Show-YesNoDialog `
+        -Title 'Hunter Teredo Policy' `
+        -Message "Disable Teredo?`n`nTeredo is still used by Xbox Live, some peer-to-peer games, and certain VPN scenarios. Choose Yes only if you specifically want Hunter to disable it." `
+        -DefaultToNo $true
+    $script:TeredoDisableResolvedValue = [bool]$script:DisableTeredoRequested
+
+    if ($script:DisableTeredoRequested) {
+        Write-Log 'Teredo disable was approved by the user.' 'INFO'
+    } else {
+        Write-Log 'Teredo will be preserved unless -DisableTeredo or HUNTER_DISABLE_TEREDO=1 is supplied.' 'INFO'
+    }
+
+    return [bool]$script:TeredoDisableResolvedValue
+}
+
+function Resolve-DisableHagsPreference {
+    if ($script:HagsPreferenceResolved) {
+        return [bool]$script:HagsDisableResolvedValue
+    }
+
+    $script:HagsPreferenceResolved = $true
+
+    if ([bool]$script:DisableHagsRequested -or $env:HUNTER_DISABLE_HAGS -eq '1') {
+        $script:HagsDisableResolvedValue = $true
+        return $true
+    }
+
+    $gpuSummary = (@(Get-GpuPciDeviceContexts) | ForEach-Object { '{0} ({1})' -f $_.Name, $_.Vendor }) -join '; '
+    if ([string]::IsNullOrWhiteSpace($gpuSummary)) {
+        $gpuSummary = 'No PCI display devices detected'
+    }
+
+    if ($script:IsAutomationRun) {
+        Write-Log "Preserving HAGS in automation-safe mode. Use -DisableHags or HUNTER_DISABLE_HAGS=1 to apply Hunter's legacy HAGS disable override. GPU(s): $gpuSummary" 'INFO'
+        $script:HagsDisableResolvedValue = $false
+        return $false
+    }
+
+    $disableHags = Show-YesNoDialog `
+        -Title 'Hunter HAGS Policy' `
+        -Message "Disable Hardware-Accelerated GPU Scheduling (HAGS)?`n`nDetected GPU(s):`n$gpuSummary`n`nOn many newer driver stacks, preserving HAGS is the safer default. Choose Yes only if you specifically want Hunter's legacy HAGS disable behavior." `
+        -DefaultToNo $true
+
+    $script:HagsDisableResolvedValue = [bool]$disableHags
+    if ($script:HagsDisableResolvedValue) {
+        Write-Log "HAGS disable was approved by the user for GPU(s): $gpuSummary" 'INFO'
+    } else {
+        Write-Log "HAGS override will not be applied. Hunter will preserve the current Windows/driver HAGS state for GPU(s): $gpuSummary" 'INFO'
+    }
+
+    return [bool]$script:HagsDisableResolvedValue
 }
 
 function Initialize-InstallerJobHelpers {
@@ -1554,6 +1831,10 @@ function Invoke-ApplyAppRemovalStrategies {
                     }
                 }
                 'AppxPattern' {
+                    if ($null -ne $strategy.PSObject.Properties['PatternJustification'] -and
+                        -not [string]::IsNullOrWhiteSpace([string]$strategy.PatternJustification)) {
+                        Write-Log "Wildcard AppX match rationale for $([string]$entry.FriendlyName): $([string]$strategy.PatternJustification)" 'INFO'
+                    }
                     Remove-AppxPatterns -Patterns @($strategy.Patterns)
                 }
             }
@@ -2576,6 +2857,7 @@ function Get-InstallTargetCatalog {
             PackageId                 = 'powershell7'
             PackageName               = 'PowerShell 7'
             WingetId                  = 'Microsoft.PowerShell'
+            ChocolateyId              = 'powershell-core'
             SkipWinget                = $false
             GetDownloadSpec           = { Get-PowerShell7DownloadSpec }
             InstallerArgs             = '/qn /norestart'
@@ -2595,6 +2877,7 @@ function Get-InstallTargetCatalog {
             PackageId                 = 'brave'
             PackageName               = 'Brave'
             WingetId                  = 'Brave.Brave'
+            ChocolateyId              = 'brave'
             SkipWinget                = $false
             GetDownloadSpec           = { Get-BraveDownloadSpec }
             InstallerArgs             = '/silent /install'
@@ -2654,6 +2937,7 @@ function Get-InstallTargetCatalog {
             PackageId                 = 'ffmpeg'
             PackageName               = 'FFmpeg'
             WingetId                  = 'Gyan.FFmpeg'
+            ChocolateyId              = 'ffmpeg'
             SkipWinget                = $false
             GetDownloadSpec           = { Get-FFmpegDownloadSpec }
             InstallerArgs             = ''
@@ -2673,6 +2957,7 @@ function Get-InstallTargetCatalog {
             PackageId                 = 'ytdlp'
             PackageName               = 'yt-dlp'
             WingetId                  = 'yt-dlp.yt-dlp'
+            ChocolateyId              = 'yt-dlp'
             SkipWinget                = $false
             GetDownloadSpec           = { Get-YtDlpDownloadSpec }
             InstallerArgs             = ''
@@ -2692,6 +2977,7 @@ function Get-InstallTargetCatalog {
             PackageId                 = 'crystaldiskmark'
             PackageName               = 'CrystalDiskMark'
             WingetId                  = 'CrystalDewWorld.CrystalDiskMark'
+            ChocolateyId              = 'crystaldiskmark'
             SkipWinget                = $false
             GetDownloadSpec           = { Get-CrystalDiskMarkDownloadSpec }
             InstallerArgs             = '/S'
@@ -2754,6 +3040,7 @@ function Get-InstallTargetCatalog {
             PackageId                 = 'peazip'
             PackageName               = 'PeaZip'
             WingetId                  = 'Giorgiotani.Peazip'
+            ChocolateyId              = 'peazip.install'
             SkipWinget                = $false
             GetDownloadSpec           = { Get-PeaZipDownloadSpec }
             InstallerArgs             = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-'
@@ -4369,6 +4656,7 @@ function Start-ProgressWindow {
             TaskData    = $null      # JSON string of task snapshots pushed from main thread
             CloseFlag   = $false
             Error       = $null
+            HeartbeatUtc = $null
         })
 
         $syncRef = $script:UiSync   # local ref for the scriptblock closure
@@ -4956,6 +5244,7 @@ function Start-ProgressWindow {
             $timer = [System.Windows.Threading.DispatcherTimer]::new()
             $timer.Interval = [TimeSpan]::FromMilliseconds(250)
             $timer.Add_Tick({
+                $Sync.HeartbeatUtc = [DateTime]::UtcNow
                 # Check for close request
                 if ($Sync.CloseFlag) {
                     $window.Close()
@@ -4972,6 +5261,7 @@ function Start-ProgressWindow {
             $Sync.Dispatcher = $window.Dispatcher
             $Sync.Window     = $window
             $Sync.Ready      = $true
+            $Sync.HeartbeatUtc = [DateTime]::UtcNow
 
             # Show window and start message pump
             $window.Show()
@@ -5005,8 +5295,39 @@ function Start-ProgressWindow {
     }
 }
 
+function Test-ProgressWindowHeartbeatFresh {
+    if ($null -eq $script:UiSync -or -not $script:UiSync.Ready) {
+        return $false
+    }
+
+    $heartbeatUtc = $script:UiSync.HeartbeatUtc
+    if ($null -eq $heartbeatUtc) {
+        return $true
+    }
+
+    return (([DateTime]::UtcNow - [DateTime]$heartbeatUtc).TotalSeconds -le [double]$script:ProgressUiHeartbeatTimeoutSec)
+}
+
+function Disable-ProgressWindowWatchdog {
+    if ($null -eq $script:UiSync) {
+        return
+    }
+
+    try {
+        if ($null -ne $script:UiSync.Dispatcher) {
+            $script:UiSync.Dispatcher.BeginInvokeShutdown([System.Windows.Threading.DispatcherPriority]::Send) | Out-Null
+        }
+    } catch {
+    }
+
+    $script:UiSync = $null
+    $script:UiPipeline = $null
+    $script:UiRunspace = $null
+}
+
 function Close-ProgressWindow {
     if ($null -ne $script:UiSync) {
+        $progressWindowHealthy = Test-ProgressWindowHeartbeatFresh
         try {
             $script:UiSync.CloseFlag = $true
 
@@ -5029,7 +5350,11 @@ function Close-ProgressWindow {
         # Cleanup runspace
         try {
             if ($null -ne $script:UiPipeline) {
-                $script:UiPipeline.Stop()
+                if ($progressWindowHealthy) {
+                    $script:UiPipeline.Stop()
+                } else {
+                    Write-Log 'Progress overlay heartbeat stopped responding. Skipping blocking Stop() during cleanup.' 'WARN'
+                }
                 $script:UiPipeline.Dispose()
             }
         } catch { }
@@ -5058,6 +5383,16 @@ function Update-ProgressUI {
     if ($null -eq $script:UiSync -or -not $script:UiSync.Ready) { return }
 
     try {
+        if (-not (Test-ProgressWindowHeartbeatFresh)) {
+            if (-not $script:ProgressUiIssueLogged) {
+                $script:ProgressUiIssueLogged = $true
+                Add-RunInfrastructureIssue -Message "Progress overlay heartbeat stopped responding for more than $($script:ProgressUiHeartbeatTimeoutSec) seconds. Hunter disabled the overlay and continued headless." -Level 'WARN'
+            }
+
+            Disable-ProgressWindowWatchdog
+            return
+        }
+
         if (-not [string]::IsNullOrWhiteSpace([string]$script:UiSync.Error) -and -not $script:ProgressUiIssueLogged) {
             $script:ProgressUiIssueLogged = $true
             Add-RunInfrastructureIssue -Message "Progress overlay refresh failed; task execution continued without a reliable live UI: $($script:UiSync.Error)" -Level 'WARN'
@@ -5620,7 +5955,11 @@ function Invoke-VerifyInternetConnectivity {
 
 function Invoke-ConfirmAppDownloads {
     try {
-        Resolve-SkipAppDownloadsPreference | Out-Null
+        $skipAppDownloads = Resolve-SkipAppDownloadsPreference
+        if (-not $skipAppDownloads) {
+            return (Ensure-WingetFunctional)
+        }
+
         return $true
     } catch {
         Write-Log "Failed to capture app download/install preference : $_" 'ERROR'
@@ -5635,6 +5974,11 @@ function Invoke-PreDownloadInstallers {
             Write-Log 'Skipping background package download/install pipeline by user request.' 'INFO'
             Invoke-PrefetchExternalAssets
             return $true
+        }
+        if ($script:PackagePipelineBlocked) {
+            Write-Log "Skipping background package download/install pipeline: $($script:PackagePipelineBlockReason)" 'WARN'
+            Invoke-PrefetchExternalAssets
+            return (New-TaskSkipResult -Reason $script:PackagePipelineBlockReason)
         }
 
         $launchResult = Invoke-ParallelInstalls -LaunchOnly
@@ -6441,8 +6785,10 @@ function Invoke-DisableExplorerAutoFolderDiscovery {
         Set-RegistryValue -Path $shellPath -Name 'FolderType' -Value 'NotSpecified' -Type String
 
         Request-ExplorerRestart
+        return $true
     } catch {
         Write-Log "Failed to disable Explorer auto folder discovery : $_" 'ERROR'
+        return $false
     }
 }
 # ==============================================================================
@@ -6459,6 +6805,7 @@ function Invoke-RemoveEdgeKeepWebView2 {
     param()
 
     try {
+        Write-Log -Message 'Edge removal is best-effort. Microsoft frequently blocks or partially resists removal depending on build, WebView2 state, and installer policy.' -Level 'WARN'
         Write-Log -Message "Unlocking the official Edge uninstaller and removing Microsoft Edge..." -Level 'INFO'
         Invoke-ApplyAppRemovalStrategies -Entries (Resolve-HunterAppCatalogEntries -Selections @('edge')) | Out-Null
 
@@ -6475,8 +6822,12 @@ function Invoke-RemoveEdgeKeepWebView2 {
                 return $true
             }
 
-            Write-Log -Message 'Edge installer was not found. Skipping Edge removal.' -Level 'INFO'
-            return (New-TaskSkipResult -Reason 'Edge installer was not present')
+            Write-Log -Message 'Edge installer was not found. Edge removal will be treated as best-effort only on this system.' -Level 'WARN'
+            return @{
+                Success = $true
+                Status  = 'CompletedWithWarnings'
+                Reason  = 'Edge installer was not present, so removal could not be completed deterministically'
+            }
         }
 
         New-Item 'C:\Windows\SystemApps\Microsoft.MicrosoftEdge_8wekyb3d8bbwe\MicrosoftEdge.exe' -Force | Out-Null
@@ -6490,8 +6841,12 @@ function Invoke-RemoveEdgeKeepWebView2 {
         if ([int]$edgeUninstall.ExitCode -eq 19) {
             $warningMessage = 'Edge uninstaller exited with code 19.'
             if ($edgeStillInstalled) {
-                Write-Log -Message "$warningMessage Edge still appears to be installed, so this step will be marked as skipped." -Level 'WARN'
-                return (New-TaskSkipResult -Reason 'Edge uninstall was blocked by the current Windows build or installer state')
+                Write-Log -Message "$warningMessage Edge still appears to be installed, so this step will be marked as best-effort with warnings." -Level 'WARN'
+                return @{
+                    Success = $true
+                    Status  = 'CompletedWithWarnings'
+                    Reason  = 'Edge uninstall was blocked by the current Windows build or installer state'
+                }
             }
 
             Write-Log -Message "$warningMessage Edge binaries are no longer present." -Level 'SUCCESS'
@@ -7416,6 +7771,11 @@ function Invoke-DisableTeredo {
     param()
 
     try {
+        if (-not (Resolve-DisableTeredoPreference)) {
+            Write-Log 'Skipping Teredo disable by default. Pass -DisableTeredo or set HUNTER_DISABLE_TEREDO=1 to opt in.' 'INFO'
+            return (New-TaskSkipResult -Reason 'Teredo disable is opt-in because some gaming, Xbox Live, and VPN scenarios still rely on it')
+        }
+
         Write-Log -Message "Disabling Teredo..." -Level 'INFO'
 
         # Pre-check: Is Teredo already disabled?
@@ -8014,7 +8374,13 @@ function Invoke-ApplyGraphicsSchedulingTweaks {
         $graphicsDriversPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers'
         $dwmPath = 'HKLM:\SOFTWARE\Microsoft\Windows\Dwm'
 
-        Set-RegistryValue -Path $graphicsDriversPath -Name 'HwSchMode' -Value 1 -Type DWord
+        if (Resolve-DisableHagsPreference) {
+            Set-RegistryValue -Path $graphicsDriversPath -Name 'HwSchMode' -Value 1 -Type DWord | Out-Null
+            Write-Log 'HAGS override applied: HwSchMode=1 (disabled).' 'INFO'
+        } else {
+            Remove-RegistryValueIfPresent -Path $graphicsDriversPath -Name 'HwSchMode'
+            Write-Log 'HAGS override was not applied. Existing Windows/driver scheduling state was preserved.' 'INFO'
+        }
         Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrLevel' -Value 0 -Type DWord
         Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrDelay' -Value 10 -Type DWord
         Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrDdiDelay' -Value 10 -Type DWord
@@ -8345,7 +8711,11 @@ function Invoke-ExhaustivePowerTuning {
         }
 
         # Unpark CPU cores - set max parking percentage to 100 (= never park)
-        $coreUnparkPath = 'HKLM:\SYSTEM\ControlSet001\Control\Power\PowerSettings\54533251-82be-4824-96c1-47b60b740d00\0cc5b647-c1df-4637-891a-dec35c318583'
+        $coreUnparkPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\54533251-82be-4824-96c1-47b60b740d00\0cc5b647-c1df-4637-891a-dec35c318583'
+        if (-not (Test-RegistryValue -Path $coreUnparkPath -Name 'Attributes' -ExpectedValue 0)) {
+            Set-RegistryValue -Path $coreUnparkPath -Name 'Attributes' -Value 0 -Type DWord | Out-Null
+            Write-Log 'Exposed the processor core parking minimum cores setting in Power Options (Attributes=0).' 'INFO'
+        }
         if (-not (Test-RegistryValue -Path $coreUnparkPath -Name 'ValueMin' -ExpectedValue 100)) {
             Set-RegistryValue -Path $coreUnparkPath -Name 'ValueMin' -Value 100 -Type DWord
         }
@@ -9139,6 +9509,13 @@ function Invoke-ParallelInstalls {
             Write-Log 'App downloads and installs were skipped by user preference. Package pipeline will not run.' 'INFO'
             return (New-TaskSkipResult -Reason 'App downloads and installs were skipped by the user')
         }
+        if ($script:PackagePipelineBlocked) {
+            Write-Log "App download pipeline is blocked: $($script:PackagePipelineBlockReason)" 'WARN'
+            return (New-TaskSkipResult -Reason $script:PackagePipelineBlockReason)
+        }
+        if (-not (Ensure-WingetFunctional)) {
+            return $false
+        }
 
         if ($null -eq $script:PostInstallCompletion) {
             $script:PostInstallCompletion = @{}
@@ -9183,6 +9560,11 @@ function Invoke-ParallelInstalls {
                         [bool]$target.WingetUseId
                     } else {
                         $true
+                    }
+                    $resolvedTarget.ChocolateyId = if ($target.ContainsKey('ChocolateyId') -and -not [string]::IsNullOrWhiteSpace([string]$target.ChocolateyId)) {
+                        [string]$target.ChocolateyId
+                    } else {
+                        ''
                     }
                     $resolvedTarget.AllowDirectDownloadFallback = if ($target.ContainsKey('AllowDirectDownloadFallback')) {
                         [bool]$target.AllowDirectDownloadFallback
@@ -9252,6 +9634,7 @@ function Invoke-ParallelInstalls {
                     WingetId                   = $resolvedTarget.WingetId
                     WingetSource               = $resolvedTarget.WingetSource
                     WingetUseId                = $resolvedTarget.WingetUseId
+                    ChocolateyId              = $resolvedTarget.ChocolateyId
                     SkipWinget                 = $resolvedTarget.SkipWinget
                     DownloadUrl                = $resolvedTarget.DownloadUrl
                     DownloadFileName           = $resolvedTarget.DownloadFileName
@@ -9402,6 +9785,85 @@ function Invoke-ParallelInstalls {
                         }
                     }
 
+                    function Resolve-ChocolateyExecutablePath {
+                        $candidatePaths = @(
+                            (Get-Command choco.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source),
+                            (Join-Path $env:ProgramData 'chocolatey\bin\choco.exe')
+                        ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+
+                        foreach ($candidatePath in $candidatePaths) {
+                            if (Test-Path $candidatePath) {
+                                return $candidatePath
+                            }
+                        }
+
+                        return $null
+                    }
+
+                    function Install-ChocolateyBootstrapInternal {
+                        $bootstrapUrl = 'https://community.chocolatey.org/install.ps1'
+                        $desktopPowerShellPath = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+                        $bootstrapScriptPath = Join-Path $DownloadDir 'install-chocolatey.ps1'
+
+                        return (Invoke-WithNamedSemaphore -Name 'Global\HunterChocolateyBootstrap' -Action {
+                            try {
+                                $existingChocolateyPath = Resolve-ChocolateyExecutablePath
+                                if (-not [string]::IsNullOrWhiteSpace($existingChocolateyPath)) {
+                                    return $existingChocolateyPath
+                                }
+
+                                Invoke-WebRequest -Uri $bootstrapUrl -OutFile $bootstrapScriptPath -UseBasicParsing -MaximumRedirection 10 -TimeoutSec 300 -ErrorAction Stop
+                                & $desktopPowerShellPath -NoProfile -ExecutionPolicy Bypass -File $bootstrapScriptPath *> $null
+                                if ([int]$LASTEXITCODE -ne 0) {
+                                    throw "Chocolatey bootstrap exited with code $LASTEXITCODE"
+                                }
+
+                                $resolvedChocolateyPath = Resolve-ChocolateyExecutablePath
+                                if ([string]::IsNullOrWhiteSpace($resolvedChocolateyPath)) {
+                                    throw 'Chocolatey bootstrap completed but choco.exe was still not found.'
+                                }
+
+                                return $resolvedChocolateyPath
+                            } finally {
+                                Remove-Item -Path $bootstrapScriptPath -Force -ErrorAction SilentlyContinue
+                            }
+                        })
+                    }
+
+                    function Install-ChocolateyPackageInternal {
+                        param(
+                            [string]$PackageName,
+                            [string]$ChocolateyId
+                        )
+
+                        if ([string]::IsNullOrWhiteSpace($ChocolateyId)) {
+                            throw "No Chocolatey package id is configured for $PackageName"
+                        }
+
+                        $chocoPath = Resolve-ChocolateyExecutablePath
+                        if ([string]::IsNullOrWhiteSpace($chocoPath)) {
+                            $chocoPath = Install-ChocolateyBootstrapInternal
+                        }
+
+                        if ([string]::IsNullOrWhiteSpace($chocoPath)) {
+                            throw "Chocolatey could not be resolved for $PackageName"
+                        }
+
+                        $env:Path = ((Split-Path -Parent $chocoPath) + ';' + $env:Path)
+                        $validChocolateyExitCodes = @(0, 1605, 1614, 1641, 3010)
+
+                        $chocoExitCode = Invoke-WithNamedSemaphore -Name 'Global\HunterChocolateyInstall' -Action {
+                            & $chocoPath install $ChocolateyId -y --no-progress --limit-output *> $null
+                            return [int]$LASTEXITCODE
+                        }
+
+                        if ($validChocolateyExitCodes -notcontains [int]$chocoExitCode) {
+                            throw "$PackageName install via Chocolatey package '$ChocolateyId' failed with exit code $chocoExitCode"
+                        }
+
+                        return [int]$chocoExitCode
+                    }
+
                     function Invoke-DirectInstall {
                         param(
                             [hashtable]$InstallTarget,
@@ -9488,6 +9950,19 @@ function Invoke-ParallelInstalls {
 
                             if (-not $Target.AllowDirectDownloadFallback) {
                                 throw "$($Target.PackageName) install via $($Target.WingetSource) failed with exit code $wingetExitCode"
+                            }
+                        }
+
+                        if (-not [string]::IsNullOrWhiteSpace([string]$Target.ChocolateyId)) {
+                            try {
+                                $chocoExitCode = Install-ChocolateyPackageInternal -PackageName $Target.PackageName -ChocolateyId ([string]$Target.ChocolateyId)
+                                $result.Success = $true
+                                $result.Message = "$($Target.PackageName) installed via Chocolatey ($($Target.ChocolateyId), exit code $chocoExitCode)"
+                                return [pscustomobject]$result
+                            } catch {
+                                if (-not $Target.AllowDirectDownloadFallback) {
+                                    throw
+                                }
                             }
                         }
 
@@ -10000,6 +10475,7 @@ function Invoke-ApplyTcpOptimizerTutorialProfile {
         }
         # TCP DelAck Ticks: Disabled (0)
         Set-RegistryValue -Path $tcpParams -Name 'TcpDelAckTicks' -Value 0 -Type DWord
+        Write-Log 'Applied native MMCSS game scheduling priorities and per-interface Nagle disable (TcpAckFrequency/TCPNoDelay) before launching TCP Optimizer.' 'INFO'
 
         # Disable NetBIOS over TCP/IP on IP-enabled adapters
         foreach ($adapterConfig in @(Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter 'IPEnabled = True' -ErrorAction SilentlyContinue)) {
@@ -10828,6 +11304,15 @@ function Register-ResumeTask {
         if ($script:SkipTaskIds.Count -gt 0) {
             $resumeActionArguments += " -SkipTask `"$((@($script:SkipTaskIds | Select-Object -Unique) -join ','))`""
         }
+        if ($script:DisableIPv6Requested) {
+            $resumeActionArguments += ' -DisableIPv6'
+        }
+        if ($script:DisableTeredoRequested) {
+            $resumeActionArguments += ' -DisableTeredo'
+        }
+        if ($script:DisableHagsRequested) {
+            $resumeActionArguments += ' -DisableHags'
+        }
 
         $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
             -Argument $resumeActionArguments
@@ -10939,6 +11424,14 @@ function Invoke-Main {
     .PARAMETER DisableIPv6
         Opt in to Hunter's legacy IPv6-disable task. By default Hunter now
         preserves IPv6 because some remote-access and gaming services rely on it.
+
+    .PARAMETER DisableTeredo
+        Opt in to Hunter's Teredo-disable task. By default Hunter now preserves
+        Teredo because some gaming and VPN scenarios still rely on it.
+
+    .PARAMETER DisableHags
+        Opt in to Hunter's legacy HAGS disable override. By default Hunter now
+        preserves the current HAGS state unless the user explicitly approves a change.
     #>
 
     param(
@@ -10953,7 +11446,11 @@ function Invoke-Main {
 
         [string]$CustomAppsListPath = '',
 
-        [switch]$DisableIPv6
+        [switch]$DisableIPv6,
+
+        [switch]$DisableTeredo,
+
+        [switch]$DisableHags
     )
 
     $script:StrictMode = [bool]$Strict
@@ -10967,6 +11464,18 @@ function Invoke-Main {
     )
     $script:CustomAppsListPathOverride = if ([string]::IsNullOrWhiteSpace($CustomAppsListPath)) { $null } else { $CustomAppsListPath }
     $script:DisableIPv6Requested = [bool]$DisableIPv6 -or $env:HUNTER_DISABLE_IPV6 -eq '1'
+    $script:DisableTeredoRequested = [bool]$DisableTeredo -or $env:HUNTER_DISABLE_TEREDO -eq '1'
+    $script:TeredoPreferenceResolved = $false
+    $script:TeredoDisableResolvedValue = $false
+    $script:DisableHagsRequested = [bool]$DisableHags -or $env:HUNTER_DISABLE_HAGS -eq '1'
+    $script:HagsPreferenceResolved = $false
+    $script:HagsDisableResolvedValue = $false
+    $script:RunInfrastructureIssues = @()
+    $script:ProgressUiIssueLogged = $false
+    $script:CurrentTaskLoggedError = $false
+    $script:CurrentTaskLoggedWarning = $false
+    $script:PackagePipelineBlocked = $false
+    $script:PackagePipelineBlockReason = ''
 
     # Start the run stopwatch immediately — this is the very first executable line
     $script:RunStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -10983,6 +11492,7 @@ function Invoke-Main {
         # Ensure directories exist
         Ensure-Directory $script:HunterRoot
         Ensure-Directory $script:DownloadDir
+        Migrate-HunterStateToProgramData
         $script:IsAutomationRun = [bool]$AutomationSafe -or $env:GITHUB_ACTIONS -eq 'true' -or $env:HUNTER_AUTOMATION_SAFE -eq '1'
         $buildContext = Get-WindowsBuildContext
 
@@ -11004,6 +11514,7 @@ function Invoke-Main {
         # Log administrator status (#Requires -RunAsAdministrator already enforces elevation)
         $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
         Write-Log "Administrator:   $(if ($isAdmin) { 'YES' } else { 'NO' })" 'INFO'
+        Write-Log "Activation:      $(Get-WindowsActivationStateSummary)" 'INFO'
 
         Write-Log ""
 
@@ -11131,10 +11642,10 @@ function Invoke-Main {
             } elseif ($script:IsAutomationRun) {
                 Write-Log "Pending reboot detected, but automation-safe mode is active; skipping reboot." 'WARN'
             } else {
-                Write-Log "Pending reboot detected - system will restart in 5 seconds..." 'WARN'
+                $rebootNotice = 'Hunter completed and will reboot this PC in 30 seconds. Run shutdown /a to cancel.'
+                Write-Log $rebootNotice 'WARN'
                 Write-Log ""
-                Start-Sleep -Seconds 5
-                Start-Process -FilePath shutdown.exe -ArgumentList '/r', '/t', '0', '/f' -WindowStyle Hidden
+                Start-Process -FilePath shutdown.exe -ArgumentList @('/r', '/t', '30', '/c', $rebootNotice) -WindowStyle Hidden
                 return
             }
         } else {
@@ -11177,6 +11688,8 @@ $scriptAutomationSafe = $false
 $scriptSkipTasks = @()
 $scriptCustomAppsListPath = $null
 $scriptDisableIPv6 = $false
+$scriptDisableTeredo = $false
+$scriptDisableHags = $false
 for ($i = 0; $i -lt $args.Count; $i++) {
     if ($args[$i] -eq '-Mode' -and ($i + 1) -lt $args.Count) {
         $scriptMode = $args[$i + 1]
@@ -11203,6 +11716,12 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     elseif ($args[$i] -eq '-DisableIPv6') {
         $scriptDisableIPv6 = $true
     }
+    elseif ($args[$i] -eq '-DisableTeredo') {
+        $scriptDisableTeredo = $true
+    }
+    elseif ($args[$i] -eq '-DisableHags') {
+        $scriptDisableHags = $true
+    }
 }
 
 # Override log path if provided
@@ -11211,4 +11730,34 @@ if (-not [string]::IsNullOrWhiteSpace($scriptLogPath)) {
 }
 
 # Invoke main orchestrator
-Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -AutomationSafe:$scriptAutomationSafe -SkipTask $scriptSkipTasks -CustomAppsListPath $scriptCustomAppsListPath -DisableIPv6:$scriptDisableIPv6
+Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -AutomationSafe:$scriptAutomationSafe -SkipTask $scriptSkipTasks -CustomAppsListPath $scriptCustomAppsListPath -DisableIPv6:$scriptDisableIPv6 -DisableTeredo:$scriptDisableTeredo -DisableHags:$scriptDisableHags
+} catch {
+    $crashLogPath = Join-Path ([System.IO.Path]::GetTempPath()) 'hunter-crash.txt'
+    $crashTimestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $crashMessage = $_.ToString()
+    $crashStack = $_.ScriptStackTrace
+    $crashLines = @(
+        "[${crashTimestamp}] Hunter crashed before normal completion.",
+        "Message: $crashMessage"
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($crashStack)) {
+        $crashLines += @(
+            'StackTrace:',
+            $crashStack
+        )
+    }
+
+    try {
+        $crashLines | Set-Content -Path $crashLogPath -Encoding UTF8 -Force
+    } catch {
+    }
+
+    try {
+        [Console]::Error.WriteLine("[Hunter] Fatal bootstrap error. Crash details were written to $crashLogPath")
+        [Console]::Error.WriteLine("[Hunter] $crashMessage")
+    } catch {
+    }
+
+    exit 1
+}

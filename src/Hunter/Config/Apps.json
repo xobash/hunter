@@ -120,7 +120,8 @@
       "RemovalStrategies": [
         {
           "Type": "AppxPattern",
-          "Patterns": ["*LinkedIn*", "*LinkedInForWindows*"]
+          "Patterns": ["*LinkedIn*", "*LinkedInForWindows*"],
+          "PatternJustification": "Microsoft and OEM LinkedIn inbox packages have shipped under multiple package-family variations. The wildcard is intentionally limited to LinkedIn-branded package names so Hunter catches those variants without targeting unrelated system packages."
         }
       ]
     },
@@ -152,7 +153,8 @@
       "RemovalStrategies": [
         {
           "Type": "AppxPattern",
-          "Patterns": ["Microsoft.MicrosoftSolitaireCollection*", "*king.com*", "*CandyCrush*", "*BubbleWitch*", "*MarchofEmpires*"]
+          "Patterns": ["Microsoft.MicrosoftSolitaireCollection*", "*king.com*", "*CandyCrush*", "*BubbleWitch*", "*MarchofEmpires*"],
+          "PatternJustification": "Inbox partner games have historically shipped under publisher-specific and marketing-specific package names, especially under king.com and Candy Crush branding. The wildcard is restricted to those consumer game brands so Hunter can catch common bundle variants without touching core system packages."
         }
       ]
     },

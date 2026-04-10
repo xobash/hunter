@@ -2,26 +2,56 @@ function Load-Checkpoint {
     try {
         if (Test-Path $script:CheckpointPath) {
             $checkpointData = Get-Content -Path $script:CheckpointPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-            if ($null -ne $checkpointData -and $checkpointData -is [System.Collections.IEnumerable] -and $checkpointData -isnot [string]) {
-                $normalizedCheckpointTasks = New-Object 'System.Collections.Generic.List[string]'
-                foreach ($checkpointTaskId in @($checkpointData)) {
-                    $taskId = [string]$checkpointTaskId
-                    if ([string]::IsNullOrWhiteSpace($taskId)) {
-                        continue
-                    }
+            $checkpointTaskIds = @()
+            $legacyCheckpointFormat = $false
 
-                    $resolvedTaskId = Resolve-TaskCheckpointId -TaskId $taskId
-                    if (-not $normalizedCheckpointTasks.Contains($resolvedTaskId)) {
-                        [void]$normalizedCheckpointTasks.Add($resolvedTaskId)
-                    }
+            if ($null -ne $checkpointData -and $checkpointData -is [System.Collections.IEnumerable] -and $checkpointData -isnot [string]) {
+                $checkpointTaskIds = @($checkpointData)
+                $legacyCheckpointFormat = $true
+            } elseif ($null -ne $checkpointData) {
+                $schemaVersion = $null
+                if ($null -ne $checkpointData.PSObject.Properties['SchemaVersion']) {
+                    $schemaVersion = [int]$checkpointData.SchemaVersion
                 }
 
-                $script:CompletedTasks = @($normalizedCheckpointTasks.ToArray())
-                Write-Log "Checkpoint loaded: $($script:CompletedTasks.Count) tasks completed"
-                return
+                if ($null -eq $schemaVersion) {
+                    throw 'Checkpoint payload did not include SchemaVersion.'
+                }
+
+                if ($schemaVersion -ne [int]$script:CheckpointSchemaVersion) {
+                    throw "Checkpoint schema version $schemaVersion is not supported by this Hunter build."
+                }
+
+                if ($null -eq $checkpointData.PSObject.Properties['CompletedTasks']) {
+                    throw 'Checkpoint payload did not include CompletedTasks.'
+                }
+
+                $checkpointTaskIds = @($checkpointData.CompletedTasks)
+            } else {
+                throw 'Checkpoint content was empty.'
             }
 
-            throw 'Checkpoint content was not a JSON task-id array.'
+            $normalizedCheckpointTasks = New-Object 'System.Collections.Generic.List[string]'
+            foreach ($checkpointTaskId in @($checkpointTaskIds)) {
+                $taskId = [string]$checkpointTaskId
+                if ([string]::IsNullOrWhiteSpace($taskId)) {
+                    continue
+                }
+
+                $resolvedTaskId = Resolve-TaskCheckpointId -TaskId $taskId
+                if (-not $normalizedCheckpointTasks.Contains($resolvedTaskId)) {
+                    [void]$normalizedCheckpointTasks.Add($resolvedTaskId)
+                }
+            }
+
+            $script:CompletedTasks = @($normalizedCheckpointTasks.ToArray())
+            if ($legacyCheckpointFormat) {
+                Write-Log "Legacy checkpoint format detected. Rewriting checkpoint using schema version $($script:CheckpointSchemaVersion)." 'WARN'
+                Save-Checkpoint
+            }
+
+            Write-Log "Checkpoint loaded: $($script:CompletedTasks.Count) tasks completed"
+            return
         } else {
             $script:CompletedTasks = @()
             Write-Log "No checkpoint found, starting fresh"
@@ -36,7 +66,11 @@ function Load-Checkpoint {
 function Save-Checkpoint {
     try {
         Ensure-Directory (Split-Path -Parent $script:CheckpointPath)
-        $script:CompletedTasks | ConvertTo-Json -Depth 1 | Set-Content -Path $script:CheckpointPath -Force
+        [ordered]@{
+            SchemaVersion = [int]$script:CheckpointSchemaVersion
+            SavedAt       = (Get-Date).ToString('o')
+            CompletedTasks = @($script:CompletedTasks)
+        } | ConvertTo-Json -Depth 3 | Set-Content -Path $script:CheckpointPath -Force
         Write-Log "Checkpoint saved: $($script:CompletedTasks.Count) tasks"
     } catch {
         Add-RunInfrastructureIssue -Message "Failed to persist checkpoint state: $($_.Exception.Message)" -Level 'ERROR'
