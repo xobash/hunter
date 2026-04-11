@@ -1,82 +1,20 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-function Get-BuildTaskCatalog {
-    param(
-        [Parameter(Mandatory)]
-        [string]$ScriptPath
-    )
-
-    $tokens = $null
-    $errors = $null
-    $ast = [System.Management.Automation.Language.Parser]::ParseFile($ScriptPath, [ref]$tokens, [ref]$errors)
-
-    if ($errors.Count -gt 0) {
-        throw "PowerShell parser reported $($errors.Count) error(s) for $ScriptPath."
-    }
-
-    $buildTasksFunction = $ast.Find({
-        param($node)
-        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Build-Tasks'
-    }, $true)
-
-    if ($null -eq $buildTasksFunction) {
-        throw 'Build-Tasks function was not found.'
-    }
-
-    $taskCommands = $buildTasksFunction.Body.FindAll({
-        param($node)
-        $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'New-Task'
-    }, $true)
-
-    $catalog = foreach ($command in $taskCommands) {
-        $taskId = $null
-        $phase = $null
-        $description = $null
-
-        for ($index = 0; $index -lt $command.CommandElements.Count; $index++) {
-            $element = $command.CommandElements[$index]
-            if ($element -isnot [System.Management.Automation.Language.CommandParameterAst]) {
-                continue
-            }
-
-            $nextElement = if (($index + 1) -lt $command.CommandElements.Count) {
-                $command.CommandElements[$index + 1]
-            } else {
-                $null
-            }
-
-            switch ($element.ParameterName) {
-                'TaskId' {
-                    $taskId = [string]$nextElement.SafeGetValue()
-                }
-                'Phase' {
-                    $phase = [int]$nextElement.SafeGetValue()
-                }
-                'Description' {
-                    $description = [string]$nextElement.SafeGetValue()
-                }
-            }
-        }
-
-        [pscustomobject]@{
-            TaskId      = $taskId
-            Phase       = $phase
-            Description = $description
-        }
-    }
-
-    return ,$catalog
-}
-
-Describe 'Build-Tasks catalog compatibility' {
+Describe 'Task catalog compatibility' {
     BeforeAll {
-        $scriptPath = Join-Path (Join-Path $PSScriptRoot '..\..') 'src\Hunter\Private\Execution\Engine.ps1'
-        $taskCatalog = @(Get-BuildTaskCatalog -ScriptPath $scriptPath)
+        $privateRoot = Join-Path (Join-Path $PSScriptRoot '..\..') 'src\Hunter\Private'
+        $catalogPath = Join-Path $privateRoot 'Tasks\Catalog.ps1'
+        $enginePath = Join-Path $privateRoot 'Execution\Engine.ps1'
+
+        . $catalogPath
+        $taskCatalog = @(Get-HunterTaskCatalog)
 
         $expectedTaskIds = @(
             'preflight-internet',
+            'preflight-edition-compatibility',
             'preflight-restore-point',
+            'preflight-winget-version',
             'preflight-app-downloads',
             'preflight-predownload-v2',
             'install-launch-packages-v2',
@@ -100,6 +38,7 @@ Describe 'Build-Tasks catalog compatibility' {
             'explorer-auto-discovery',
             'cloud-edge-remove',
             'cloud-edge-pins',
+            'cloud-edge-update-block',
             'cloud-onedrive-remove',
             'cloud-onedrive-backup',
             'cloud-copilot-remove',
@@ -117,11 +56,14 @@ Describe 'Build-Tasks catalog compatibility' {
             'tweaks-teredo',
             'tweaks-fso',
             'tweaks-graphics-scheduling',
+            'tweaks-gpu-interrupt-affinity',
+            'tweaks-rebar-audit',
             'tweaks-dwm-frame-interval',
             'tweaks-ui-desktop',
             'tweaks-razer',
             'tweaks-adobe',
             'tweaks-power-tuning',
+            'tweaks-nic-power-management',
             'tweaks-memory-disk',
             'tweaks-input-maintenance',
             'tweaks-timer-resolution',
@@ -135,41 +77,50 @@ Describe 'Build-Tasks catalog compatibility' {
             'install-finalize-packages-v2',
             'cleanup-temp-files',
             'cleanup-retry-failed',
+            'cleanup-autologin-secrets',
             'cleanup-disk-cleanup',
             'cleanup-explorer-restart',
             'cleanup-export-log'
         )
 
         $expectedPhases = @(
-            1, 1, 1, 1,
-            2, 2, 2, 2, 2,
-            3, 3, 3, 3, 3, 3, 3, 3, 3,
-            4, 4, 4, 4, 4,
-            5, 5, 5, 5, 5,
-            6, 6, 6, 6, 6,
-            7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
-            8, 8, 8, 8, 8,
-            9, 9, 9, 9, 9, 9
+            '1', '1', '1', '1', '1', '1',
+            '2', '2', '2', '2', '2',
+            '3', '3', '3', '3', '3', '3', '3', '3', '3',
+            '4', '4', '4', '4', '4',
+            '5', '5', '5', '5', '5', '5',
+            '6', '6', '6', '6', '6',
+            '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7',
+            '8', '8', '8', '8', '8',
+            '9', '9', '9', '9', '9', '9', '9'
         )
     }
 
     It 'defines the current total task count' {
-        $taskCatalog.Count | Should -Be 63
+        $taskCatalog.Count | Should -Be 70
     }
 
     It 'preserves the exact task ID order' {
-        ($taskCatalog.TaskId -join '|') | Should -BeExactly ($expectedTaskIds -join '|')
+        ($taskCatalog.Id -join '|') | Should -BeExactly ($expectedTaskIds -join '|')
     }
 
     It 'preserves the exact phase order' {
-        (($taskCatalog.Phase | ForEach-Object { [string]$_ }) -join '|') | Should -BeExactly (($expectedPhases | ForEach-Object { [string]$_ }) -join '|')
+        (($taskCatalog.Phase | ForEach-Object { [string]$_ }) -join '|') | Should -BeExactly ($expectedPhases -join '|')
     }
 
     It 'keeps task IDs unique' {
-        ($taskCatalog.TaskId | Sort-Object -Unique).Count | Should -Be $taskCatalog.Count
+        ($taskCatalog.Id | Sort-Object -Unique).Count | Should -Be $taskCatalog.Count
     }
 
     It 'keeps every task description populated' {
         @($taskCatalog | Where-Object { [string]::IsNullOrWhiteSpace($_.Description) }).Count | Should -Be 0
+    }
+
+    It 'keeps every task handler as a scriptblock' {
+        @($taskCatalog | Where-Object { $_.Handler -isnot [scriptblock] }).Count | Should -Be 0
+    }
+
+    It 'keeps the engine building tasks from the catalog function' {
+        (Get-Content -Path $enginePath -Raw -ErrorAction Stop) | Should -Match 'Get-HunterTaskCatalog'
     }
 }

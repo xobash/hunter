@@ -1,11 +1,11 @@
 $moduleRoot = Split-Path -Parent $PSCommandPath
-$privateRoot = Join-Path $moduleRoot 'Private'
+$repoRoot = Split-Path -Parent (Split-Path -Parent $moduleRoot)
+$loaderPath = Join-Path $moduleRoot 'Private\Bootstrap\Loader.ps1'
 
-. (Join-Path $privateRoot 'Bootstrap\Config.ps1')
-. (Join-Path $privateRoot 'Common\Common.ps1')
-. (Join-Path $privateRoot 'Common\PathPolicy.ps1')
-. (Join-Path $privateRoot 'Execution\Engine.ps1')
-. (Join-Path $privateRoot 'Infrastructure\NativeSystem.ps1')
+. $loaderPath
+$script:HunterSourceRoot = $repoRoot
+Import-HunterPrivateScripts -SourceRoot $repoRoot
 
 Remove-Variable -Name moduleRoot -ErrorAction SilentlyContinue
-Remove-Variable -Name privateRoot -ErrorAction SilentlyContinue
+Remove-Variable -Name repoRoot -ErrorAction SilentlyContinue
+Remove-Variable -Name loaderPath -ErrorAction SilentlyContinue

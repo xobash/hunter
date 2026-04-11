@@ -19,11 +19,8 @@ Describe 'Module scaffold compatibility' {
         $manifestText | Should -Match 'FunctionsToExport\s*=\s*@\(\)'
     }
 
-    It 'loads the extracted private layers in a stable order' {
-        $moduleText | Should -Match 'Bootstrap\\Config\.ps1'
-        $moduleText | Should -Match 'Common\\Common\.ps1'
-        $moduleText | Should -Match 'Common\\PathPolicy\.ps1'
-        $moduleText | Should -Match 'Execution\\Engine\.ps1'
-        $moduleText | Should -Match 'Infrastructure\\NativeSystem\.ps1'
+    It 'loads the private source tree through the loader' {
+        $moduleText | Should -Match 'Bootstrap\\Loader\.ps1'
+        $moduleText | Should -Match 'Import-HunterPrivateScripts -SourceRoot \$repoRoot'
     }
 }

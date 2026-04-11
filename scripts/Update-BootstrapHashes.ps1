@@ -2,48 +2,80 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 param(
-    [string]$HunterScriptPath = 'hunter.ps1'
+    [string]$HunterScriptPath = 'hunter.ps1',
+    [string]$LoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
 )
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $hunterScriptFullPath = Join-Path $repoRoot $HunterScriptPath
+$loaderFullPath = Join-Path $repoRoot $LoaderRelativePath
+
 if (-not (Test-Path $hunterScriptFullPath)) {
     throw "Could not find Hunter entry script at $HunterScriptPath"
 }
 
-$bootstrapRelativePaths = @(
-    'src\Hunter\Private\Bootstrap\Config.ps1',
-    'src\Hunter\Private\Common\Common.ps1',
-    'src\Hunter\Private\Common\PathPolicy.ps1',
-    'src\Hunter\Private\Execution\Engine.ps1',
-    'src\Hunter\Private\Infrastructure\NativeSystem.ps1',
-    'src\Hunter\Config\Apps.json'
+if (-not (Test-Path $loaderFullPath)) {
+    throw "Could not find Hunter bootstrap loader at $LoaderRelativePath"
+}
+
+$loaderContent = Get-Content -Path $loaderFullPath -Raw -ErrorAction Stop
+$manifestMatches = [regex]::Matches(
+    $loaderContent,
+    "(?m)RelativePath\s*=\s*'(?<path>[^']+)'\s*;\s*Sha256\s*=\s*'(?<hash>[0-9A-Fa-f]*)'"
 )
 
-$hunterScriptContent = Get-Content -Path $hunterScriptFullPath -Raw -ErrorAction Stop
+if ($manifestMatches.Count -eq 0) {
+    throw "Could not find any bootstrap asset manifest entries in $LoaderRelativePath"
+}
 
-foreach ($bootstrapRelativePath in $bootstrapRelativePaths) {
-    $bootstrapFullPath = Join-Path $repoRoot $bootstrapRelativePath
-    if (-not (Test-Path $bootstrapFullPath)) {
-        throw "Bootstrap file is missing: $bootstrapRelativePath"
+$processedRelativePaths = @{}
+
+foreach ($manifestMatch in $manifestMatches) {
+    $assetRelativePath = [string]$manifestMatch.Groups['path'].Value
+    if ($processedRelativePaths.ContainsKey($assetRelativePath)) {
+        continue
     }
 
-    $sha256 = (Get-FileHash -Path $bootstrapFullPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
-    $escapedRelativePath = [regex]::Escape($bootstrapRelativePath)
-    $pattern = "(?m)(?<prefix>\s*'$escapedRelativePath'\s*=\s*')[0-9a-f]{64}(?<suffix>')"
-    if (-not [regex]::IsMatch($hunterScriptContent, $pattern)) {
-        throw "Could not find embedded bootstrap hash entry for $bootstrapRelativePath in $HunterScriptPath"
+    $processedRelativePaths[$assetRelativePath] = $true
+    $assetFullPath = Join-Path $repoRoot $assetRelativePath
+    if (-not (Test-Path $assetFullPath)) {
+        throw "Bootstrap asset is missing: $assetRelativePath"
     }
 
-    $hunterScriptContent = [regex]::Replace(
-        $hunterScriptContent,
-        $pattern,
-        ('${prefix}' + $sha256 + '${suffix}'),
+    $assetSha256 = (Get-FileHash -Path $assetFullPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+    $escapedRelativePath = [regex]::Escape($assetRelativePath)
+    $assetPattern = "(?m)(?<prefix>RelativePath\s*=\s*'$escapedRelativePath'\s*;\s*Sha256\s*=\s*')[0-9A-Fa-f]*(?<suffix>')"
+    if (-not [regex]::IsMatch($loaderContent, $assetPattern)) {
+        throw "Could not find manifest hash entry for $assetRelativePath in $LoaderRelativePath"
+    }
+
+    $loaderContent = [regex]::Replace(
+        $loaderContent,
+        $assetPattern,
+        ('${prefix}' + $assetSha256 + '${suffix}'),
         1
     )
 
-    Write-Host ("{0} {1}" -f $sha256, $bootstrapRelativePath)
+    Write-Host ("{0} {1}" -f $assetSha256, $assetRelativePath)
 }
 
+Set-Content -Path $loaderFullPath -Value $loaderContent -Encoding UTF8 -Force
+
+$loaderSha256 = (Get-FileHash -Path $loaderFullPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+$hunterScriptContent = Get-Content -Path $hunterScriptFullPath -Raw -ErrorAction Stop
+$loaderHashPattern = "(?m)(?<prefix>\$script:BootstrapLoaderSha256\s*=\s*')[0-9A-Fa-f]*(?<suffix>')"
+if (-not [regex]::IsMatch($hunterScriptContent, $loaderHashPattern)) {
+    throw "Could not find BootstrapLoaderSha256 assignment in $HunterScriptPath"
+}
+
+$hunterScriptContent = [regex]::Replace(
+    $hunterScriptContent,
+    $loaderHashPattern,
+    ('${prefix}' + $loaderSha256 + '${suffix}'),
+    1
+)
+
 Set-Content -Path $hunterScriptFullPath -Value $hunterScriptContent -Encoding UTF8 -Force
-Write-Host "Updated embedded bootstrap hashes in $HunterScriptPath"
+
+Write-Host ("{0} {1}" -f $loaderSha256, $LoaderRelativePath)
+Write-Host "Updated bootstrap manifest hashes in $LoaderRelativePath and loader hash in $HunterScriptPath"

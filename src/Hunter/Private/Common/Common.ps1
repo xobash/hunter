@@ -15,12 +15,6 @@ function Write-Log {
         }
         $script:LogDirectoryEnsured = $true
     }
-    if ($Level -eq 'ERROR') {
-        $script:CurrentTaskLoggedError = $true
-    }
-    if ($Level -eq 'WARN') {
-        $script:CurrentTaskLoggedWarning = $true
-    }
     try {
         Add-Content -Path $script:LogPath -Value $line -ErrorAction Stop
     } catch {
@@ -102,10 +96,7 @@ function Get-TaskResultField {
 }
 
 function Get-TaskHandlerCompletionStatus {
-    param(
-        [object]$TaskResult,
-        [bool]$LoggedWarning = $false
-    )
+    param([object]$TaskResult)
 
     $explicitStatus = Get-TaskResultField -TaskResult $TaskResult -Name 'Status'
     if ($null -ne $explicitStatus) {
@@ -117,10 +108,6 @@ function Get-TaskHandlerCompletionStatus {
         'CompletedWithWarnings' { return 'CompletedWithWarnings' }
         'Warning' { return 'CompletedWithWarnings' }
         'Completed' { return 'Completed' }
-    }
-
-    if ($LoggedWarning) {
-        return 'CompletedWithWarnings'
     }
 
     return 'Completed'
@@ -137,16 +124,9 @@ function Format-ElapsedDuration {
 }
 
 function Test-TaskHandlerReturnedFailure {
-    param(
-        [object]$TaskResult,
-        [bool]$LoggedError = $false
-    )
+    param([object]$TaskResult)
 
     if ($TaskResult -is [System.Exception] -or $TaskResult -is [System.Management.Automation.ErrorRecord]) {
-        return $true
-    }
-
-    if ($LoggedError) {
         return $true
     }
 
@@ -166,12 +146,12 @@ function Test-TaskHandlerReturnedFailure {
 
     $resultItems = @($TaskResult | Where-Object { $null -ne $_ })
     if ($resultItems.Count -eq 0) {
-        return $LoggedError
+        return $false
     }
 
     $booleanItems = @($resultItems | Where-Object { $_ -is [bool] })
     if ($booleanItems.Count -eq 0) {
-        return $LoggedError
+        return $false
     }
 
     return (-not [bool]$booleanItems[-1])

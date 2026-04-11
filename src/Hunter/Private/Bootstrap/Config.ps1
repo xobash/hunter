@@ -62,8 +62,6 @@ $script:PostInstallCompletion = @{}
 $script:RunStopwatch = $null
 $script:RunInfrastructureIssues = @()
 $script:ProgressUiIssueLogged = $false
-$script:CurrentTaskLoggedError = $false
-$script:CurrentTaskLoggedWarning = $false
 $script:SkipAppDownloads = $null
 $script:PackagePipelineBlocked = $false
 $script:PackagePipelineBlockReason = ''
@@ -103,3 +101,32 @@ $script:FurMarkSha256      = '88C07E0C674676BB486D3D46D73605925983B3AFA8F292A2D9
 $script:WallpaperSourceUrl = 'https://w.wallhaven.cc/full/85/wallhaven-85vv1y.png'
 $script:ResolvedWallpaperAssetUrl = $null
 $script:SelfScriptContent  = $null
+
+$script:HunterContext = Get-HunterContext
+$script:HunterContext.Paths = @{
+    ProgramDataRoot  = $script:ProgramDataRoot
+    ProgramFilesRoot = $script:ProgramFilesRoot
+    WindowsRoot      = $script:WindowsRoot
+    HunterRoot       = $script:HunterRoot
+    LegacyHunterRoot = $script:LegacyHunterRoot
+    DownloadDir      = $script:DownloadDir
+    LogPath          = $script:LogPath
+    CheckpointPath   = $script:CheckpointPath
+    ResumeScriptPath = $script:ResumeScriptPath
+    SecretsRoot      = $script:SecretsRoot
+}
+$script:HunterContext.Flags = @{
+    IsAutomationRun            = $script:IsAutomationRun
+    StrictMode                 = $script:StrictMode
+    DisableIPv6Requested       = $script:DisableIPv6Requested
+    DisableTeredoRequested     = $script:DisableTeredoRequested
+    DisableHagsRequested       = $script:DisableHagsRequested
+    PackagePipelineBlocked     = $script:PackagePipelineBlocked
+    PackagePipelineBlockReason = $script:PackagePipelineBlockReason
+}
+$script:HunterContext.UiState = @{
+    UiSync     = $script:UiSync
+    UiRunspace = $script:UiRunspace
+    UiPipeline = $script:UiPipeline
+}
+Sync-HunterContextFromScriptState -Context $script:HunterContext
