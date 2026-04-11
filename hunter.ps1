@@ -16,7 +16,7 @@ try {
 $script:HunterSourceRoot = $null
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/main'
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = 'c4409ae2dac24d8a7ce0657a5c322090194ccdc5636022a02ffa14393f86e06e'
+$script:BootstrapLoaderSha256 = '2e9a71f8931ce1ae4f66313704e4510008f87396fb47224c2dfe62e020e0bcb3'
 
 $bootstrapLoaderPath = $null
 $canUseLocalHunterPrivateLayers = $false

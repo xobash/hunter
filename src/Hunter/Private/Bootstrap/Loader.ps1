@@ -83,6 +83,24 @@ function Get-HunterPrivateRelativePath {
     return $normalizedFullName -replace '/', '\'
 }
 
+function Test-HunterBootstrapAssetIntegrity {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$ExpectedSha256 = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) {
+        return $false
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ExpectedSha256)) {
+        return $true
+    }
+
+    $actualHash = (Get-FileHash -Path $Path -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+    return ($actualHash -eq $ExpectedSha256.ToLowerInvariant())
+}
+
 function Save-HunterBootstrapAsset {
     param(
         [Parameter(Mandatory)][string]$SourceRoot,
@@ -131,7 +149,15 @@ function Initialize-HunterPrivateSourceTree {
     foreach ($asset in @(Get-HunterPrivateAssetManifest | Where-Object { $_.RelativePath -ne 'src\Hunter\Private\Bootstrap\Loader.ps1' })) {
         $assetPath = Join-Path $SourceRoot $asset.RelativePath
         if (-not $ForceRefresh -and (Test-Path $assetPath)) {
-            continue
+            if (Test-HunterBootstrapAssetIntegrity -Path $assetPath -ExpectedSha256 ([string]$asset.Sha256)) {
+                continue
+            }
+
+            if ([string]::IsNullOrWhiteSpace($RemoteRoot)) {
+                throw "Hunter private asset failed integrity validation locally and no remote root is available: $($asset.RelativePath)"
+            }
+
+            Remove-Item -Path $assetPath -Force -ErrorAction SilentlyContinue
         }
 
         if ([string]::IsNullOrWhiteSpace($RemoteRoot)) {
