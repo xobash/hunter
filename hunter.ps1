@@ -2391,20 +2391,6 @@ function Invoke-ApplyAppRemovalStrategies {
     return $true
 }
 
-function Get-HunterPhase6AppRemovalEntries {
-    $customSelections = Load-HunterCustomAppsList
-    if ($customSelections.Count -gt 0) {
-        $customEntries = Resolve-HunterAppCatalogEntries -Groups @('Phase6Broad') -Selections $customSelections
-        if ($customEntries.Count -eq 0) {
-            Write-Log 'Custom apps list did not resolve to any supported Phase 6 removal targets; falling back to Hunter defaults.' 'WARN'
-        } else {
-            return @($customEntries)
-        }
-    }
-
-    return @(Resolve-HunterAppCatalogEntries -Groups @('Phase6Broad') -SelectedByDefaultOnly)
-}
-
 # ==============================================================================
 # APPX HELPERS
 # ==============================================================================
