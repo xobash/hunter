@@ -1,6 +1,6 @@
 function Get-HunterPrivateAssetManifest {
     return @(
-        [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Bootstrap\Context.ps1'; Sha256 = 'a2c2a21eff986411ce0d038ea23b6a6e901f5437edcbd2fec1d7fc921054719d'; Order = 10; Kind = 'Script' }
+        [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Bootstrap\Context.ps1'; Sha256 = '31bb367c507e4550ffa57352c7bd1b96ca34afdb6bda5875b965f0ff584ba04f'; Order = 10; Kind = 'Script' }
         [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Bootstrap\Config.ps1'; Sha256 = 'da0c7bb6b38c92dfd445654cda129b9a763abe246f82a977c1608e8863abddb3'; Order = 20; Kind = 'Script' }
         [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Common\Common.ps1'; Sha256 = '32f5ee6d293f169555ce724fb263c7d7d4612cbe5ee8d93e0de38d5b1d048e12'; Order = 30; Kind = 'Script' }
         [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Common\PathPolicy.ps1'; Sha256 = 'b0d41621d6405049efc4b34ce765fd610f26a3c0c0136dfe9d6568a4a15c8df1'; Order = 40; Kind = 'Script' }

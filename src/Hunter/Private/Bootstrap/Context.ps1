@@ -1,3 +1,5 @@
+${script:HunterContext} = $null
+
 function New-HunterContext {
     return [pscustomobject]@{
         Paths        = @{}
@@ -48,7 +50,8 @@ function New-HunterContext {
 }
 
 function Get-HunterContext {
-    if ($null -eq $script:HunterContext) {
+    $contextVariable = Get-Variable -Name HunterContext -Scope Script -ErrorAction SilentlyContinue
+    if ($null -eq $contextVariable -or $null -eq $contextVariable.Value) {
         $script:HunterContext = New-HunterContext
     }
 
