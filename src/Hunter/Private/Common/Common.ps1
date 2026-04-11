@@ -1,4 +1,21 @@
 $script:LogDirectoryEnsured = $false
+$script:TaskIssueTrackingEnabled = $false
+$script:CurrentTaskLoggedWarning = $false
+$script:CurrentTaskLoggedError = $false
+
+function Reset-HunterTaskIssueState {
+    $script:CurrentTaskLoggedWarning = $false
+    $script:CurrentTaskLoggedError = $false
+}
+
+function Enable-HunterTaskIssueTracking {
+    Reset-HunterTaskIssueState
+    $script:TaskIssueTrackingEnabled = $true
+}
+
+function Disable-HunterTaskIssueTracking {
+    $script:TaskIssueTrackingEnabled = $false
+}
 
 function Write-Log {
     param(
@@ -20,6 +37,16 @@ function Write-Log {
     } catch {
         [Console]::Error.WriteLine("[Hunter] Failed to append to log file '$($script:LogPath)': $($_.Exception.Message)")
     }
+
+    # Preserve legacy task-status semantics while split handlers are still being
+    # converted to explicit result objects end-to-end.
+    if ($script:TaskIssueTrackingEnabled) {
+        switch ($Level) {
+            'ERROR' { $script:CurrentTaskLoggedError = $true }
+            'WARN' { $script:CurrentTaskLoggedWarning = $true }
+        }
+    }
+
     switch ($Level) {
         'ERROR'   { Write-Host $line -ForegroundColor Red }
         'WARN'    { Write-Host $line -ForegroundColor Yellow }
@@ -65,6 +92,7 @@ function New-TaskWarningResult {
     param([string]$Reason = '')
 
     return [ordered]@{
+        Success = $true
         Status = 'CompletedWithWarnings'
         Reason = $Reason
     }
@@ -96,7 +124,10 @@ function Get-TaskResultField {
 }
 
 function Get-TaskHandlerCompletionStatus {
-    param([object]$TaskResult)
+    param(
+        [object]$TaskResult,
+        [bool]$LoggedWarning = $false
+    )
 
     $explicitStatus = Get-TaskResultField -TaskResult $TaskResult -Name 'Status'
     if ($null -ne $explicitStatus) {
@@ -107,7 +138,17 @@ function Get-TaskHandlerCompletionStatus {
         'Skipped' { return 'Skipped' }
         'CompletedWithWarnings' { return 'CompletedWithWarnings' }
         'Warning' { return 'CompletedWithWarnings' }
-        'Completed' { return 'Completed' }
+        'Completed' {
+            if ($LoggedWarning) {
+                return 'CompletedWithWarnings'
+            }
+
+            return 'Completed'
+        }
+    }
+
+    if ($LoggedWarning) {
+        return 'CompletedWithWarnings'
     }
 
     return 'Completed'
@@ -124,9 +165,16 @@ function Format-ElapsedDuration {
 }
 
 function Test-TaskHandlerReturnedFailure {
-    param([object]$TaskResult)
+    param(
+        [object]$TaskResult,
+        [bool]$LoggedError = $false
+    )
 
     if ($TaskResult -is [System.Exception] -or $TaskResult -is [System.Management.Automation.ErrorRecord]) {
+        return $true
+    }
+
+    if ($LoggedError) {
         return $true
     }
 

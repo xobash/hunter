@@ -270,12 +270,19 @@ function Invoke-TaskExecution {
 
                 Write-Log "Executing task: $($task.TaskId) [Phase $($task.Phase)]" 'INFO'
 
-                $taskResult = & $task.ApplyHandler
-                if (Test-TaskHandlerReturnedFailure -TaskResult $taskResult) {
+                $taskResult = $null
+                Enable-HunterTaskIssueTracking
+                try {
+                    $taskResult = & $task.ApplyHandler
+                } finally {
+                    Disable-HunterTaskIssueTracking
+                }
+
+                if (Test-TaskHandlerReturnedFailure -TaskResult $taskResult -LoggedError:$script:CurrentTaskLoggedError) {
                     throw "Task handler returned failure for $($task.TaskId)"
                 }
 
-                $taskStatus = Get-TaskHandlerCompletionStatus -TaskResult $taskResult
+                $taskStatus = Get-TaskHandlerCompletionStatus -TaskResult $taskResult -LoggedWarning:$script:CurrentTaskLoggedWarning
                 $task.Status = $taskStatus
                 $task.Error = $null
                 if ($taskStatus -ne 'Skipped') {
@@ -335,6 +342,7 @@ function Invoke-TaskExecution {
                 if (@($script:CompletedTasks).Count -ne $completedCountBeforeTask) {
                     Save-Checkpoint -Context $Context
                 }
+                Reset-HunterTaskIssueState
                 Sync-HunterContextFromScriptState -Context $Context
             }
         }

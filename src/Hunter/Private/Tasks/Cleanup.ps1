@@ -151,12 +151,19 @@ function Invoke-RetryFailedTasks {
             try {
                 Write-Log "Retrying task: $taskId" 'INFO'
 
-                $retryResult = & $task.ApplyHandler
-                if (Test-TaskHandlerReturnedFailure -TaskResult $retryResult) {
+                $retryResult = $null
+                Enable-HunterTaskIssueTracking
+                try {
+                    $retryResult = & $task.ApplyHandler
+                } finally {
+                    Disable-HunterTaskIssueTracking
+                }
+
+                if (Test-TaskHandlerReturnedFailure -TaskResult $retryResult -LoggedError:$script:CurrentTaskLoggedError) {
                     throw "Task handler returned failure for $taskId"
                 }
 
-                $retryStatus = Get-TaskHandlerCompletionStatus -TaskResult $retryResult
+                $retryStatus = Get-TaskHandlerCompletionStatus -TaskResult $retryResult -LoggedWarning:$script:CurrentTaskLoggedWarning
 
                 $script:FailedTasks = @($script:FailedTasks | Where-Object { $_ -ne $taskId })
                 if ($retryStatus -ne 'Skipped') {
@@ -190,6 +197,8 @@ function Invoke-RetryFailedTasks {
                     Error  = $task.Error
                 }
                 # Keep in FailedTasks
+            } finally {
+                Reset-HunterTaskIssueState
             }
         }
 
