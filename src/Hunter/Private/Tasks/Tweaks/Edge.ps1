@@ -10,7 +10,10 @@ function Invoke-RemoveEdgeKeepWebView2 {
     try {
         Write-Log -Message 'Edge removal is best-effort. Microsoft frequently blocks or partially resists removal depending on build, WebView2 state, and installer policy.' -Level 'WARN'
         Write-Log -Message "Unlocking the official Edge uninstaller and removing Microsoft Edge..." -Level 'INFO'
-        Invoke-ApplyAppRemovalStrategies -Entries (Resolve-HunterAppCatalogEntries -Selections @('edge')) | Out-Null
+        $appRemovalResult = Invoke-ApplyAppRemovalStrategies -Entries @(Resolve-HunterAppCatalogEntries -Selections @('edge'))
+        if (Test-TaskHandlerReturnedFailure -TaskResult $appRemovalResult) {
+            return $false
+        }
 
         $setupPath = Get-ChildItem 'C:\Program Files (x86)\Microsoft\Edge\Application\*\Installer\setup.exe' -ErrorAction SilentlyContinue |
             Select-Object -First 1 -ExpandProperty FullName
@@ -22,15 +25,18 @@ function Invoke-RemoveEdgeKeepWebView2 {
             $edgeStillInstalled = @($edgeExecutablePaths | Where-Object { Test-Path $_ }).Count -gt 0
             if (-not $edgeStillInstalled) {
                 Write-Log -Message 'Edge installer was not found because Edge binaries were already removed.' -Level 'SUCCESS'
-                return $true
+                return (Join-TaskResults -TaskResults @($appRemovalResult) -WarningReason 'Edge removal completed with warnings')
             }
 
             Write-Log -Message 'Edge installer was not found. Edge removal will be treated as best-effort only on this system.' -Level 'WARN'
-            return @{
+            return (Join-TaskResults -TaskResults @(
+                $appRemovalResult,
+                @{
                 Success = $true
                 Status  = 'CompletedWithWarnings'
                 Reason  = 'Edge installer was not present, so removal could not be completed deterministically'
-            }
+                }
+            ) -WarningReason 'Edge removal completed with warnings')
         }
 
         New-Item 'C:\Windows\SystemApps\Microsoft.MicrosoftEdge_8wekyb3d8bbwe\MicrosoftEdge.exe' -Force | Out-Null
@@ -45,15 +51,18 @@ function Invoke-RemoveEdgeKeepWebView2 {
             $warningMessage = 'Edge uninstaller exited with code 19.'
             if ($edgeStillInstalled) {
                 Write-Log -Message "$warningMessage Edge still appears to be installed, so this step will be marked as best-effort with warnings." -Level 'WARN'
-                return @{
+                return (Join-TaskResults -TaskResults @(
+                    $appRemovalResult,
+                    @{
                     Success = $true
                     Status  = 'CompletedWithWarnings'
                     Reason  = 'Edge uninstall was blocked by the current Windows build or installer state'
-                }
+                    }
+                ) -WarningReason 'Edge removal completed with warnings')
             }
 
             Write-Log -Message "$warningMessage Edge binaries are no longer present." -Level 'SUCCESS'
-            return $true
+            return (Join-TaskResults -TaskResults @($appRemovalResult) -WarningReason 'Edge removal completed with warnings')
         }
 
         Write-Log -Message "Edge removal complete." -Level 'INFO'
@@ -65,11 +74,15 @@ function Invoke-RemoveEdgeKeepWebView2 {
             (Test-Path 'C:\Program Files\Microsoft\EdgeWebView')
         if (-not $webView2Exists) {
             Write-Log -Message "WARNING: WebView2 runtime may have been removed alongside Edge. Some apps may not function correctly." -Level 'WARN'
+            return (Join-TaskResults -TaskResults @(
+                $appRemovalResult,
+                (New-TaskWarningResult -Reason 'WebView2 runtime could not be verified after Edge removal')
+            ) -WarningReason 'Edge removal completed with warnings')
         } else {
             Write-Log -Message "WebView2 runtime verified intact after Edge removal." -Level 'INFO'
         }
 
-        return $true
+        return (Join-TaskResults -TaskResults @($appRemovalResult) -WarningReason 'Edge removal completed with warnings')
     }
     catch {
         Write-Log -Message "Error in Invoke-RemoveEdgeKeepWebView2: $_" -Level 'ERROR'

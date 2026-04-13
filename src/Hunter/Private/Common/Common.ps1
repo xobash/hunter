@@ -154,6 +154,30 @@ function Get-TaskHandlerCompletionStatus {
     return 'Completed'
 }
 
+function Join-TaskResults {
+    param(
+        [object[]]$TaskResults = @(),
+        [string]$WarningReason = 'One or more sub-operations completed with warnings'
+    )
+
+    $hasWarnings = $false
+    foreach ($taskResult in @($TaskResults)) {
+        if (Test-TaskHandlerReturnedFailure -TaskResult $taskResult) {
+            return $false
+        }
+
+        if ((Get-TaskHandlerCompletionStatus -TaskResult $taskResult) -eq 'CompletedWithWarnings') {
+            $hasWarnings = $true
+        }
+    }
+
+    if ($hasWarnings) {
+        return (New-TaskWarningResult -Reason $WarningReason)
+    }
+
+    return $true
+}
+
 function Format-ElapsedDuration {
     param([TimeSpan]$Duration)
 

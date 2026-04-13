@@ -1,0 +1,14 @@
+{
+  "defaultPublicChannel": "stable",
+  "channels": {
+    "stable": {
+      "scriptRef": "stable",
+      "description": "Public release channel intended for the one-liner."
+    },
+    "preview": {
+      "scriptRef": "main",
+      "description": "Development preview channel. Use for validation before promoting to stable."
+    }
+  },
+  "exactVersionPattern": "v<semver>"
+}

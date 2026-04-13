@@ -171,9 +171,10 @@ function Invoke-DisableWidgets {
 
         $buildContext = Get-WindowsBuildContext
         Stop-Process -Name Widgets -Force -ErrorAction SilentlyContinue
-        $widgetEntries = Resolve-HunterAppCatalogEntries -Selections @('widgets')
+        $widgetEntries = @(Resolve-HunterAppCatalogEntries -Selections @('widgets'))
+        $appRemovalResult = $true
         if ($widgetEntries.Count -gt 0) {
-            Invoke-ApplyAppRemovalStrategies -Entries $widgetEntries | Out-Null
+            $appRemovalResult = Invoke-ApplyAppRemovalStrategies -Entries $widgetEntries
         }
 
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' -Name 'AllowNewsAndInterests' -Value 0 -Type 'DWord'
@@ -195,7 +196,7 @@ function Invoke-DisableWidgets {
         }
 
         Request-ExplorerRestart
-        return $true
+        return (Join-TaskResults -TaskResults @($appRemovalResult) -WarningReason 'Widgets disablement completed with warnings')
     } catch {
         Write-Log "Failed to disable widgets : $_" 'ERROR'
         return $false
@@ -347,4 +348,3 @@ function Invoke-DisableStoreSearch {
         return $false
     }
 }
-

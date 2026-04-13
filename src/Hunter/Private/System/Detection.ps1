@@ -96,11 +96,11 @@ function Test-WindowsBuildInRange {
     $buildContext = Get-WindowsBuildContext
     $currentBuild = [int]$buildContext.CurrentBuild
 
-    if ($MinBuild -ne $null -and $currentBuild -lt $MinBuild.Value) {
+    if ($MinBuild -ne $null -and $currentBuild -lt [int]$MinBuild) {
         return $false
     }
 
-    if ($MaxBuild -ne $null -and $currentBuild -gt $MaxBuild.Value) {
+    if ($MaxBuild -ne $null -and $currentBuild -gt [int]$MaxBuild) {
         return $false
     }
 
@@ -187,4 +187,3 @@ function Initialize-HyperVDetection {
         Write-Log "Hyper-V guest detected - autologin will be skipped, RDP services preserved" 'WARN'
     }
 }
-

@@ -9,7 +9,7 @@ Recommended host on the target machine: elevated Windows PowerShell (`powershell
 Run directly from GitHub:
 
 ```powershell
-irm https://raw.githubusercontent.com/xobash/hunter/main/hunter.ps1 | iex
+irm https://raw.githubusercontent.com/xobash/hunter/stable/hunter.ps1 | iex
 ```
 
 Run from a local checkout:
@@ -42,6 +42,7 @@ powershell -ExecutionPolicy Bypass -File .\hunter.ps1
 ## Features
 
 - One-command execution from GitHub or a local checkout.
+- Explicit release channels for public `stable`, development `preview`, and exact versioned entrypoints.
 - Checkpoint and resume support so long-running runs can survive reboots.
 - Parallel package installs and background asset prefetch.
 - Surgical app removal driven by `src/Hunter/Config/Apps.json`, with protected system apps excluded.
@@ -51,11 +52,12 @@ powershell -ExecutionPolicy Bypass -File .\hunter.ps1
   - Selective targeting through a user-supplied custom app list.
 - Windows build-aware behavior for Win10 and Win11-specific registry and shell changes.
 - Gaming-focused tuning across graphics, power, device management, networking, and storage.
-- Desktop summary report plus full execution log export at the end of the run.
+- Rollback capture for shared registry, service, scheduled-task, and power-plan mutations.
+- Desktop summary report plus full execution log, restore script, and run-configuration export at the end of the run.
 
 ## When to Use Hunter
 
-- You want a fast, repeatable baseline for fresh Windows gaming VMs or desktops.
+- You want a fast, repeatable baseline for Windows gaming desktops or bare-metal installs.
 - You prefer one broad, opinionated setup pass over manual point-and-click tuning.
 - You want app removal, privacy cleanup, package install, and gaming tweaks in one workflow.
 - You need resume/retry behavior for machines that reboot during setup.
@@ -81,6 +83,20 @@ Hunter does not need a traditional installer.
 
 ### Remote one-liner
 
+Stable channel:
+
+```powershell
+irm https://raw.githubusercontent.com/xobash/hunter/stable/hunter.ps1 | iex
+```
+
+Exact version:
+
+```powershell
+irm https://raw.githubusercontent.com/xobash/hunter/v2.0.1/hunter.ps1 | iex
+```
+
+Preview channel (`main`, for development validation rather than public use):
+
 ```powershell
 irm https://raw.githubusercontent.com/xobash/hunter/main/hunter.ps1 | iex
 ```
@@ -96,6 +112,7 @@ powershell -ExecutionPolicy Bypass -File .\hunter.ps1
 ### Notes
 
 - Hunter bootstraps `src/Hunter/Private/Bootstrap/Loader.ps1`, validates its SHA-256, then downloads any missing private assets from the loader manifest when you run `hunter.ps1` directly from GitHub.
+- The wrapper now self-identifies its release channel and release version, while private bootstrap assets remain pinned to an immutable bootstrap revision for integrity and reproducibility.
 - PowerShell 7 can launch Hunter, but Hunter still uses Windows PowerShell internally for some AppX operations because the desktop AppX tooling is not consistently available in `pwsh` on Windows clients.
 
 ## Usage
@@ -291,7 +308,10 @@ Hunter writes working state under `C:\ProgramData\Hunter\`.
 |------|---------|
 | `hunter.log` | Main execution log |
 | `checkpoint.json` | Completed-task tracking for resume/retry logic |
+| `Rollback\rollback-manifest.json` | Captured rollback manifest for shared system mutations |
+| `Rollback\Restore-HunterState.ps1` | Generated restore script for captured rollback entries |
 | `Resume\hunter.ps1` | Resume-script copy used by the scheduled recovery task |
+| `run-configuration.json` | Release metadata and run inputs for reproducibility |
 | `Secrets\local-user.secret` | Machine-protected credential payload for Hunter's managed local user |
 | `Temp\` | Temporary helper assets used during some operations |
 
@@ -299,6 +319,8 @@ At the end of the run Hunter exports:
 
 - A desktop summary report.
 - A desktop copy of the full execution log.
+- A desktop copy of the generated restore script.
+- A desktop copy of the run configuration used for the run.
 
 ## Project Structure
 
@@ -337,6 +359,7 @@ Fast checks:
 ```powershell
 git diff --check
 python3 .\scripts\verification\audit_task_issue_compatibility.py
+python3 .\scripts\verification\audit_bootstrap_hashes.py
 ```
 
 Smoke tests:

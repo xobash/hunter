@@ -40,15 +40,30 @@ def main() -> int:
             )
 
     hunter_text = HUNTER_PATH.read_text(encoding="utf-8")
-    revision_match = re.search(r"\$script:HunterRemoteRevision = '([0-9a-fA-F]{40})'", hunter_text)
-    if not revision_match:
-        failures.append(f"{HUNTER_PATH}: HunterRemoteRevision assignment not found")
-    elif not re.search(
-        r"\$script:HunterRemoteRoot = 'https://raw\.githubusercontent\.com/xobash/hunter/\{0\}' -f \$script:HunterRemoteRevision",
+    if not re.search(r"\$script:HunterReleaseChannel = '[^']+'", hunter_text):
+        failures.append(f"{HUNTER_PATH}: HunterReleaseChannel assignment not found")
+
+    if not re.search(r"\$script:HunterReleaseVersion = '[^']+'", hunter_text):
+        failures.append(f"{HUNTER_PATH}: HunterReleaseVersion assignment not found")
+
+    bootstrap_revision_match = re.search(r"\$script:HunterBootstrapRevision = '([0-9a-fA-F]{40})'", hunter_text)
+    if not bootstrap_revision_match:
+        failures.append(f"{HUNTER_PATH}: HunterBootstrapRevision assignment not found")
+
+    if not re.search(
+        r"\$script:HunterRemoteRevision = \$script:HunterBootstrapRevision",
         hunter_text,
     ):
         failures.append(
-            f"{HUNTER_PATH}: HunterRemoteRoot is not derived from HunterRemoteRevision"
+            f"{HUNTER_PATH}: HunterRemoteRevision is not derived from HunterBootstrapRevision"
+        )
+
+    if not re.search(
+        r"\$script:HunterRemoteRoot = 'https://raw\.githubusercontent\.com/xobash/hunter/\{0\}' -f \$script:HunterBootstrapRevision",
+        hunter_text,
+    ):
+        failures.append(
+            f"{HUNTER_PATH}: HunterRemoteRoot is not derived from HunterBootstrapRevision"
         )
 
     match = re.search(r"\$script:BootstrapLoaderSha256 = '([0-9a-fA-F]+)'", hunter_text)

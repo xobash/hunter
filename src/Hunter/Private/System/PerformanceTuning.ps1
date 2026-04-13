@@ -153,6 +153,7 @@ function Set-NoSoundsSchemeForAllUsers {
 
 function Invoke-ActivateUltimatePerformance {
     try {
+        Register-HunterActivePowerSchemeRollback
         $activeScheme = (powercfg /getactivescheme 2>$null) -join ''
         $upGuid = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
 

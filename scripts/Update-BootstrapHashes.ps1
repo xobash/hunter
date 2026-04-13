@@ -4,7 +4,10 @@ $ErrorActionPreference = 'Stop'
 param(
     [string]$HunterScriptPath = 'hunter.ps1',
     [string]$LoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1',
-    [string]$RemoteRevision = ''
+    [Alias('RemoteRevision')]
+    [string]$BootstrapRevision = '',
+    [string]$ReleaseChannel = '',
+    [string]$ReleaseVersion = ''
 )
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -64,30 +67,58 @@ Set-Content -Path $loaderFullPath -Value $loaderContent -Encoding UTF8 -Force
 
 $loaderSha256 = (Get-FileHash -Path $loaderFullPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
 $hunterScriptContent = Get-Content -Path $hunterScriptFullPath -Raw -ErrorAction Stop
-$remoteRevisionPattern = "(?m)(?<prefix>\$script:HunterRemoteRevision\s*=\s*')[0-9A-Fa-f]*(?<suffix>')"
-$resolvedRemoteRevision = $RemoteRevision
-if ([string]::IsNullOrWhiteSpace($resolvedRemoteRevision)) {
+$bootstrapRevisionPattern = "(?m)(?<prefix>\$script:HunterBootstrapRevision\s*=\s*')[0-9A-Fa-f]*(?<suffix>')"
+$resolvedBootstrapRevision = $BootstrapRevision
+if ([string]::IsNullOrWhiteSpace($resolvedBootstrapRevision)) {
     try {
-        $resolvedRemoteRevision = (& git -C $repoRoot rev-parse HEAD 2>$null).Trim()
+        $resolvedBootstrapRevision = (& git -C $repoRoot rev-parse HEAD 2>$null).Trim()
     } catch {
-        $resolvedRemoteRevision = ''
+        $resolvedBootstrapRevision = ''
     }
 }
 
-if ([string]::IsNullOrWhiteSpace($resolvedRemoteRevision)) {
-    throw 'Could not determine HunterRemoteRevision. Pass -RemoteRevision explicitly or run inside a git worktree.'
+if ([string]::IsNullOrWhiteSpace($resolvedBootstrapRevision)) {
+    throw 'Could not determine HunterBootstrapRevision. Pass -BootstrapRevision explicitly or run inside a git worktree.'
 }
 
-if (-not [regex]::IsMatch($hunterScriptContent, $remoteRevisionPattern)) {
-    throw "Could not find HunterRemoteRevision assignment in $HunterScriptPath"
+if (-not [regex]::IsMatch($hunterScriptContent, $bootstrapRevisionPattern)) {
+    throw "Could not find HunterBootstrapRevision assignment in $HunterScriptPath"
 }
 
 $hunterScriptContent = [regex]::Replace(
     $hunterScriptContent,
-    $remoteRevisionPattern,
-    ('${prefix}' + $resolvedRemoteRevision + '${suffix}'),
+    $bootstrapRevisionPattern,
+    ('${prefix}' + $resolvedBootstrapRevision + '${suffix}'),
     1
 )
+
+if (-not [string]::IsNullOrWhiteSpace($ReleaseChannel)) {
+    $releaseChannelPattern = "(?m)(?<prefix>\$script:HunterReleaseChannel\s*=\s*')[^']*(?<suffix>')"
+    if (-not [regex]::IsMatch($hunterScriptContent, $releaseChannelPattern)) {
+        throw "Could not find HunterReleaseChannel assignment in $HunterScriptPath"
+    }
+
+    $hunterScriptContent = [regex]::Replace(
+        $hunterScriptContent,
+        $releaseChannelPattern,
+        ('${prefix}' + $ReleaseChannel + '${suffix}'),
+        1
+    )
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ReleaseVersion)) {
+    $releaseVersionPattern = "(?m)(?<prefix>\$script:HunterReleaseVersion\s*=\s*')[^']*(?<suffix>')"
+    if (-not [regex]::IsMatch($hunterScriptContent, $releaseVersionPattern)) {
+        throw "Could not find HunterReleaseVersion assignment in $HunterScriptPath"
+    }
+
+    $hunterScriptContent = [regex]::Replace(
+        $hunterScriptContent,
+        $releaseVersionPattern,
+        ('${prefix}' + $ReleaseVersion + '${suffix}'),
+        1
+    )
+}
 
 $loaderHashPattern = "(?m)(?<prefix>\$script:BootstrapLoaderSha256\s*=\s*')[0-9A-Fa-f]*(?<suffix>')"
 if (-not [regex]::IsMatch($hunterScriptContent, $loaderHashPattern)) {
@@ -103,6 +134,13 @@ $hunterScriptContent = [regex]::Replace(
 
 Set-Content -Path $hunterScriptFullPath -Value $hunterScriptContent -Encoding UTF8 -Force
 
-Write-Host ("{0} HunterRemoteRevision" -f $resolvedRemoteRevision)
+Write-Host ("{0} HunterRemoteRevision" -f $resolvedBootstrapRevision)
 Write-Host ("{0} {1}" -f $loaderSha256, $LoaderRelativePath)
-Write-Host "Updated bootstrap manifest hashes in $LoaderRelativePath and loader hash in $HunterScriptPath"
+Write-Host ("{0} HunterBootstrapRevision" -f $resolvedBootstrapRevision)
+if (-not [string]::IsNullOrWhiteSpace($ReleaseChannel)) {
+    Write-Host ("{0} HunterReleaseChannel" -f $ReleaseChannel)
+}
+if (-not [string]::IsNullOrWhiteSpace($ReleaseVersion)) {
+    Write-Host ("{0} HunterReleaseVersion" -f $ReleaseVersion)
+}
+Write-Host "Updated bootstrap manifest hashes in $LoaderRelativePath and loader metadata in $HunterScriptPath"

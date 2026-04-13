@@ -5,6 +5,7 @@ function Set-ServiceStartType {
         [string]$StartType
     )
     try {
+        Register-HunterServiceStartTypeRollback -Name $Name
         Set-Service -Name $Name -StartupType $StartType -ErrorAction Stop
         Write-Log "Service startup type set: $Name = $StartType"
     } catch {
@@ -148,6 +149,8 @@ function Disable-ScheduledTaskIfPresent {
             return $false
         }
 
+        Register-HunterScheduledTaskRollback -TaskPath $TaskPath -TaskName $TaskName
+
         if ($task.State -eq 'Disabled') {
             Write-Log "Scheduled task already disabled: $DisplayName" 'INFO'
             return $true
@@ -178,6 +181,8 @@ function Enable-ScheduledTaskIfPresent {
         if ($null -eq $task) {
             return $false
         }
+
+        Register-HunterScheduledTaskRollback -TaskPath $TaskPath -TaskName $TaskName
 
         if ($task.State -ne 'Disabled') {
             Write-Log "Scheduled task already enabled: $DisplayName" 'INFO'
@@ -238,4 +243,3 @@ function Test-ScheduledTaskDisabledOrMissing {
         return $false
     }
 }
-

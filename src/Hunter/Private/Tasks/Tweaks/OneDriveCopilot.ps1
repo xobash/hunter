@@ -9,7 +9,10 @@ function Invoke-RemoveOneDrive {
 
     try {
         Write-Log -Message "Starting OneDrive removal..." -Level 'INFO'
-        Invoke-ApplyAppRemovalStrategies -Entries (Resolve-HunterAppCatalogEntries -Selections @('onedrive')) | Out-Null
+        $appRemovalResult = Invoke-ApplyAppRemovalStrategies -Entries @(Resolve-HunterAppCatalogEntries -Selections @('onedrive'))
+        if (Test-TaskHandlerReturnedFailure -TaskResult $appRemovalResult) {
+            return $false
+        }
 
         $programFilesRoot = $script:ProgramFilesRoot
         $oneDriveSetup32 = "$env:SystemRoot\SysWOW64\OneDriveSetup.exe"
@@ -146,11 +149,14 @@ function Invoke-RemoveOneDrive {
             if ($remainingNonUserDataMarkers.Count -eq 0) {
                 $userFolderReason = 'OneDrive user folder was left in place to avoid deleting user data.'
                 Write-Log -Message $userFolderReason -Level 'WARN'
-                return @{
+                return (Join-TaskResults -TaskResults @(
+                    $appRemovalResult,
+                    @{
                     Success = $true
                     Status  = 'CompletedWithWarnings'
                     Reason  = $userFolderReason
-                }
+                    }
+                ) -WarningReason 'OneDrive removal completed with warnings')
             }
 
             Write-Log -Message ("OneDrive removal incomplete. Remaining markers: {0}" -f ($remainingMarkers -join ', ')) -Level 'ERROR'
@@ -159,15 +165,18 @@ function Invoke-RemoveOneDrive {
 
         if (-not [string]::IsNullOrWhiteSpace($uninstallIssue)) {
             Write-Log -Message "OneDrive removal completed with warnings after cleanup verification." -Level 'WARN'
-            return @{
+            return (Join-TaskResults -TaskResults @(
+                $appRemovalResult,
+                @{
                 Success = $true
                 Status  = 'CompletedWithWarnings'
                 Reason  = $uninstallIssue
-            }
+                }
+            ) -WarningReason 'OneDrive removal completed with warnings')
         }
 
         Write-Log -Message "OneDrive removal complete." -Level 'INFO'
-        return $true
+        return (Join-TaskResults -TaskResults @($appRemovalResult) -WarningReason 'OneDrive removal completed with warnings')
     }
     catch {
         Write-Log -Message "Error in Invoke-RemoveOneDrive: $_" -Level 'ERROR'
@@ -237,7 +246,10 @@ function Invoke-RemoveCopilot {
         )
 
         Write-Log -Message "Removing Copilot Appx packages..." -Level 'INFO'
-        Invoke-ApplyAppRemovalStrategies -Entries (Resolve-HunterAppCatalogEntries -Selections @('copilot')) | Out-Null
+        $appRemovalResult = Invoke-ApplyAppRemovalStrategies -Entries @(Resolve-HunterAppCatalogEntries -Selections @('copilot'))
+        if (Test-TaskHandlerReturnedFailure -TaskResult $appRemovalResult) {
+            return $false
+        }
         Remove-AppxPatterns -Patterns @('Microsoft.MicrosoftOfficeHub*')
 
         if (Test-CanUseInlineAppxCommands) {
@@ -270,7 +282,7 @@ function Invoke-RemoveCopilot {
         Request-ExplorerRestart
 
         Write-Log -Message "Copilot removal complete." -Level 'INFO'
-        return $true
+        return (Join-TaskResults -TaskResults @($appRemovalResult) -WarningReason 'Copilot removal completed with warnings')
     }
     catch {
         Write-Log -Message "Error in Invoke-RemoveCopilot: $_" -Level 'ERROR'
@@ -281,4 +293,3 @@ function Invoke-RemoveCopilot {
 #endregion PHASE 5
 
 #region PHASE 6 - APPS / FEATURES NUKE+BLOCK
-

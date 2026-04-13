@@ -14,10 +14,13 @@ try {
 # ==============================================================================
 
 $script:HunterSourceRoot = $null
-$script:HunterRemoteRevision = 'b3498dda7d27e3dedf690920860ae76e800e5ec4'
-$script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterRemoteRevision
+$script:HunterReleaseChannel = 'preview'
+$script:HunterReleaseVersion = '2.0.1-preview.1'
+$script:HunterBootstrapRevision = 'b3498dda7d27e3dedf690920860ae76e800e5ec4'
+$script:HunterRemoteRevision = $script:HunterBootstrapRevision
+$script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = 'a63a84cd3c321612e7aef001be8a67a7b4902b158fff1ec5c8ec22c8ec560480'
+$script:BootstrapLoaderSha256 = '464e2ea586cd3c519fda8b028a22fb3a90d84100e1cb32d7f6afb553c398ac2e'
 
 $bootstrapLoaderPath = $null
 $canUseLocalHunterPrivateLayers = $false
@@ -191,6 +194,8 @@ function Invoke-Main {
         Initialize-HunterDirectory $script:DownloadDir
         Migrate-HunterStateToProgramData
         $script:IsAutomationRun = [bool]$AutomationSafe -or $env:GITHUB_ACTIONS -eq 'true' -or $env:HUNTER_AUTOMATION_SAFE -eq '1'
+        Initialize-HunterRollbackState -Mode $Mode
+        Save-HunterRunConfiguration -Mode $Mode -SkipTaskIds $script:SkipTaskIds -CustomAppsListPath $(Get-HunterEffectiveCustomAppsListPath)
         $buildContext = Get-WindowsBuildContext
         $editionContext = Get-WindowsEditionContext
         $editionSummary = (@(
@@ -204,6 +209,8 @@ function Invoke-Main {
         Write-Log "===========================================================" 'INFO'
         Write-Log ""
         Write-Log "Execution Mode:  $Mode" 'INFO'
+        Write-Log "Release Channel: $($script:HunterReleaseChannel)" 'INFO'
+        Write-Log "Release Version: $($script:HunterReleaseVersion)" 'INFO'
         Write-Log "OS Version:      $([System.Environment]::OSVersion.VersionString)" 'INFO'
         Write-Log "Windows Build:   $($buildContext.CurrentBuild).$($buildContext.UBR) $(if (-not [string]::IsNullOrWhiteSpace($buildContext.DisplayVersion)) { "($($buildContext.DisplayVersion))" } elseif (-not [string]::IsNullOrWhiteSpace($buildContext.ReleaseId)) { "($($buildContext.ReleaseId))" } else { '' })" 'INFO'
         if (-not [string]::IsNullOrWhiteSpace($buildContext.ProductName)) {

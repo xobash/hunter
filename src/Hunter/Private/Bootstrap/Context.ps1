@@ -83,6 +83,10 @@ function Sync-HunterScriptStateFromContext {
         if ($Context.Paths.ContainsKey('CheckpointPath')) { $script:CheckpointPath = [string]$Context.Paths.CheckpointPath }
         if ($Context.Paths.ContainsKey('ResumeScriptPath')) { $script:ResumeScriptPath = [string]$Context.Paths.ResumeScriptPath }
         if ($Context.Paths.ContainsKey('SecretsRoot')) { $script:SecretsRoot = [string]$Context.Paths.SecretsRoot }
+        if ($Context.Paths.ContainsKey('RollbackRoot')) { $script:RollbackRoot = [string]$Context.Paths.RollbackRoot }
+        if ($Context.Paths.ContainsKey('RollbackManifestPath')) { $script:RollbackManifestPath = [string]$Context.Paths.RollbackManifestPath }
+        if ($Context.Paths.ContainsKey('RollbackScriptPath')) { $script:RollbackScriptPath = [string]$Context.Paths.RollbackScriptPath }
+        if ($Context.Paths.ContainsKey('RunConfigurationPath')) { $script:RunConfigurationPath = [string]$Context.Paths.RunConfigurationPath }
     }
 
     if ($null -ne $Context.Flags) {
@@ -157,6 +161,10 @@ function Sync-HunterContextFromScriptState {
         CheckpointPath   = $script:CheckpointPath
         ResumeScriptPath = $script:ResumeScriptPath
         SecretsRoot      = $script:SecretsRoot
+        RollbackRoot     = $script:RollbackRoot
+        RollbackManifestPath = $script:RollbackManifestPath
+        RollbackScriptPath = $script:RollbackScriptPath
+        RunConfigurationPath = $script:RunConfigurationPath
     }
 
     $Context.Flags = @{

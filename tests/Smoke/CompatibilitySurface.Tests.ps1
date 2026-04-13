@@ -110,13 +110,21 @@ Describe 'Wrapper compatibility surface' {
     }
 
     It 'keeps remote bootstrap support for irm pipe iex execution' {
-        $sourceText | Should -Match "\$script:HunterRemoteRevision = '[0-9a-f]{40}'"
-        $sourceText | Should -Match "\$script:HunterRemoteRoot = 'https://raw\.githubusercontent\.com/xobash/hunter/\{0\}' -f \$script:HunterRemoteRevision"
+        $sourceText | Should -Match "\$script:HunterReleaseChannel = '[^']+'"
+        $sourceText | Should -Match "\$script:HunterReleaseVersion = '[^']+'"
+        $sourceText | Should -Match "\$script:HunterBootstrapRevision = '[0-9a-f]{40}'"
+        $sourceText | Should -Match "\$script:HunterRemoteRevision = \$script:HunterBootstrapRevision"
+        $sourceText | Should -Match "\$script:HunterRemoteRoot = 'https://raw\.githubusercontent\.com/xobash/hunter/\{0\}' -f \$script:HunterBootstrapRevision"
         $sourceText | Should -Match "\$script:BootstrapLoaderRelativePath = 'src\\\\Hunter\\\\Private\\\\Bootstrap\\\\Loader\.ps1'"
         $sourceText | Should -Match "Join-Path \(\[System\.IO\.Path\]::GetTempPath\(\)\) 'HunterBootstrap'"
         $sourceText | Should -Match 'Invoke-WebRequest `\s*-Uri \$bootstrapLoaderUri'
         $sourceText | Should -Match 'Initialize-HunterPrivateSourceTree'
         $sourceText | Should -Match 'foreach \(\$privateScript in @\(Get-HunterPrivateScriptManifest\)\)'
         $sourceText | Should -Match '\. \(Join-Path \$script:HunterSourceRoot \(\[string\]\$privateScript\.RelativePath\)\)'
+    }
+
+    It 'initializes rollback capture and run-configuration recording during startup' {
+        $sourceText | Should -Match 'Initialize-HunterRollbackState -Mode \$Mode'
+        $sourceText | Should -Match 'Save-HunterRunConfiguration -Mode \$Mode'
     }
 }

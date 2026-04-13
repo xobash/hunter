@@ -631,19 +631,28 @@ function Invoke-ApplyGraphicsSchedulingTweaks {
 
         $graphicsDriversPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers'
         $dwmPath = 'HKLM:\SOFTWARE\Microsoft\Windows\Dwm'
+        $gpuContexts = @(Get-GpuPciDeviceContexts)
+        $gpuDetectionIsReliable = ($gpuContexts.Count -gt 0)
 
         if (Resolve-DisableHagsPreference) {
             Set-RegistryValue -Path $graphicsDriversPath -Name 'HwSchMode' -Value 1 -Type DWord | Out-Null
             Write-Log 'HAGS override applied: HwSchMode=1 (disabled).' 'INFO'
-        } else {
+        } elseif ($gpuDetectionIsReliable) {
             Set-RegistryValue -Path $graphicsDriversPath -Name 'HwSchMode' -Value 2 -Type DWord | Out-Null
             Write-Log 'HAGS enabled by default: HwSchMode=2.' 'INFO'
+        } else {
+            Write-Log 'Skipping HAGS enable because no PCI display devices were confidently detected.' 'INFO'
         }
-        Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrLevel' -Value 0 -Type DWord
-        Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrDelay' -Value 10 -Type DWord
-        Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrDdiDelay' -Value 10 -Type DWord
-        Set-RegistryValue -Path $dwmPath -Name 'OverlayTestMode' -Value 5 -Type DWord
-        Invoke-EnableGpuMsiMode | Out-Null
+
+        if ($gpuDetectionIsReliable) {
+            Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrLevel' -Value 0 -Type DWord
+            Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrDelay' -Value 10 -Type DWord
+            Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrDdiDelay' -Value 10 -Type DWord
+            Set-RegistryValue -Path $dwmPath -Name 'OverlayTestMode' -Value 5 -Type DWord
+            Invoke-EnableGpuMsiMode | Out-Null
+        } else {
+            Write-Log 'Skipping TDR, MPO, and GPU MSI-mode mutations because GPU detection was inconclusive.' 'INFO'
+        }
 
         Set-DirectXGlobalPreferenceValue -Key 'VRROptimizeEnable' -Value '1'
         Set-DirectXGlobalPreferenceValue -Key 'SwapEffectUpgradeEnable' -Value '1'
@@ -662,7 +671,11 @@ function Invoke-ApplyGraphicsSchedulingTweaks {
             @{ SubPath = 'System\GameConfigStore'; Name = 'GameDVR_HonorUserFSEBehaviorMode'; Value = 1 }
         )
 
-        Write-Log 'MPO was disabled via OverlayTestMode=5 and windowed-game swap-effect upgrade was enabled.' 'INFO'
+        if ($gpuDetectionIsReliable) {
+            Write-Log 'MPO was disabled via OverlayTestMode=5 and windowed-game swap-effect upgrade was enabled.' 'INFO'
+        } else {
+            Write-Log 'Windowed-game swap-effect upgrade was enabled, but MPO/TDR/HAGS changes were limited because GPU detection was inconclusive.' 'INFO'
+        }
         Write-Log 'Resizable BAR auditing is handled separately because BAR sizing is negotiated by firmware and display drivers on supported hardware.' 'INFO'
         Write-Log 'Graphics scheduling and frame pacing tweaks applied.' 'SUCCESS'
         return $true
@@ -858,14 +871,15 @@ function Invoke-ExhaustivePowerTuning {
     .SYNOPSIS
     Applies the full WinSux exhaustive power-tuning profile.
     .DESCRIPTION
-    Creates and activates the dedicated WinSux Ultimate Performance plan GUID, removes the
-    remaining plans, applies the full powercfg AC/DC setting matrix from WinSux, and then
+    Creates and activates the dedicated WinSux Ultimate Performance plan GUID, preserves the
+    existing plans, applies the full powercfg AC/DC setting matrix from WinSux, and then
     layers on Hunter's additional per-device power-management disables for NIC/USB/HID/PCI.
     #>
     param()
 
     try {
         Write-Log 'Starting exhaustive power tuning...' 'INFO'
+        Register-HunterActivePowerSchemeRollback
 
         $ultimatePerformanceGuid = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
         $winsuxPowerSchemeGuid = '99999999-9999-9999-9999-999999999999'
@@ -905,18 +919,7 @@ function Invoke-ExhaustivePowerTuning {
         }
 
         Invoke-NativeCommandChecked -FilePath 'powercfg.exe' -ArgumentList @('/setactive', $activeSchemeGuid) | Out-Null
-
-        foreach ($schemeGuid in @(& $getPowerSchemeGuids)) {
-            if ($schemeGuid -eq $activeSchemeGuid.ToLowerInvariant()) {
-                continue
-            }
-
-            try {
-                Invoke-NativeCommandChecked -FilePath 'powercfg.exe' -ArgumentList @('/delete', $schemeGuid) | Out-Null
-            } catch {
-                Write-Log "Failed to delete power scheme ${schemeGuid}: $_" 'WARN'
-            }
-        }
+        Write-Log 'Preserving pre-existing power schemes; Hunter will no longer delete alternate plans during exhaustive tuning.' 'INFO'
 
         # ---- System-wide power registry settings ----
 
@@ -1724,6 +1727,13 @@ function Invoke-ApplyTcpOptimizerTutorialProfile {
     try {
         Invoke-CollectCompletedExternalAssetPrefetchJobs
         Write-Log 'Applying TCP Optimizer settings...' 'INFO'
+        Register-HunterManualRestoreNote `
+            -Key 'manual-restore|tcp-optimizer' `
+            -Description 'Manual restore note for TCP Optimizer profile' `
+            -Instructions @(
+                'Hunter changed TCP, adapter offload, and NetBIOS settings as part of the TCP Optimizer profile.',
+                'To restore those networking changes, review the generated Hunter restore script first, then reset any remaining adapter-level networking changes with your preferred NIC defaults or by using the TCP Optimizer defaults/reset workflow.'
+            )
 
         # Cache active adapters once — avoids 5 redundant WMI/CIM round trips
         # Ref: https://learn.microsoft.com/en-us/powershell/scripting/dev-cross-plat/performance/script-authoring-considerations
@@ -1739,12 +1749,7 @@ function Invoke-ApplyTcpOptimizerTutorialProfile {
             }
         }
         foreach ($adapter in $activeAdapters) {
-            try {
-                Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses @('1.1.1.1', '8.8.8.8') -ErrorAction Stop
-                Write-Log "DNS servers set on $($adapter.Name): 1.1.1.1, 8.8.8.8" 'INFO'
-            } catch {
-                Write-Log "Failed to set DNS servers on $($adapter.Name): $($_.Exception.Message)" 'WARN'
-            }
+            Write-Log "Preserving existing DNS servers on $($adapter.Name)." 'INFO'
         }
 
         # -- Main TCP settings --
@@ -1843,7 +1848,7 @@ function Invoke-ApplyTcpOptimizerTutorialProfile {
         # QoS Do Not Use NLA: Optimal (undocumented but registry-set)
         Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\QoS' -Name 'DoNotUseNLA' -Value 1 -Type DWord
         # Network Throttling Index: Disabled (FFFFFFFF = 4294967295)
-        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' -Name 'NetworkThrottlingIndex' -Value 0xFFFFFFFF -Type DWord
+        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' -Name 'NetworkThrottlingIndex' -Value ([uint32]::MaxValue) -Type DWord -FailureLevel WARN
 
         # -- Gaming / ACK settings --
         $sysProfile = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
@@ -1935,6 +1940,13 @@ function Invoke-ApplyOOSUSilentRecommendedPlusSomewhat {
     try {
         Invoke-CollectCompletedExternalAssetPrefetchJobs
         Write-Log "Preparing O&O ShutUp10..." 'INFO'
+        Register-HunterManualRestoreNote `
+            -Key 'manual-restore|oosu' `
+            -Description 'Manual restore note for O&O ShutUp10 preset import' `
+            -Instructions @(
+                'Hunter imported an O&O ShutUp10 preset that can change settings outside Hunter''s native rollback capture.',
+                'To restore those privacy settings, reopen O&O ShutUp10 and use its built-in revert/default workflow, or restore from the Windows restore point if you created one before the run.'
+            )
 
         # Download O&O ShutUp10
         $oosuPath = Get-OOSUDownloadPath

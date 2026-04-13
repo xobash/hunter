@@ -67,6 +67,7 @@ function Set-RegistryDefaultValueForAllUsers {
     $allSucceeded = $true
 
     try {
+        Register-HunterRegistryDefaultValueRollback -Path "HKCU:\$SubPath"
         Invoke-NativeCommandChecked -FilePath $regPath -ArgumentList @('add', "HKCU\$SubPath", '/ve', '/d', $Value, '/f') | Out-Null
         Write-Log "Default value set for current user: $SubPath = $Value"
     } catch {
@@ -77,6 +78,7 @@ function Set-RegistryDefaultValueForAllUsers {
     try {
         $defaultHive = Get-HunterDefaultUserHivePath
         if (Test-Path $defaultHive) {
+            Register-HunterDefaultUserRegistryDefaultValueRollback -SubPath $SubPath
             Invoke-WithUserHive -HiveName 'HKU\HunterDefault' -HivePath $defaultHive -Action {
                 param($HiveRoot)
 
@@ -99,15 +101,17 @@ function Remove-RegistryValueForAllUsers {
         [string]$Name
     )
 
-    Remove-RegistryValueIfPresent -Path "HKCU:\$SubPath" -Name $Name
+    Register-HunterRegistryValueRollback -Path "HKCU:\$SubPath" -Name $Name
+    Remove-RegistryValueIfPresent -Path "HKCU:\$SubPath" -Name $Name -SkipRollbackCapture
 
     try {
         $defaultHive = Get-HunterDefaultUserHivePath
         if (Test-Path $defaultHive) {
+            Register-HunterDefaultUserRegistryValueRollback -SubPath $SubPath -Name $Name
             Invoke-WithUserHive -HiveName 'HKU\HunterDefault' -HivePath $defaultHive -Action {
                 param($HiveRoot)
 
-                Remove-RegistryValueIfPresent -Path "$HiveRoot\$SubPath" -Name $Name
+                Remove-RegistryValueIfPresent -Path "$HiveRoot\$SubPath" -Name $Name -SkipRollbackCapture
             } | Out-Null
         }
     } catch {
@@ -126,6 +130,7 @@ function Set-RegistryValueForAllUsers {
     )
 
     try {
+        Register-HunterRegistryValueRollback -Path "HKCU:\$SubPath" -Name $Name
         $currentUserPath = "HKCU:\$SubPath"
         $currentUserParentPath = Split-Path -Parent $currentUserPath
         $currentUserLeaf = Split-Path -Leaf $currentUserPath
@@ -146,6 +151,7 @@ function Set-RegistryValueForAllUsers {
     try {
         $defaultHive = Get-HunterDefaultUserHivePath
         if (Test-Path $defaultHive) {
+            Register-HunterDefaultUserRegistryValueRollback -SubPath $SubPath -Name $Name
             Invoke-WithUserHive -HiveName 'HKU\HunterDefault' -HivePath $defaultHive -Action {
                 param($HiveRoot)
 
@@ -182,6 +188,7 @@ function Set-DwordBatchForAllUsers {
     # Apply to current user first (no hive load needed)
     foreach ($setting in $Settings) {
         try {
+            Register-HunterRegistryValueRollback -Path "HKCU:\$($setting.SubPath)" -Name ([string]$setting.Name)
             $currentUserPath = "HKCU:\$($setting.SubPath)"
             $parentPath = Split-Path -Parent $currentUserPath
             $leaf = Split-Path -Leaf $currentUserPath
@@ -204,6 +211,10 @@ function Set-DwordBatchForAllUsers {
     try {
         $defaultHive = Get-HunterDefaultUserHivePath
         if (Test-Path $defaultHive) {
+            foreach ($setting in $Settings) {
+                Register-HunterDefaultUserRegistryValueRollback -SubPath ([string]$setting.SubPath) -Name ([string]$setting.Name)
+            }
+
             Invoke-WithUserHive -HiveName 'HKU\HunterDefault' -HivePath $defaultHive -Action {
                 param($HiveRoot)
 

@@ -4,9 +4,13 @@ function Set-RegistryValue {
         [string]$Name,
         [object]$Value,
         [ValidateSet('DWord','String','QWord','Binary','ExpandString','MultiString')]
-        [string]$Type = 'String'
+        [string]$Type = 'String',
+        [ValidateSet('ERROR','WARN','INFO')]
+        [string]$FailureLevel = 'ERROR'
     )
     try {
+        Register-HunterRegistryValueRollback -Path $Path -Name $Name
+
         if (-not (Initialize-RegistryKeyPath -Path $Path)) {
             throw "Failed to create registry path $Path"
         }
@@ -18,7 +22,7 @@ function Set-RegistryValue {
         Write-Log "Registry set: $Path\$Name = $Value ($Type)"
         return $true
     } catch {
-        Write-Log "Failed to set registry $Path\$Name : $_" 'ERROR'
+        Write-Log "Failed to set registry $Path\$Name : $_" $FailureLevel
         return $false
     }
 }
@@ -122,10 +126,15 @@ function Test-HunterValueEquals {
 function Remove-RegistryValueIfPresent {
     param(
         [string]$Path,
-        [string]$Name
+        [string]$Name,
+        [switch]$SkipRollbackCapture
     )
 
     try {
+        if (-not $SkipRollbackCapture) {
+            Register-HunterRegistryValueRollback -Path $Path -Name $Name
+        }
+
         if (-not (Test-Path $Path)) {
             return
         }

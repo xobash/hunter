@@ -65,7 +65,7 @@ function Get-HunterTaskCatalog {
         [pscustomobject]@{ Id = 'external-network-connections-shortcut'; Phase = '8'; Handler = { Invoke-CreateNetworkConnectionsShortcut }; Description = 'Create Network Connections shortcut and pin to Start' }
         [pscustomobject]@{ Id = 'install-finalize-packages-v2'; Phase = '9'; Handler = { Invoke-ParallelInstalls }; Description = 'Finalize background package installations' }
         [pscustomobject]@{ Id = 'cleanup-temp-files'; Phase = '9'; Handler = { Invoke-DeleteTempFiles }; Description = 'Clean temporary files' }
-        [pscustomobject]@{ Id = 'cleanup-retry-failed'; Phase = '9'; Handler = { Invoke-RetryFailedTasks }; Description = 'Retry any failed tasks' }
+        [pscustomobject]@{ Id = 'cleanup-retry-failed'; Phase = '9'; Handler = { Invoke-RetryFailedTasks }; Description = 'Retry failed tasks and report anything still unresolved' }
         [pscustomobject]@{ Id = 'cleanup-autologin-secrets'; Phase = '9'; Handler = { Invoke-ClearAutologinSecrets }; Description = 'Remove autologin registry values and Hunter-managed secrets after setup completes' }
         [pscustomobject]@{ Id = 'cleanup-disk-cleanup'; Phase = '9'; Handler = { Invoke-RunDiskCleanup }; Description = 'Run Windows Disk Cleanup' }
         [pscustomobject]@{ Id = 'cleanup-explorer-restart'; Phase = '9'; Handler = { Invoke-DeferredExplorerRestart }; Description = 'Restart Explorer with pending changes' }

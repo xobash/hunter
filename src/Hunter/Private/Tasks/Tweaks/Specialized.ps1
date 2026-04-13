@@ -18,7 +18,7 @@ function Invoke-NukeBlockApps {
         $startSurfaceShortcutDirs = @(((Get-DesktopShortcutDirectories) + (Get-StartMenuShortcutDirectories)) | Select-Object -Unique)
         $linkedInPatterns = @('*LinkedIn*', '*LinkedInForWindows*')
         $blockedStartPinsPatterns = Get-DefaultBlockedStartPinsPatterns
-        $customSelections = Load-HunterCustomAppsList
+        $customSelections = @(Load-HunterCustomAppsList)
         $usingCustomAppsList = ($customSelections.Count -gt 0)
         $phase6Targets = if ($usingCustomAppsList) {
             @(Resolve-HunterAppCatalogEntries -Groups @('Phase6Broad') -Selections $customSelections)
@@ -32,7 +32,10 @@ function Invoke-NukeBlockApps {
         }
 
         $selectedTargetIds = @($phase6Targets | ForEach-Object { [string]$_.Id })
-        Invoke-ApplyAppRemovalStrategies -Entries $phase6Targets | Out-Null
+        $appRemovalResult = Invoke-ApplyAppRemovalStrategies -Entries $phase6Targets
+        if (Test-TaskHandlerReturnedFailure -TaskResult $appRemovalResult) {
+            return $false
+        }
 
         # LinkedIn specific shortcut/unpin/start-menu operations
         if ($selectedTargetIds -contains 'linkedin') {
@@ -102,7 +105,7 @@ function Invoke-NukeBlockApps {
         }
 
         Write-Log -Message "App NUKE+BLOCK removal complete." -Level 'INFO'
-        return $liveCleanupResult
+        return (Join-TaskResults -TaskResults @($appRemovalResult, $liveCleanupResult) -WarningReason 'Broad app removal completed with warnings')
     }
     catch {
         Write-Log -Message "Error in Invoke-NukeBlockApps: $_" -Level 'ERROR'

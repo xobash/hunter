@@ -2,6 +2,20 @@ function Get-TcpOptimizerDownloadPath {
     return (Join-Path $script:DownloadDir 'TCPOptimizer.exe')
 }
 
+function Ensure-Directory {
+    param([Parameter(Mandatory)][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $false
+    }
+
+    if (-not (Test-Path $Path)) {
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    }
+
+    return $true
+}
+
 function Get-OOSUDownloadPath {
     return (Join-Path $script:DownloadDir 'OOSU10.exe')
 }

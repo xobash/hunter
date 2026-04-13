@@ -202,8 +202,17 @@ function Invoke-RetryFailedTasks {
             }
         }
 
-        Write-Log "Task retry complete: $(@($script:FailedTasks).Count) still failing" 'INFO'
-        return (@($script:FailedTasks).Count -eq 0)
+        $remainingFailedTaskCount = @($script:FailedTasks).Count
+        Write-Log "Task retry complete: ${remainingFailedTaskCount} still failing" 'INFO'
+        if ($remainingFailedTaskCount -gt 0) {
+            return @{
+                Success = $true
+                Status  = 'CompletedWithWarnings'
+                Reason  = "$remainingFailedTaskCount task(s) still failed after retry"
+            }
+        }
+
+        return $true
 
     } catch {
         Write-Log "Error retrying failed tasks: $_" 'ERROR'
@@ -371,6 +380,18 @@ function Invoke-ExportDesktopOperationLog {
             $logDesktopPath = Join-Path $desktopPath "Hunter-Full-Log-$timestamp.txt"
             Copy-Item -Path $script:LogPath -Destination $logDesktopPath -Force
             Write-Log "Full log copied to: $logDesktopPath" 'SUCCESS'
+        }
+
+        if (Test-Path $script:RollbackScriptPath) {
+            $rollbackDesktopPath = Join-Path $desktopPath "Hunter-Restore-$timestamp.ps1"
+            Copy-Item -Path $script:RollbackScriptPath -Destination $rollbackDesktopPath -Force
+            Write-Log "Restore script copied to: $rollbackDesktopPath" 'SUCCESS'
+        }
+
+        if (Test-Path $script:RunConfigurationPath) {
+            $runConfigDesktopPath = Join-Path $desktopPath "Hunter-Run-Configuration-$timestamp.json"
+            Copy-Item -Path $script:RunConfigurationPath -Destination $runConfigDesktopPath -Force
+            Write-Log "Run configuration copied to: $runConfigDesktopPath" 'SUCCESS'
         }
 
         Write-Log "Desktop operation log export complete" 'SUCCESS'
