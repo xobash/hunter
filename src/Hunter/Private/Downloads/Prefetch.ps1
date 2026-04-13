@@ -409,6 +409,5 @@ function Get-GitHubLatestReleaseAsset {
         Write-Log "GitHub release page lookup failed for ${Owner}/${Repo}: $_" 'WARN'
     }
 
-    throw "No release asset matched the requested patterns for $Owner/$Repo."
+    throw "No release asset matched the requested patterns for ${Owner}/${Repo}."
 }
-

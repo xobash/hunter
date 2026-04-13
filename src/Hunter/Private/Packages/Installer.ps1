@@ -112,7 +112,7 @@ function Receive-ParallelInstallerJobResult {
             }
 
             if ($jobStateIndicatesFailure) {
-                $jobMessage = "Installer job ended in state $jobState. $jobMessage".Trim()
+                $jobMessage = "Installer job ended in state ${jobState}. ${jobMessage}".Trim()
             }
 
             $packageResult.Message = $jobMessage
@@ -172,7 +172,7 @@ function Receive-ParallelInstallerJobResult {
                 $diagnosticText = 'Installer job did not return a structured result before failing.'
             }
 
-            $packageResult.Message = "Installer job ended in state $jobState. $diagnosticText".Trim()
+            $packageResult.Message = "Installer job ended in state ${jobState}. ${diagnosticText}".Trim()
         } elseif ($jobStateIndicatesFailure -and $packageResult.Success) {
             $diagnosticText = @($jobDiagnostics) -join ' | '
             if (-not [string]::IsNullOrWhiteSpace($diagnosticText)) {

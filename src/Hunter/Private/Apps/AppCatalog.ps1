@@ -199,7 +199,7 @@ function Invoke-ValidateSupportedWindowsEdition {
         if (-not $editionContext.IsSupportedConsumerEdition) {
             $script:IsUnsupportedEdition = $true
             $script:SkipStoreAndAppxTasks = $true
-            Write-Log "Unsupported Windows edition detected: $editionSummary. Hunter is designed for consumer Home/Pro-style installs; Store/AppX consumer-removal tasks will be skipped." 'WARN'
+            Write-Log "Unsupported Windows edition detected: ${editionSummary}. Hunter is designed for consumer Home/Pro-style installs; Store/AppX consumer-removal tasks will be skipped." 'WARN'
             return @{
                 Success = $true
                 Status  = 'CompletedWithWarnings'

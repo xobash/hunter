@@ -150,7 +150,7 @@ function Invoke-EnsureLocalStandardUser {
                 if (-not [string]::IsNullOrWhiteSpace($netUserMessage)) {
                     Write-Log "net.exe fallback failed for local user 'user' (exit code $netUserExitCode): $netUserMessage" 'WARN'
                 } else {
-                    Write-Log "net.exe fallback failed for local user 'user' with exit code $netUserExitCode." 'WARN'
+                    Write-Log "net.exe fallback failed for local user 'user' with exit code ${netUserExitCode}." 'WARN'
                 }
 
                 try {
@@ -176,10 +176,10 @@ function Invoke-EnsureLocalStandardUser {
                     }
                 } catch {
                     if (-not [string]::IsNullOrWhiteSpace($netUserMessage)) {
-                        throw "net.exe failed to provision the local user account with exit code $netUserExitCode. net.exe output: $netUserMessage. ADSI fallback failed: $($_.Exception.Message)"
+                        throw "net.exe failed to provision the local user account with exit code ${netUserExitCode}. net.exe output: ${netUserMessage}. ADSI fallback failed: $($_.Exception.Message)"
                     }
 
-                    throw "net.exe failed to provision the local user account with exit code $netUserExitCode. ADSI fallback failed: $($_.Exception.Message)"
+                    throw "net.exe failed to provision the local user account with exit code ${netUserExitCode}. ADSI fallback failed: $($_.Exception.Message)"
                 }
             }
 

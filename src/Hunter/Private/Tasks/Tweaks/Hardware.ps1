@@ -752,9 +752,9 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
             & $fsutilPath usn queryjournal $systemVolume *> $null
             if ($LASTEXITCODE -eq 0) {
                 Invoke-NativeCommandChecked -FilePath $fsutilPath -ArgumentList @('usn', 'deletejournal', '/d', $systemVolume) | Out-Null
-                Write-Log "NTFS USN journal deleted on $systemVolume." 'INFO'
+                Write-Log "NTFS USN journal deleted on ${systemVolume}." 'INFO'
             } else {
-                Write-Log "NTFS USN journal is not active on $systemVolume. Skipping delete." 'INFO'
+                Write-Log "NTFS USN journal is not active on ${systemVolume}. Skipping delete." 'INFO'
             }
         } catch {
             Write-Log "Failed to delete the NTFS USN journal on ${systemVolume}: $($_.Exception.Message)" 'WARN'
@@ -1627,7 +1627,7 @@ namespace HunterTimerResolution
         }
 
         if (-not (Test-Path $exePath)) {
-            Write-Log "Timer resolution service compilation did not produce $exePath." 'ERROR'
+            Write-Log "Timer resolution service compilation did not produce ${exePath}." 'ERROR'
             return $false
         }
 
@@ -1694,7 +1694,7 @@ function Set-NetAdapterAdvancedDisplayValueIfPresent {
         )
 
         if ($matchingProperties.Count -eq 0) {
-            Write-Log "$SettingLabel advanced property is not exposed on NIC $AdapterName. Skipping." 'INFO'
+            Write-Log "${SettingLabel} advanced property is not exposed on NIC ${AdapterName}. Skipping." 'INFO'
             return $false
         }
 
@@ -1707,9 +1707,9 @@ function Set-NetAdapterAdvancedDisplayValueIfPresent {
         }
 
         if ($allAlreadyConfigured) {
-            Write-Log "$SettingLabel already set to $DisplayValue on NIC $AdapterName." 'INFO'
+            Write-Log "${SettingLabel} already set to ${DisplayValue} on NIC ${AdapterName}." 'INFO'
         } else {
-            Write-Log "$SettingLabel set to $DisplayValue on NIC $AdapterName." 'INFO'
+            Write-Log "${SettingLabel} set to ${DisplayValue} on NIC ${AdapterName}." 'INFO'
         }
 
         return $true
@@ -1997,7 +1997,7 @@ function Resolve-WallpaperAssetUrl {
             if (-not [string]::IsNullOrWhiteSpace($wallpaperId) -and $wallpaperId.Length -ge 2) {
                 $assetPrefix = $wallpaperId.Substring(0, 2)
                 foreach ($extension in @('jpg', 'jpeg', 'png')) {
-                    $candidateUrl = "https://w.wallhaven.cc/full/$assetPrefix/wallhaven-$wallpaperId.$extension"
+                    $candidateUrl = "https://w.wallhaven.cc/full/${assetPrefix}/wallhaven-${wallpaperId}.${extension}"
 
                     try {
                         $curl = Get-Command curl.exe -ErrorAction SilentlyContinue

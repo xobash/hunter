@@ -85,7 +85,7 @@ function Test-WingetFunctional {
         }
 
         if ([string]::IsNullOrWhiteSpace($versionText)) {
-            $versionText = "winget exited with code $exitCode."
+            $versionText = "winget exited with code ${exitCode}."
         }
 
         return [pscustomobject]@{
@@ -131,11 +131,11 @@ function Invoke-EnsureWingetMinVersion {
         }
 
         if ($wingetStatus.ParsedVersion -ge $minimumWingetVersion) {
-            Write-Log "winget $($wingetStatus.ParsedVersion) satisfies Hunter's minimum version requirement of $minimumWingetVersion." 'SUCCESS'
+            Write-Log "winget $($wingetStatus.ParsedVersion) satisfies Hunter's minimum version requirement of ${minimumWingetVersion}." 'SUCCESS'
             return $true
         }
 
-        Write-Log "winget $($wingetStatus.ParsedVersion) is below Hunter's minimum version requirement of $minimumWingetVersion. Attempting App Installer refresh..." 'WARN'
+        Write-Log "winget $($wingetStatus.ParsedVersion) is below Hunter's minimum version requirement of ${minimumWingetVersion}. Attempting App Installer refresh..." 'WARN'
         if (-not (Install-WingetFromOfficialBundle)) {
             return (New-TaskWarningResult -Reason "winget $($wingetStatus.ParsedVersion) is below the supported minimum version and App Installer refresh failed")
         }
@@ -146,7 +146,7 @@ function Invoke-EnsureWingetMinVersion {
             return $true
         }
 
-        Write-Log "winget refresh completed but the current version is still '$($retestedWingetStatus.Version)', which does not satisfy Hunter's minimum version requirement of $minimumWingetVersion." 'WARN'
+        Write-Log "winget refresh completed but the current version is still '$($retestedWingetStatus.Version)', which does not satisfy Hunter's minimum version requirement of ${minimumWingetVersion}." 'WARN'
         return (New-TaskWarningResult -Reason 'winget is still below Hunter’s minimum supported version after refresh')
     } catch {
         Write-Log "Failed to validate Hunter's minimum winget version: $($_.Exception.Message)" 'WARN'
@@ -178,7 +178,7 @@ Add-AppxPackage -Path $BundlePath -ErrorAction Stop
         if ($installerExitCode -ne 0) {
             $installerMessage = [string]::Join(' ', @($installerOutput | ForEach-Object { [string]$_ })).Trim()
             if ([string]::IsNullOrWhiteSpace($installerMessage)) {
-                $installerMessage = "App Installer bootstrap exited with code $installerExitCode."
+                $installerMessage = "App Installer bootstrap exited with code ${installerExitCode}."
             }
 
             throw $installerMessage
@@ -334,7 +334,7 @@ function Resolve-DisableHagsPreference {
         return $false
     }
 
-    Write-Log "Hunter will enable HAGS by default for GPU(s): $gpuSummary. Use -DisableHags or HUNTER_DISABLE_HAGS=1 to keep the legacy disable override." 'INFO'
+    Write-Log "Hunter will enable HAGS by default for GPU(s): ${gpuSummary}. Use -DisableHags or HUNTER_DISABLE_HAGS=1 to keep the legacy disable override." 'INFO'
     $script:HagsDisableResolvedValue = $false
     return [bool]$script:HagsDisableResolvedValue
 }

@@ -23,7 +23,7 @@ function Invoke-WingetUninstallBestEffort {
             return $true
         }
 
-        Write-Log "WinGet uninstall for $FriendlyName via id '$WingetId' exited with code $exitCode." 'WARN'
+        Write-Log "WinGet uninstall for ${FriendlyName} via id '$WingetId' exited with code ${exitCode}." 'WARN'
         return $false
     } catch {
         Write-Log "Skipping WinGet uninstall for $FriendlyName via id '$WingetId': $($_.Exception.Message)" 'WARN'
@@ -103,4 +103,3 @@ function Invoke-ApplyAppRemovalStrategies {
 
     return $true
 }
-

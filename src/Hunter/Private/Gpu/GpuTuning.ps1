@@ -183,11 +183,10 @@ function Invoke-AuditResizableBarSupport {
             $likelyCapableCount++
             Write-Log "Resizable BAR audit: $gpuName appears to be in a GPU family that commonly supports ReBAR when firmware, VBIOS, and drivers also support it." 'INFO'
         } else {
-            Write-Log "Resizable BAR audit: no obvious support marker was detected for $gpuName. Firmware and driver validation is still required." 'INFO'
+            Write-Log "Resizable BAR audit: no obvious support marker was detected for ${gpuName}. Firmware and driver validation is still required." 'INFO'
         }
     }
 
     Write-Log 'Resizable BAR audit completed. Hunter does not apply undocumented force-enablement because BAR sizing is negotiated by firmware and display drivers.' 'INFO'
     return $true
 }
-

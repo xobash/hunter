@@ -192,7 +192,7 @@ function global:Confirm-InstallerSignature {
         $normalizedExpectedHash = $ExpectedSha256.ToLowerInvariant()
         if ($actualHash -ne $normalizedExpectedHash) {
             $signatureStatus = if ($null -eq $signature) { 'Unknown' } else { [string]$signature.Status }
-            throw "$PackageName trust validation failed. Signature status: $signatureStatus. Expected SHA256 $normalizedExpectedHash but received $actualHash"
+            throw "${PackageName} trust validation failed. Signature status: ${signatureStatus}. Expected SHA256 ${normalizedExpectedHash} but received ${actualHash}"
         }
 
         if ($null -eq $signature -or [string]$signature.Status -ne 'Valid') {
