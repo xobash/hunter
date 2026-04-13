@@ -126,7 +126,7 @@ function Invoke-DisableEdgeUpdateInfrastructure {
                 Remove-Item -Path $edgeUpdatePath -Recurse -Force -ErrorAction Stop
                 Write-Log "Removed Edge update directory: $edgeUpdatePath" 'INFO'
             } catch {
-                [void]$warnings.Add("Failed to remove Edge update directory $edgeUpdatePath: $($_.Exception.Message)")
+                [void]$warnings.Add("Failed to remove Edge update directory ${edgeUpdatePath}: $($_.Exception.Message)")
             }
         }
 
@@ -202,4 +202,3 @@ function Invoke-RemoveEdgePinsAndShortcuts {
         return $false
     }
 }
-

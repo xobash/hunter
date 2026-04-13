@@ -156,7 +156,7 @@ function Load-HunterCustomAppsList {
             }
         }
     } catch {
-        Write-Log "Failed to read custom apps list at $appsListPath: $($_.Exception.Message)" 'WARN'
+        Write-Log "Failed to read custom apps list at ${appsListPath}: $($_.Exception.Message)" 'WARN'
         return @()
     }
 
@@ -220,4 +220,3 @@ function Invoke-ValidateSupportedWindowsEdition {
         }
     }
 }
-

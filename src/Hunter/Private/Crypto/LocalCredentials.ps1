@@ -145,7 +145,7 @@ function Migrate-HunterStateToProgramData {
             Copy-Item -Path $legacyCheckpointPath -Destination $script:CheckpointPath -Force -ErrorAction Stop
             Write-Log "Migrated legacy checkpoint state from $legacyCheckpointPath to $($script:CheckpointPath)." 'INFO'
         } catch {
-            Add-RunInfrastructureIssue -Message "Failed to migrate legacy checkpoint state from $legacyCheckpointPath: $($_.Exception.Message)" -Level 'WARN'
+            Add-RunInfrastructureIssue -Message "Failed to migrate legacy checkpoint state from ${legacyCheckpointPath}: $($_.Exception.Message)" -Level 'WARN'
         }
     }
 
@@ -162,7 +162,7 @@ function Migrate-HunterStateToProgramData {
             Write-Log "Migrated legacy local-user secret from $legacySecretPath to $($script:LocalUserSecretPath)." 'INFO'
             break
         } catch {
-            Add-RunInfrastructureIssue -Message "Failed to migrate legacy local-user secret from $legacySecretPath: $($_.Exception.Message)" -Level 'WARN'
+            Add-RunInfrastructureIssue -Message "Failed to migrate legacy local-user secret from ${legacySecretPath}: $($_.Exception.Message)" -Level 'WARN'
         }
     }
 }
