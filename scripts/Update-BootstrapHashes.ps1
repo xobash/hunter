@@ -3,7 +3,8 @@ $ErrorActionPreference = 'Stop'
 
 param(
     [string]$HunterScriptPath = 'hunter.ps1',
-    [string]$LoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
+    [string]$LoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1',
+    [string]$RemoteRevision = ''
 )
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -63,6 +64,31 @@ Set-Content -Path $loaderFullPath -Value $loaderContent -Encoding UTF8 -Force
 
 $loaderSha256 = (Get-FileHash -Path $loaderFullPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
 $hunterScriptContent = Get-Content -Path $hunterScriptFullPath -Raw -ErrorAction Stop
+$remoteRevisionPattern = "(?m)(?<prefix>\$script:HunterRemoteRevision\s*=\s*')[0-9A-Fa-f]*(?<suffix>')"
+$resolvedRemoteRevision = $RemoteRevision
+if ([string]::IsNullOrWhiteSpace($resolvedRemoteRevision)) {
+    try {
+        $resolvedRemoteRevision = (& git -C $repoRoot rev-parse HEAD 2>$null).Trim()
+    } catch {
+        $resolvedRemoteRevision = ''
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($resolvedRemoteRevision)) {
+    throw 'Could not determine HunterRemoteRevision. Pass -RemoteRevision explicitly or run inside a git worktree.'
+}
+
+if (-not [regex]::IsMatch($hunterScriptContent, $remoteRevisionPattern)) {
+    throw "Could not find HunterRemoteRevision assignment in $HunterScriptPath"
+}
+
+$hunterScriptContent = [regex]::Replace(
+    $hunterScriptContent,
+    $remoteRevisionPattern,
+    ('${prefix}' + $resolvedRemoteRevision + '${suffix}'),
+    1
+)
+
 $loaderHashPattern = "(?m)(?<prefix>\$script:BootstrapLoaderSha256\s*=\s*')[0-9A-Fa-f]*(?<suffix>')"
 if (-not [regex]::IsMatch($hunterScriptContent, $loaderHashPattern)) {
     throw "Could not find BootstrapLoaderSha256 assignment in $HunterScriptPath"
@@ -77,5 +103,6 @@ $hunterScriptContent = [regex]::Replace(
 
 Set-Content -Path $hunterScriptFullPath -Value $hunterScriptContent -Encoding UTF8 -Force
 
+Write-Host ("{0} HunterRemoteRevision" -f $resolvedRemoteRevision)
 Write-Host ("{0} {1}" -f $loaderSha256, $LoaderRelativePath)
 Write-Host "Updated bootstrap manifest hashes in $LoaderRelativePath and loader hash in $HunterScriptPath"

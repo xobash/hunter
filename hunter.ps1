@@ -14,7 +14,8 @@ try {
 # ==============================================================================
 
 $script:HunterSourceRoot = $null
-$script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/main'
+$script:HunterRemoteRevision = 'b3498dda7d27e3dedf690920860ae76e800e5ec4'
+$script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterRemoteRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
 $script:BootstrapLoaderSha256 = 'a63a84cd3c321612e7aef001be8a67a7b4902b158fff1ec5c8ec22c8ec560480'
 

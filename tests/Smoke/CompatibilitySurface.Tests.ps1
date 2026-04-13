@@ -105,7 +105,8 @@ Describe 'Wrapper compatibility surface' {
     }
 
     It 'keeps remote bootstrap support for irm pipe iex execution' {
-        $sourceText | Should -Match "\$script:HunterRemoteRoot = 'https://raw\.githubusercontent\.com/xobash/hunter/main'"
+        $sourceText | Should -Match "\$script:HunterRemoteRevision = '[0-9a-f]{40}'"
+        $sourceText | Should -Match "\$script:HunterRemoteRoot = 'https://raw\.githubusercontent\.com/xobash/hunter/\{0\}' -f \$script:HunterRemoteRevision"
         $sourceText | Should -Match "\$script:BootstrapLoaderRelativePath = 'src\\\\Hunter\\\\Private\\\\Bootstrap\\\\Loader\.ps1'"
         $sourceText | Should -Match "Join-Path \(\[System\.IO\.Path\]::GetTempPath\(\)\) 'HunterBootstrap'"
         $sourceText | Should -Match 'Invoke-WebRequest `\s*-Uri \$bootstrapLoaderUri'
