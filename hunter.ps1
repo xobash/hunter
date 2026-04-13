@@ -16,7 +16,7 @@ try {
 $script:HunterSourceRoot = $null
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/main'
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = 'abd03933451e0b748a60edbef92ff46742a0a709f037be1a5892deb14ee2abeb'
+$script:BootstrapLoaderSha256 = '15604f5388b86a76fbd335a455d7d3e632caaf79ee381affacd5a47c91833c70'
 
 $bootstrapLoaderPath = $null
 $canUseLocalHunterPrivateLayers = $false
@@ -124,8 +124,8 @@ function Invoke-Main {
         Teredo because some gaming and VPN scenarios still rely on it.
 
     .PARAMETER DisableHags
-        Opt in to Hunter's legacy HAGS disable override. By default Hunter now
-        preserves the current HAGS state unless the user explicitly approves a change.
+        Opt out of Hunter's default HAGS enable policy and apply the legacy
+        HAGS disable override instead.
     #>
 
     param(

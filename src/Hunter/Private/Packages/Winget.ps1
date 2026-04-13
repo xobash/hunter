@@ -317,7 +317,9 @@ function Resolve-DisableHagsPreference {
     $script:HagsPreferenceResolved = $true
 
     if ([bool]$script:DisableHagsRequested -or $env:HUNTER_DISABLE_HAGS -eq '1') {
+        $script:DisableHagsRequested = $true
         $script:HagsDisableResolvedValue = $true
+        Write-Log 'HAGS disable override was requested explicitly.' 'INFO'
         return $true
     }
 
@@ -327,23 +329,12 @@ function Resolve-DisableHagsPreference {
     }
 
     if ($script:IsAutomationRun) {
-        Write-Log "Preserving HAGS in automation-safe mode. Use -DisableHags or HUNTER_DISABLE_HAGS=1 to apply Hunter's legacy HAGS disable override. GPU(s): $gpuSummary" 'INFO'
+        Write-Log "Automation-safe mode will keep Hunter's default HAGS enable policy. Use -DisableHags or HUNTER_DISABLE_HAGS=1 to opt out. GPU(s): $gpuSummary" 'INFO'
         $script:HagsDisableResolvedValue = $false
         return $false
     }
 
-    $disableHags = Show-YesNoDialog `
-        -Title 'Hunter HAGS Policy' `
-        -Message "Disable Hardware-Accelerated GPU Scheduling (HAGS)? Recommended: No for DX12/Vulkan games, Yes for older titles or AMD GPUs with driver issues.`n`nDetected GPU(s):`n$gpuSummary`n`nPreserving HAGS is the safer default on most modern Windows 10/11 gaming stacks. Choose Yes only if you explicitly want Hunter's legacy HAGS disable behavior." `
-        -DefaultToNo $true
-
-    $script:HagsDisableResolvedValue = [bool]$disableHags
-    if ($script:HagsDisableResolvedValue) {
-        Write-Log "HAGS disable was approved by the user for GPU(s): $gpuSummary" 'INFO'
-    } else {
-        Write-Log "HAGS override will not be applied. Hunter will preserve the current Windows/driver HAGS state for GPU(s): $gpuSummary" 'INFO'
-    }
-
+    Write-Log "Hunter will enable HAGS by default for GPU(s): $gpuSummary. Use -DisableHags or HUNTER_DISABLE_HAGS=1 to keep the legacy disable override." 'INFO'
+    $script:HagsDisableResolvedValue = $false
     return [bool]$script:HagsDisableResolvedValue
 }
-

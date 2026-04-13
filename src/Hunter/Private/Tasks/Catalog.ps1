@@ -54,7 +54,7 @@ function Get-HunterTaskCatalog {
         [pscustomobject]@{ Id = 'tweaks-power-tuning'; Phase = '7'; Handler = { Invoke-ExhaustivePowerTuning }; Description = 'Exhaustive power tuning (throttling, fast boot, core parking, device PM)' }
         [pscustomobject]@{ Id = 'tweaks-nic-power-management'; Phase = '7'; Handler = { Invoke-DisableNicPowerManagement }; Description = 'Disable NIC power-management and wake policies on active physical adapters' }
         [pscustomobject]@{ Id = 'tweaks-memory-disk'; Phase = '7'; Handler = { Invoke-ApplyMemoryDiskBehaviorTweaks }; Description = 'Disable prefetch, RAM compression, Storage Sense, and NTFS last access updates' }
-        [pscustomobject]@{ Id = 'tweaks-input-maintenance'; Phase = '7'; Handler = { Invoke-ApplyInputAndMaintenanceTweaks }; Description = 'Disable mouse acceleration, tune timer policy, and defer maintenance tasks to 3am' }
+        [pscustomobject]@{ Id = 'tweaks-input-maintenance'; Phase = '7'; Handler = { Invoke-ApplyInputAndMaintenanceTweaks }; Description = 'Disable mouse acceleration, tune timer policy, and disable scheduled maintenance tasks' }
         [pscustomobject]@{ Id = 'tweaks-timer-resolution'; Phase = '7'; Handler = { Invoke-InstallTimerResolutionService }; Description = 'Install 0.5ms timer resolution service' }
         [pscustomobject]@{ Id = 'tweaks-store-search'; Phase = '7'; Handler = { Invoke-DisableStoreSearch }; Description = 'Disable Microsoft Store search results' }
         [pscustomobject]@{ Id = 'tweaks-ipv6'; Phase = '7'; Handler = { Invoke-DisableIPv6 }; Description = 'Disable IPv6 on all adapters when explicitly requested' }

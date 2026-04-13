@@ -1,3 +1,178 @@
+function Test-ShouldDisableWlanService {
+    try {
+        $wirelessAdapters = @()
+
+        if ($null -ne (Get-Command Get-NetAdapter -ErrorAction SilentlyContinue)) {
+            $wirelessAdapters = @(
+                Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue |
+                    Where-Object {
+                        $adapterName = [string]$_.Name
+                        $adapterDescription = [string]$_.InterfaceDescription
+                        $physicalMedium = ''
+                        if ($null -ne $_.PSObject.Properties['NdisPhysicalMedium']) {
+                            $physicalMedium = [string]$_.NdisPhysicalMedium
+                        }
+
+                        $adapterName -match '(?i)wi-?fi|wireless|wlan|802\.11' -or
+                        $adapterDescription -match '(?i)wi-?fi|wireless|wlan|802\.11' -or
+                        $physicalMedium -match '(?i)wireless|802\.11'
+                    }
+            )
+        }
+
+        if ($wirelessAdapters.Count -eq 0) {
+            $wirelessAdapters = @(
+                Get-CimInstance -ClassName Win32_NetworkAdapter -ErrorAction SilentlyContinue |
+                    Where-Object {
+                        $_.PhysicalAdapter -and (
+                            [string]$_.Name -match '(?i)wi-?fi|wireless|wlan|802\.11' -or
+                            [string]$_.NetConnectionID -match '(?i)wi-?fi|wireless|wlan|802\.11' -or
+                            [string]$_.AdapterType -match '(?i)wireless|802\.11'
+                        )
+                    }
+            )
+        }
+
+        return ($wirelessAdapters.Count -eq 0)
+    } catch {
+        Write-Log "Unable to determine WLAN AutoConfig policy from adapter inventory: $($_.Exception.Message)" 'WARN'
+        return $false
+    }
+}
+
+function Get-HunterDetectedGameLibraryPaths {
+    $candidateRoots = New-Object 'System.Collections.Generic.List[string]'
+    $discoveredPaths = New-Object 'System.Collections.Generic.List[string]'
+
+    foreach ($drive in @(Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+        $rootPath = [string]$drive.Root
+        if ([string]::IsNullOrWhiteSpace($rootPath)) {
+            continue
+        }
+
+        $normalizedRoot = $rootPath.TrimEnd('\')
+        if (-not $candidateRoots.Contains($normalizedRoot)) {
+            [void]$candidateRoots.Add($normalizedRoot)
+        }
+    }
+
+    foreach ($root in @($candidateRoots.ToArray())) {
+        foreach ($relativePath in @(
+                'Program Files (x86)\Steam\steamapps\common',
+                'Program Files\Steam\steamapps\common',
+                'SteamLibrary\steamapps\common',
+                'Steam\steamapps\common',
+                'XboxGames',
+                'Games',
+                'Program Files\Epic Games',
+                'Epic Games',
+                'Program Files\GOG Galaxy\Games',
+                'GOG Games',
+                'EA Games',
+                'Program Files\EA Games',
+                'Ubisoft\Ubisoft Game Launcher\games',
+                'Program Files\Ubisoft\Ubisoft Game Launcher\games',
+                'Program Files\Rockstar Games',
+                'Program Files\Riot Games',
+                'Riot Games'
+            )) {
+            $candidatePath = Join-Path $root $relativePath
+            if (-not (Test-Path $candidatePath)) {
+                continue
+            }
+
+            $normalizedCandidatePath = [System.IO.Path]::GetFullPath($candidatePath).TrimEnd('\')
+            if (-not $discoveredPaths.Contains($normalizedCandidatePath)) {
+                [void]$discoveredPaths.Add($normalizedCandidatePath)
+            }
+        }
+    }
+
+    foreach ($steamRoot in @(
+            $(if (-not [string]::IsNullOrWhiteSpace($env:'ProgramFiles(x86)')) { Join-Path $env:'ProgramFiles(x86)' 'Steam' }),
+            $(if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) { Join-Path $env:ProgramFiles 'Steam' })
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path $_) }) {
+        $libraryFile = Join-Path $steamRoot 'steamapps\libraryfolders.vdf'
+        if (-not (Test-Path $libraryFile)) {
+            continue
+        }
+
+        foreach ($line in @(Get-Content -Path $libraryFile -ErrorAction SilentlyContinue)) {
+            if ([string]$line -match '"path"\s+"([^"]+)"') {
+                $steamLibraryRoot = ($matches[1] -replace '\\\\', '\').Trim()
+                if ([string]::IsNullOrWhiteSpace($steamLibraryRoot)) {
+                    continue
+                }
+
+                $steamCommonPath = Join-Path $steamLibraryRoot 'steamapps\common'
+                if (-not (Test-Path $steamCommonPath)) {
+                    continue
+                }
+
+                $normalizedSteamCommonPath = [System.IO.Path]::GetFullPath($steamCommonPath).TrimEnd('\')
+                if (-not $discoveredPaths.Contains($normalizedSteamCommonPath)) {
+                    [void]$discoveredPaths.Add($normalizedSteamCommonPath)
+                }
+            }
+        }
+    }
+
+    return @($discoveredPaths.ToArray() | Sort-Object -Unique)
+}
+
+function Invoke-ConfigureDefenderGameFolderExclusions {
+    try {
+        if ($null -eq (Get-Command Get-MpPreference -ErrorAction SilentlyContinue) -or
+            $null -eq (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) {
+            Write-Log 'Skipping Defender game-folder exclusions because Defender preference cmdlets are unavailable.' 'INFO'
+            return $true
+        }
+
+        $gameLibraryPaths = @(Get-HunterDetectedGameLibraryPaths)
+        if ($gameLibraryPaths.Count -eq 0) {
+            Write-Log 'No existing game library directories were detected for Defender path exclusions.' 'INFO'
+            return $true
+        }
+
+        $existingExclusions = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+        try {
+            $mpPreference = Get-MpPreference -ErrorAction Stop
+            foreach ($existingPath in @($mpPreference.ExclusionPath)) {
+                if ([string]::IsNullOrWhiteSpace([string]$existingPath)) {
+                    continue
+                }
+
+                try {
+                    [void]$existingExclusions.Add([System.IO.Path]::GetFullPath([string]$existingPath).TrimEnd('\'))
+                } catch {
+                    [void]$existingExclusions.Add(([string]$existingPath).TrimEnd('\'))
+                }
+            }
+        } catch {
+            Write-Log "Could not read existing Defender exclusions: $($_.Exception.Message)" 'WARN'
+        }
+
+        $pathsToAdd = @()
+        foreach ($gameLibraryPath in $gameLibraryPaths) {
+            if (-not $existingExclusions.Contains($gameLibraryPath)) {
+                $pathsToAdd += $gameLibraryPath
+            }
+        }
+
+        if ($pathsToAdd.Count -eq 0) {
+            Write-Log 'Defender path exclusions already cover the detected game library directories.' 'INFO'
+            return $true
+        }
+
+        Add-MpPreference -ExclusionPath $pathsToAdd -ErrorAction Stop
+        Write-Log "Added Defender path exclusions for detected game libraries: $($pathsToAdd -join ', ')" 'INFO'
+        return $true
+    } catch {
+        Write-Log "Failed to configure Defender game-folder exclusions: $($_.Exception.Message)" 'WARN'
+        return $false
+    }
+}
+
 function Invoke-SetDwmFrameInterval {
     try {
         if (-not $script:IsHyperVGuest) {
@@ -57,6 +232,7 @@ function Invoke-SetServiceProfileManual {
             'shpamsvc',
             'ssh-agent',
             'SysMain',
+            'WSearch',
             'TabletInputService',
             'tzautoupdate',
             'UevAgentService',
@@ -238,7 +414,6 @@ function Invoke-SetServiceProfileManual {
             'TrkWks',
             'UserManager',
             'Wcmsvc',
-            'WlanSvc',
             'Winmgmt'
         )
 
@@ -251,7 +426,16 @@ function Invoke-SetServiceProfileManual {
             Write-Log 'Printer detected; Print Spooler will remain automatic.' 'INFO'
         }
 
-        $autoDelayedServices = @('BITS', 'WSearch')
+        $disableWlanService = Test-ShouldDisableWlanService
+        if ($disableWlanService) {
+            $disabledServices += 'WlanSvc'
+            Write-Log 'No wireless adapters detected; WLAN AutoConfig will be disabled.' 'INFO'
+        } else {
+            $automaticServices += 'WlanSvc'
+            Write-Log 'Wireless adapter detected; WLAN AutoConfig will remain automatic.' 'INFO'
+        }
+
+        $autoDelayedServices = @('BITS')
         $alreadyConfigured = $true
 
         foreach ($svc in $disabledServices) {
@@ -398,6 +582,8 @@ function Invoke-SetServiceProfileManual {
             Stop-ServiceIfPresent -Name $svc
         }
 
+        Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\Shell\' -TaskName 'IndexerAutomaticMaintenance' -DisplayName 'Windows Search index maintenance' | Out-Null
+
         Write-Log -Message "Hunter aggressive service profile applied ($($scProcs.Count) concurrent operations)." -Level 'INFO'
         return $true
     }
@@ -449,8 +635,8 @@ function Invoke-ApplyGraphicsSchedulingTweaks {
             Set-RegistryValue -Path $graphicsDriversPath -Name 'HwSchMode' -Value 1 -Type DWord | Out-Null
             Write-Log 'HAGS override applied: HwSchMode=1 (disabled).' 'INFO'
         } else {
-            Remove-RegistryValueIfPresent -Path $graphicsDriversPath -Name 'HwSchMode'
-            Write-Log 'HAGS override was not applied. Existing Windows/driver scheduling state was preserved.' 'INFO'
+            Set-RegistryValue -Path $graphicsDriversPath -Name 'HwSchMode' -Value 2 -Type DWord | Out-Null
+            Write-Log 'HAGS enabled by default: HwSchMode=2.' 'INFO'
         }
         Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrLevel' -Value 0 -Type DWord
         Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrDelay' -Value 10 -Type DWord
@@ -464,10 +650,13 @@ function Invoke-ApplyGraphicsSchedulingTweaks {
 
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR' -Name 'AllowGameDVR' -Value 0 -Type DWord
         Set-DwordBatchForAllUsers -Settings @(
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\GameDVR'; Name = 'AppCaptureEnabled'; Value = 0 },
+            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\GameDVR'; Name = 'HistoricalCaptureEnabled'; Value = 0 },
             @{ SubPath = 'Software\Microsoft\GameBar'; Name = 'AutoGameModeEnabled'; Value = 0 },
             @{ SubPath = 'Software\Microsoft\GameBar'; Name = 'ShowStartupPanel'; Value = 0 },
             @{ SubPath = 'Software\Microsoft\GameBar'; Name = 'UseNexusForGameBarEnabled'; Value = 0 },
             @{ SubPath = 'System\GameConfigStore'; Name = 'GameDVR_Enabled'; Value = 0 },
+            @{ SubPath = 'System\GameConfigStore'; Name = 'GameDVR_DXGIHonorFSEWindowsCompatible'; Value = 1 },
             @{ SubPath = 'System\GameConfigStore'; Name = 'GameDVR_FSEBehaviorMode'; Value = 2 },
             @{ SubPath = 'System\GameConfigStore'; Name = 'GameDVR_HonorUserFSEBehaviorMode'; Value = 1 }
         )
@@ -629,25 +818,20 @@ function Invoke-ApplyInputAndMaintenanceTweaks {
     try {
         Write-Log 'Applying input latency and maintenance tweaks...' 'INFO'
         $maintenancePath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'
-        $maintenanceStartTime = '03:00'
 
         Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseSpeed' -Value '0'
         Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseThreshold1' -Value '0'
         Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseThreshold2' -Value '0'
         Set-StringForAllUsers -SubPath 'Control Panel\Accessibility\Keyboard Response' -Name 'Flags' -Value '0'
 
-        Set-RegistryValue -Path $maintenancePath -Name 'MaintenanceDisabled' -Value 0 -Type DWord
+        Set-RegistryValue -Path $maintenancePath -Name 'MaintenanceDisabled' -Value 1 -Type DWord
         Set-RegistryValue -Path $maintenancePath -Name 'MaintenanceStartTime' -Value 10800 -Type DWord
-        Set-RegistryValue -Path $maintenancePath -Name 'MaintenanceMaxCpuPercent' -Value 20 -Type DWord
+        Set-RegistryValue -Path $maintenancePath -Name 'MaintenanceMaxCpuPercent' -Value 10 -Type DWord
 
-        Enable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Regular Maintenance' -DisplayName 'Regular Maintenance' | Out-Null
-        Enable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Idle Maintenance' -DisplayName 'Idle Maintenance' | Out-Null
-        Enable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Maintenance Configurator' -DisplayName 'Maintenance Configurator' | Out-Null
-        Enable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\Defrag\' -TaskName 'ScheduledDefrag' -DisplayName 'Scheduled Defrag' | Out-Null
-
-        Set-ScheduledTaskStartTimeIfPresent -TaskFullName '\Microsoft\Windows\TaskScheduler\Regular Maintenance' -StartTime $maintenanceStartTime -DisplayName 'Regular Maintenance' | Out-Null
-        Set-ScheduledTaskStartTimeIfPresent -TaskFullName '\Microsoft\Windows\TaskScheduler\Idle Maintenance' -StartTime $maintenanceStartTime -DisplayName 'Idle Maintenance' | Out-Null
-        Set-ScheduledTaskStartTimeIfPresent -TaskFullName '\Microsoft\Windows\Defrag\ScheduledDefrag' -StartTime $maintenanceStartTime -DisplayName 'Scheduled Defrag' | Out-Null
+        Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Regular Maintenance' -DisplayName 'Regular Maintenance' | Out-Null
+        Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Idle Maintenance' -DisplayName 'Idle Maintenance' | Out-Null
+        Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Maintenance Configurator' -DisplayName 'Maintenance Configurator' | Out-Null
+        Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\Defrag\' -TaskName 'ScheduledDefrag' -DisplayName 'Scheduled Defrag' | Out-Null
 
         Invoke-BCDEditBestEffort -ArgumentList @('/timeout', '0') -Description 'Boot manager timeout set to 0 seconds.' | Out-Null
         Invoke-BCDEditBestEffort -ArgumentList @('/deletevalue', 'useplatformclock') -Description 'HPET platform clock override removed.' | Out-Null
@@ -823,6 +1007,20 @@ function Invoke-ExhaustivePowerTuning {
                 -Value $processorPowerSetting.Value `
                 -Mode $processorPowerSetting.Mode `
                 -Description $processorPowerSetting.Description | Out-Null
+        }
+
+        foreach ($energyPreferenceSetting in @(
+                @{ Mode = 'AC'; Setting = 'PERFEPP'; Value = '0'; Description = 'processor energy performance preference policy' },
+                @{ Mode = 'DC'; Setting = 'PERFEPP'; Value = '0'; Description = 'processor energy performance preference policy' },
+                @{ Mode = 'AC'; Setting = 'PERFEPP1'; Value = '0'; Description = 'heterogeneous processor energy performance preference policy' },
+                @{ Mode = 'DC'; Setting = 'PERFEPP1'; Value = '0'; Description = 'heterogeneous processor energy performance preference policy' }
+            )) {
+            & $invokePowerSettingBestEffort `
+                -SubGroup 'SUB_PROCESSOR' `
+                -Setting $energyPreferenceSetting.Setting `
+                -Value $energyPreferenceSetting.Value `
+                -Mode $energyPreferenceSetting.Mode `
+                -Description $energyPreferenceSetting.Description | Out-Null
         }
 
         $buildContext = Get-WindowsBuildContext
@@ -1045,6 +1243,8 @@ function Invoke-ExhaustivePowerTuning {
             Remove-Item -Path $regFile -Force -ErrorAction SilentlyContinue
         }
         Write-Log "Device power management imported via .reg file ($nicCount NIC(s), $deviceEntryCount device entries)." 'INFO'
+
+        Invoke-ConfigureDefenderGameFolderExclusions | Out-Null
 
         Write-Log 'Exhaustive power tuning complete.' 'SUCCESS'
         return $true

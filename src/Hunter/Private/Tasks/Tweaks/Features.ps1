@@ -85,6 +85,12 @@ function Invoke-DisableBackgroundApps {
 
         # Pre-check
         $bgAppsPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications'
+        $teamsStartupTaskDisabled = Test-ScheduledTaskDisabledOrMissing -TaskPath '\Microsoft\Teams\' -TaskName 'TeamsStartupTask'
+        $teamsAutoStartDisabled = (
+            $null -eq (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'com.squirrel.Teams.Teams' -ErrorAction SilentlyContinue) -and
+            $null -eq (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Teams' -ErrorAction SilentlyContinue) -and
+            $null -eq (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'Teams' -ErrorAction SilentlyContinue)
+        )
         if ((Test-RegistryValue -Path $bgAppsPath -Name 'GlobalUserDisabled' -ExpectedValue 1) -and
             (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\OneDrive' -Name 'DisableFileSyncNGSC' -ExpectedValue 1) -and
             (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' -Name 'AllowWidgets' -ExpectedValue 0) -and
@@ -92,7 +98,9 @@ function Invoke-DisableBackgroundApps {
             (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -Name 'BackgroundModeEnabled' -ExpectedValue 0) -and
             (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -Name 'StartupBoostEnabled' -ExpectedValue 0) -and
             (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\MicrosoftEdge\Main' -Name 'AllowPrelaunch' -ExpectedValue 0) -and
-            (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\MicrosoftEdge\TabPreloader' -Name 'AllowTabPreloading' -ExpectedValue 0)) {
+            (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\MicrosoftEdge\TabPreloader' -Name 'AllowTabPreloading' -ExpectedValue 0) -and
+            $teamsAutoStartDisabled -and
+            $teamsStartupTaskDisabled) {
             Write-Log -Message "Background apps already disabled. Skipping." -Level 'INFO'
             return $true
         }
@@ -105,6 +113,10 @@ function Invoke-DisableBackgroundApps {
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -Name 'StartupBoostEnabled' -Value 0 -Type DWord
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\MicrosoftEdge\Main' -Name 'AllowPrelaunch' -Value 0 -Type DWord
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\MicrosoftEdge\TabPreloader' -Name 'AllowTabPreloading' -Value 0 -Type DWord
+        Remove-RegistryValueIfPresent -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'com.squirrel.Teams.Teams'
+        Remove-RegistryValueIfPresent -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Teams'
+        Remove-RegistryValueIfPresent -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'Teams'
+        Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Teams\' -TaskName 'TeamsStartupTask' -DisplayName 'Teams startup task' | Out-Null
 
         Write-Log -Message "Background apps and adjacent background activity disabled." -Level 'INFO'
         return $true
@@ -183,4 +195,3 @@ function Invoke-DisableFullscreenOptimizations {
         return $false
     }
 }
-
