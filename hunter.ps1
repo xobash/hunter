@@ -280,6 +280,7 @@ function Invoke-Main {
         Write-Log "Initializing progress tracking..." 'INFO'
         Update-ProgressState -Tasks $tasks
         Start-ProgressWindow
+        Sync-HunterContextFromScriptState -Context $context
 
         Write-Log "Registering resume recovery task..." 'INFO'
         Register-ResumeTask

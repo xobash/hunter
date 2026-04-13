@@ -104,6 +104,11 @@ Describe 'Wrapper compatibility surface' {
         $sourceText | Should -Match 'Invoke-Main -Mode \$scriptMode -Strict:\$scriptStrict -AutomationSafe:\$scriptAutomationSafe -SkipTask \$scriptSkipTasks -CustomAppsListPath \$scriptCustomAppsListPath -DisableIPv6:\$scriptDisableIPv6 -DisableTeredo:\$scriptDisableTeredo -DisableHags:\$scriptDisableHags'
     }
 
+    It 'syncs context after starting the progress window' {
+        $sourceText | Should -Match 'Start-ProgressWindow'
+        $sourceText | Should -Match 'Sync-HunterContextFromScriptState -Context \$context'
+    }
+
     It 'keeps remote bootstrap support for irm pipe iex execution' {
         $sourceText | Should -Match "\$script:HunterRemoteRevision = '[0-9a-f]{40}'"
         $sourceText | Should -Match "\$script:HunterRemoteRoot = 'https://raw\.githubusercontent\.com/xobash/hunter/\{0\}' -f \$script:HunterRemoteRevision"
