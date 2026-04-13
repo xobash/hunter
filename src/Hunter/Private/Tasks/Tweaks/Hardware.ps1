@@ -43,6 +43,7 @@ function Test-ShouldDisableWlanService {
 function Get-HunterDetectedGameLibraryPaths {
     $candidateRoots = New-Object 'System.Collections.Generic.List[string]'
     $discoveredPaths = New-Object 'System.Collections.Generic.List[string]'
+    $programFilesX86Root = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
 
     foreach ($drive in @(Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
         $rootPath = [string]$drive.Root
@@ -89,7 +90,7 @@ function Get-HunterDetectedGameLibraryPaths {
     }
 
     foreach ($steamRoot in @(
-            $(if (-not [string]::IsNullOrWhiteSpace($env:'ProgramFiles(x86)')) { Join-Path $env:'ProgramFiles(x86)' 'Steam' }),
+            $(if (-not [string]::IsNullOrWhiteSpace($programFilesX86Root)) { Join-Path $programFilesX86Root 'Steam' }),
             $(if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) { Join-Path $env:ProgramFiles 'Steam' })
         ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path $_) }) {
         $libraryFile = Join-Path $steamRoot 'steamapps\libraryfolders.vdf'
