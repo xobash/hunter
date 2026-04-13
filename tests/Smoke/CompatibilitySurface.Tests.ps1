@@ -110,6 +110,7 @@ Describe 'Wrapper compatibility surface' {
         $sourceText | Should -Match "Join-Path \(\[System\.IO\.Path\]::GetTempPath\(\)\) 'HunterBootstrap'"
         $sourceText | Should -Match 'Invoke-WebRequest `\s*-Uri \$bootstrapLoaderUri'
         $sourceText | Should -Match 'Initialize-HunterPrivateSourceTree'
-        $sourceText | Should -Match 'Import-HunterPrivateScripts -SourceRoot \$script:HunterSourceRoot'
+        $sourceText | Should -Match 'foreach \(\$privateScript in @\(Get-HunterPrivateScriptManifest\)\)'
+        $sourceText | Should -Match '\. \(Join-Path \$script:HunterSourceRoot \(\[string\]\$privateScript\.RelativePath\)\)'
     }
 }

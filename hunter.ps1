@@ -16,7 +16,7 @@ try {
 $script:HunterSourceRoot = $null
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/main'
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = '3bb3bc36cb819edca04bad81cd13ebb6531adefdec032209f2341d65168978ed'
+$script:BootstrapLoaderSha256 = 'a63a84cd3c321612e7aef001be8a67a7b4902b158fff1ec5c8ec22c8ec560480'
 
 $bootstrapLoaderPath = $null
 $canUseLocalHunterPrivateLayers = $false
@@ -65,7 +65,9 @@ if ([string]::IsNullOrWhiteSpace($bootstrapLoaderPath)) {
 Initialize-HunterPrivateSourceTree `
     -SourceRoot $script:HunterSourceRoot `
     -RemoteRoot $(if ($canUseLocalHunterPrivateLayers) { '' } else { $script:HunterRemoteRoot })
-Import-HunterPrivateScripts -SourceRoot $script:HunterSourceRoot
+foreach ($privateScript in @(Get-HunterPrivateScriptManifest)) {
+    . (Join-Path $script:HunterSourceRoot ([string]$privateScript.RelativePath))
+}
 
 Remove-Variable -Name bootstrapLoaderPath -ErrorAction SilentlyContinue
 Remove-Variable -Name bootstrapLoaderUri -ErrorAction SilentlyContinue

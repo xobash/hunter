@@ -167,32 +167,3 @@ function Initialize-HunterPrivateSourceTree {
         Save-HunterBootstrapAsset -SourceRoot $SourceRoot -RelativePath $asset.RelativePath -RemoteRoot $RemoteRoot -ExpectedSha256 ([string]$asset.Sha256)
     }
 }
-
-function Import-HunterPrivateScripts {
-    param([Parameter(Mandatory)][string]$SourceRoot)
-
-    $manifest = @(Get-HunterPrivateScriptManifest)
-    $orderMap = @{}
-    foreach ($entry in $manifest) {
-        $orderMap[[string]$entry.RelativePath] = [int]$entry.Order
-    }
-
-    $privateRoot = Join-Path $SourceRoot 'src\Hunter\Private'
-    Get-ChildItem -Path $privateRoot -Recurse -Filter '*.ps1' |
-        Where-Object {
-            (Get-HunterPrivateRelativePath -SourceRoot $SourceRoot -FullName $_.FullName) -ne 'src\Hunter\Private\Bootstrap\Loader.ps1'
-        } |
-        Sort-Object `
-            @{ Expression = {
-                    $relativePath = Get-HunterPrivateRelativePath -SourceRoot $SourceRoot -FullName $_.FullName
-                    if ($orderMap.ContainsKey($relativePath)) {
-                        return $orderMap[$relativePath]
-                    }
-
-                    return [int]::MaxValue
-                } },
-            @{ Expression = { Get-HunterPrivateRelativePath -SourceRoot $SourceRoot -FullName $_.FullName } } |
-        ForEach-Object {
-            . $_.FullName
-        }
-}
