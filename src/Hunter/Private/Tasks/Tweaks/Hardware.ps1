@@ -595,34 +595,28 @@ function Invoke-SetServiceProfileManual {
 
 function Invoke-DisableVirtualizationSecurityOverhead {
     try {
-        if (-not $script:IsHyperVGuest) {
-            Write-Log 'Skipping guest-only virtualization security tuning on non-Hyper-V hardware.' 'INFO'
-            return (New-TaskSkipResult -Reason 'Guest-only virtualization security tuning only applies to Hyper-V virtual machines')
-        }
-
-        Write-Log 'Hyper-V guest detected; disabling guest-only virtualization security overhead...' 'INFO'
+        Write-Log 'Disabling virtualization security overhead and legacy optional features...' 'INFO'
 
         $deviceGuardPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
-        $deviceGuardPolicyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeviceGuard'
         $hvciPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
-        $lsaPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
 
         Set-RegistryValue -Path $deviceGuardPath -Name 'EnableVirtualizationBasedSecurity' -Value 0 -Type DWord
         Set-RegistryValue -Path $deviceGuardPath -Name 'RequirePlatformSecurityFeatures' -Value 0 -Type DWord
-        Set-RegistryValue -Path $deviceGuardPolicyPath -Name 'EnableVirtualizationBasedSecurity' -Value 0 -Type DWord
-        Set-RegistryValue -Path $deviceGuardPolicyPath -Name 'LsaCfgFlags' -Value 0 -Type DWord
         Set-RegistryValue -Path $hvciPath -Name 'Enabled' -Value 0 -Type DWord
         Set-RegistryValue -Path $hvciPath -Name 'Locked' -Value 0 -Type DWord
         Set-RegistryValue -Path $hvciPath -Name 'WasEnabledBy' -Value 0 -Type DWord
-        Set-RegistryValue -Path $lsaPath -Name 'LsaCfgFlags' -Value 0 -Type DWord
 
-        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Virtual Machine Platform' -CandidateNames @('VirtualMachinePlatform') | Out-Null
-        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Windows Hypervisor Platform' -CandidateNames @('HypervisorPlatform') | Out-Null
+        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Virtual Machine Platform' -CandidateNames @('VirtualMachinePlatform') -SkipOnHyperVGuest | Out-Null
+        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Windows Hypervisor Platform' -CandidateNames @('HypervisorPlatform') -SkipOnHyperVGuest | Out-Null
+        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Hyper-V' -CandidateNames @('Microsoft-Hyper-V-All', 'Microsoft-Hyper-V') -SkipOnHyperVGuest | Out-Null
+        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Windows Sandbox' -CandidateNames @('Containers-DisposableClientVM') -SkipOnHyperVGuest | Out-Null
         Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Application Guard' -CandidateNames @('Windows-Defender-ApplicationGuard') | Out-Null
-        Invoke-BCDEditBestEffort -ArgumentList @('/set', '{0cb3b571-2f2e-4343-a879-d86a476d7215}', 'loadoptions', 'DISABLE-LSA-ISO,DISABLE-VBS') -Description 'Credential Guard and VBS boot override disabled.' | Out-Null
-        Invoke-BCDEditBestEffort -ArgumentList @('/set', 'vsmlaunchtype', 'off') -Description 'Virtual Secure Mode launch disabled.' | Out-Null
+        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Windows Subsystem for Linux' -CandidateNames @('Microsoft-Windows-Subsystem-Linux') | Out-Null
+        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'SMB 1.0/CIFS File Sharing Support' -CandidateNames @('SMB1Protocol') | Out-Null
+        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'SMB 1.0/CIFS Client' -CandidateNames @('SMB1Protocol-Client') | Out-Null
+        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'SMB 1.0/CIFS Server' -CandidateNames @('SMB1Protocol-Server') | Out-Null
 
-        Write-Log 'Guest-only virtualization security overhead disabled.' 'SUCCESS'
+        Write-Log 'Virtualization security overhead and legacy optional features disabled.' 'SUCCESS'
         return $true
     } catch {
         Write-Log "Error disabling virtualization security overhead: $_" 'ERROR'
