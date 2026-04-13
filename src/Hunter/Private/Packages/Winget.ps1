@@ -147,7 +147,7 @@ function Invoke-EnsureWingetMinVersion {
         }
 
         Write-Log "winget refresh completed but the current version is still '$($retestedWingetStatus.Version)', which does not satisfy Hunter's minimum version requirement of ${minimumWingetVersion}." 'WARN'
-        return (New-TaskWarningResult -Reason 'winget is still below Hunter’s minimum supported version after refresh')
+        return (New-TaskWarningResult -Reason "winget is still below Hunter's minimum supported version after refresh")
     } catch {
         Write-Log "Failed to validate Hunter's minimum winget version: $($_.Exception.Message)" 'WARN'
         return (New-TaskWarningResult -Reason 'winget minimum-version validation failed unexpectedly')
