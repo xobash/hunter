@@ -51,9 +51,9 @@ function Get-HunterPrivateAssetManifest {
         [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Tasks\Tweaks\Specialized.ps1'; Sha256 = 'a76533d3b13bc2e6c09fddc0c04f36f8486b5aaec1eee1aab262982e976925e5'; Order = 490; Kind = 'Script' }
         [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Tasks\Tweaks\Privacy.ps1'; Sha256 = 'd0b2d59fa540967a24551a925feac0e299deba96470d5dd262d2b4e836768c13'; Order = 500; Kind = 'Script' }
         [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Tasks\Tweaks\Features.ps1'; Sha256 = 'd7dda6dc9710d94568e04c94661aaa29db37c37a0d1137dd1bb6d6a5af247a53'; Order = 510; Kind = 'Script' }
-        [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Tasks\Tweaks\Hardware.ps1'; Sha256 = '51ba71d9f581669af6ec7c4e0b6a7d15767f2adff349ec19cccf2d7975dfcc47'; Order = 520; Kind = 'Script' }
+        [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Tasks\Tweaks\Hardware.ps1'; Sha256 = '7d39bee8f0a0f4805db2314eaa144925661e94beefc81f2d3320755ccf9c172e'; Order = 520; Kind = 'Script' }
         [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Tasks\Cleanup.ps1'; Sha256 = 'b8409a31cc7646eabfecb2d9522d3c1a02b963d1127dd356feb7161c0a488e86'; Order = 530; Kind = 'Script' }
-        [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Tasks\Catalog.ps1'; Sha256 = 'ca30274f6d7168f8315e252fefa2d3560e6174c34aee27fdcdb684faa1690c8a'; Order = 540; Kind = 'Script' }
+        [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Tasks\Catalog.ps1'; Sha256 = '151f3b2daff5aed96537d647f86c0df215295c60cc2d23a06c14723f201ed734'; Order = 540; Kind = 'Script' }
         [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Execution\Engine.ps1'; Sha256 = '692d4a9140e60e4e4407de7e0a89b6fa2b9013583ed0e90b53fbfc8834513a44'; Order = 550; Kind = 'Script' }
         [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Execution\Resume.ps1'; Sha256 = 'b8ed80a70269875ca2cf7b38b066975e204d393bd86fbe9741b7aeedd61a5c74'; Order = 560; Kind = 'Script' }
         [pscustomobject]@{ RelativePath = 'src\Hunter\Config\Apps.json'; Sha256 = '4ae47cb48a5d927245154ca92a4c9898aa076c3b244535cadf68668d92112cfc'; Order = 9000; Kind = 'Data' }

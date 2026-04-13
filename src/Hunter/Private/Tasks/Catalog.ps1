@@ -37,7 +37,7 @@ function Get-HunterTaskCatalog {
         [pscustomobject]@{ Id = 'apps-delivery-opt'; Phase = '6'; Handler = { Invoke-DisableDeliveryOptimization }; Description = 'Disable Delivery Optimization' }
         [pscustomobject]@{ Id = 'apps-activity-history'; Phase = '6'; Handler = { Invoke-DisableActivityHistory }; Description = 'Disable activity history plus clipboard/cloud clipboard tracking' }
         [pscustomobject]@{ Id = 'tweaks-services'; Phase = '7'; Handler = { Invoke-SetServiceProfileManual }; Description = 'Apply Hunter aggressive service startup profile' }
-        [pscustomobject]@{ Id = 'tweaks-virtualization-security'; Phase = '7'; Handler = { Invoke-DisableVirtualizationSecurityOverhead }; Description = 'Disable HVCI, Hyper-V side features, Sandbox, and Application Guard' }
+        [pscustomobject]@{ Id = 'tweaks-virtualization-security'; Phase = '7'; Handler = { Invoke-DisableVirtualizationSecurityOverhead }; Description = 'On Hyper-V guests, disable HVCI, VMP, WHP, Application Guard, and Credential Guard' }
         [pscustomobject]@{ Id = 'tweaks-telemetry'; Phase = '7'; Handler = { Invoke-DisableTelemetry }; Description = 'Disable telemetry plus Hunter privacy/web-content policies' }
         [pscustomobject]@{ Id = 'tweaks-location'; Phase = '7'; Handler = { Invoke-DisableLocationTracking }; Description = 'Disable location tracking' }
         [pscustomobject]@{ Id = 'tweaks-hibernation'; Phase = '7'; Handler = { Invoke-DisableHibernation }; Description = 'Disable hibernation mode' }

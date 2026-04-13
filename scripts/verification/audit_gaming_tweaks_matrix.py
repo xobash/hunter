@@ -47,14 +47,12 @@ CHECKS: tuple[Check, ...] = (
     Check('Tier 1', 'Disable Windows Hypervisor Platform', (
         EvidenceNeedle('src/Hunter/Private/Tasks/Tweaks/Hardware.ps1', "DisplayName 'Windows Hypervisor Platform'"),
     )),
-    Check('Tier 1', 'Disable Hyper-V', (
-        EvidenceNeedle('src/Hunter/Private/Tasks/Tweaks/Hardware.ps1', "DisplayName 'Hyper-V'"),
-    )),
-    Check('Tier 1', 'Disable Windows Sandbox', (
-        EvidenceNeedle('src/Hunter/Private/Tasks/Tweaks/Hardware.ps1', "DisplayName 'Windows Sandbox'"),
-    )),
     Check('Tier 1', 'Disable Application Guard', (
         EvidenceNeedle('src/Hunter/Private/Tasks/Tweaks/Hardware.ps1', "DisplayName 'Application Guard'"),
+    )),
+    Check('Tier 1', 'Disable Credential Guard, if present', (
+        EvidenceNeedle('src/Hunter/Private/Tasks/Tweaks/Hardware.ps1', "'LsaCfgFlags' -Value 0"),
+        EvidenceNeedle('src/Hunter/Private/Tasks/Tweaks/Hardware.ps1', "ArgumentList @('/set', 'vsmlaunchtype', 'off')"),
     )),
 
     Check('Tier 2', 'Disable SysMain (Superfetch)', (
