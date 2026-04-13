@@ -14,8 +14,8 @@ try {
 # ==============================================================================
 
 $script:HunterSourceRoot = $null
-$script:HunterReleaseChannel = 'preview'
-$script:HunterReleaseVersion = '2.0.1-preview.1'
+$script:HunterReleaseChannel = 'stable'
+$script:HunterReleaseVersion = '2.0.1'
 $script:HunterBootstrapRevision = '97840ab3f8d90fc285ab04238beb03c17797e02b'
 $script:HunterRemoteRevision = $script:HunterBootstrapRevision
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
