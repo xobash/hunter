@@ -23,7 +23,7 @@ function Start-ProgressWindow {
         $syncRef = $script:UiSync   # local ref for the scriptblock closure
 
         # ---------------------------------------------------------------
-        # STA Runspace — owns the WPF window and its dispatcher loop
+        # STA Runspace - owns the WPF window and its dispatcher loop
         # ---------------------------------------------------------------
         $script:UiRunspace = [runspacefactory]::CreateRunspace()
         $script:UiRunspace.ApartmentState = [System.Threading.ApartmentState]::STA
@@ -80,7 +80,7 @@ function Start-ProgressWindow {
             }
 
             # ---------------------------------------------------------------
-            # XAML — liquid glass overlay
+            # XAML - liquid glass overlay
             # ---------------------------------------------------------------
             [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -340,7 +340,7 @@ function Start-ProgressWindow {
             }
 
             # ---------------------------------------------------------------
-            # Refresh function — called via dispatcher on this STA thread
+            # Refresh function - called via dispatcher on this STA thread
             # ---------------------------------------------------------------
             $refreshAction = {
                 try {
@@ -600,7 +600,7 @@ function Start-ProgressWindow {
             }
 
             # ---------------------------------------------------------------
-            # DispatcherTimer — polls synchronized hashtable for updates
+            # DispatcherTimer - polls synchronized hashtable for updates
             # ---------------------------------------------------------------
             $timer = [System.Windows.Threading.DispatcherTimer]::new()
             $timer.Interval = [TimeSpan]::FromMilliseconds(250)
@@ -737,7 +737,7 @@ function Update-ProgressUI {
     .SYNOPSIS
     Pushes task state to the UI runspace via the synchronized hashtable.
     The UI thread's DispatcherTimer picks up the data and renders it asynchronously.
-    This call is non-blocking — the main thread never waits for the UI to render.
+    This call is non-blocking - the main thread never waits for the UI to render.
     #>
     param([object[]]$Tasks)
 
@@ -759,7 +759,7 @@ function Update-ProgressUI {
             Add-RunInfrastructureIssue -Message "Progress overlay refresh failed; task execution continued without a reliable live UI: $($script:UiSync.Error)" -Level 'WARN'
         }
 
-        # Serialize task state to JSON — the UI thread deserializes independently
+        # Serialize task state to JSON - the UI thread deserializes independently
         $snapshot = [System.Collections.Generic.List[object]]::new()
         foreach ($task in @($Tasks)) {
             if ($null -eq $task) { continue }
