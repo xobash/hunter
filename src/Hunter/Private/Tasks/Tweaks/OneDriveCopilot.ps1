@@ -270,7 +270,9 @@ function Invoke-RemoveCopilot {
 
         Write-Log -Message "Disabling Copilot via registry..." -Level 'INFO'
         foreach ($setting in $copilotRegistrySettings) {
-            if (-not (Test-WindowsBuildInRange -MinBuild $setting.MinBuild -MaxBuild $setting.MaxBuild)) {
+            $minBuild = if ($setting.ContainsKey('MinBuild')) { $setting['MinBuild'] } else { $null }
+            $maxBuild = if ($setting.ContainsKey('MaxBuild')) { $setting['MaxBuild'] } else { $null }
+            if (-not (Test-WindowsBuildInRange -MinBuild $minBuild -MaxBuild $maxBuild)) {
                 Write-Log "Skipping Copilot registry setting $($setting.Path)\$($setting.Name) because it does not apply to build $($buildContext.CurrentBuild)." 'INFO'
                 continue
             }
