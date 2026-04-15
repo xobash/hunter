@@ -41,7 +41,9 @@ function Get-WallpaperAssetPath {
     }
 
     $wallpaperRoot = Join-Path $script:HunterRoot 'Assets'
-    Ensure-Directory $wallpaperRoot
+    if (-not (Ensure-Directory -Path $wallpaperRoot)) {
+        throw "Failed to ensure wallpaper directory exists: $wallpaperRoot"
+    }
 
     $wallpaperExtension = [System.IO.Path]::GetExtension(([uri]$WallpaperUrl).AbsolutePath)
     if ([string]::IsNullOrWhiteSpace($wallpaperExtension)) {
