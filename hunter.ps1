@@ -15,12 +15,12 @@ try {
 
 $script:HunterSourceRoot = $null
 $script:HunterReleaseChannel = 'preview'
-$script:HunterReleaseVersion = '2.0.1-preview.2'
-$script:HunterBootstrapRevision = '4d43d812d927f6211c9255aa67b25d5be50f7b9e'
+$script:HunterReleaseVersion = '2.0.3-preview.1'
+$script:HunterBootstrapRevision = 'aaf08429d58185cf1d34ddcbecc947c1fa7f2e89'
 $script:HunterRemoteRevision = $script:HunterBootstrapRevision
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = '933bb16ac7f1e32e5a970d07b31617b852e9598f7ed6b91090d16f5a86136b9e'
+$script:BootstrapLoaderSha256 = 'f2fe977177a4298459f29dba6f1b96891f2af084c8dfb550f31e4d8690c08ed4'
 
 $bootstrapLoaderPath = $null
 $canUseLocalHunterPrivateLayers = $false
