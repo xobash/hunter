@@ -76,7 +76,7 @@ function Invoke-DisableStartRecommendations {
             @{ SubPath = $policyPath; Name = 'HideRecommendedSection'; Value = 1 }
         )
 
-        # Verify every HKLM write — fail the task if any did not persist
+        # Verify every HKLM write - fail the task if any did not persist
         $verifyFailed = $false
         $verifyPairs = @(
             @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer'; Name = 'HideRecommendedSection'; Expected = 1 },
@@ -339,7 +339,7 @@ function Invoke-DisableStoreSearch {
                 Write-Log "Microsoft Store search database locked via ACL." 'SUCCESS'
             }
         } else {
-            Write-Log "Store database not found at $storeDbPath — Store may not be installed. Skipping." 'INFO'
+            Write-Log "Store database not found at $storeDbPath - Store may not be installed. Skipping." 'INFO'
         }
 
         return $true

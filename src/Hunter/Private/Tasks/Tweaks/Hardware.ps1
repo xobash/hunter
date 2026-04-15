@@ -218,18 +218,18 @@ function Invoke-SetServiceProfileManual {
             'BthAvctpSvc',
             'DiagTrack',
             'DialogBlockingService',
-            'DsSvc',                     # Data Sharing Service — inter-app data broker
-            'DusmSvc',                   # Diagnostic Usage and Telemetry — usage data collection
+            'DsSvc',                     # Data Sharing Service - inter-app data broker
+            'DusmSvc',                   # Diagnostic Usage and Telemetry - usage data collection
             'GamingServices',            # Xbox / Game Pass integration (Xbox already nuked)
             'GamingServicesNet',         # Xbox network component (Xbox already nuked)
             'lfsvc',
             'MapsBroker',
-            'midisrv',                   # MIDI Service — no MIDI controllers on gaming rigs
+            'midisrv',                   # MIDI Service - no MIDI controllers on gaming rigs
             'NetTcpPortSharing',
             'RemoteAccess',
             'RemoteRegistry',
             'RetailDemo',
-            'SgrmBroker',               # System Guard Runtime Monitor — VBS component (HVCI already disabled)
+            'SgrmBroker',               # System Guard Runtime Monitor - VBS component (HVCI already disabled)
             'shpamsvc',
             'ssh-agent',
             'SysMain',
@@ -237,10 +237,10 @@ function Invoke-SetServiceProfileManual {
             'TabletInputService',
             'tzautoupdate',
             'UevAgentService',
-            'WbioSrvc',                 # Windows Biometric Service — not needed on gaming PCs
+            'WbioSrvc',                 # Windows Biometric Service - not needed on gaming PCs
             'WerSvc',
-            'WpcMonSvc',                # Parental Controls — not needed
-            'wisvc',                     # Windows Insider Service — not needed
+            'WpcMonSvc',                # Parental Controls - not needed
+            'wisvc',                     # Windows Insider Service - not needed
             'XblAuthManager',
             'xbgm',
             'XblGameSave',
@@ -1735,7 +1735,7 @@ function Invoke-ApplyTcpOptimizerTutorialProfile {
                 'To restore those networking changes, review the generated Hunter restore script first, then reset any remaining adapter-level networking changes with your preferred NIC defaults or by using the TCP Optimizer defaults/reset workflow.'
             )
 
-        # Cache active adapters once — avoids 5 redundant WMI/CIM round trips
+        # Cache active adapters once - avoids 5 redundant WMI/CIM round trips
         # Ref: https://learn.microsoft.com/en-us/powershell/scripting/dev-cross-plat/performance/script-authoring-considerations
         $activeAdapters = @(Get-NetAdapter | Where-Object { $_.Status -eq 'Up' })
 
