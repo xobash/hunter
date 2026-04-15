@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 try {
 
 # Force TLS 1.2+ for all .NET HTTP requests. Windows 10 ships with .NET 4.x
-# which defaults to TLS 1.0/1.1 — rejected by most CDNs and GitHub.
+# which defaults to TLS 1.0/1.1 - rejected by most CDNs and GitHub.
 # Ref: https://learn.microsoft.com/en-us/dotnet/framework/network-programming/tls
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
@@ -15,12 +15,12 @@ try {
 
 $script:HunterSourceRoot = $null
 $script:HunterReleaseChannel = 'preview'
-$script:HunterReleaseVersion = '2.0.1-preview.1'
-$script:HunterBootstrapRevision = '97840ab3f8d90fc285ab04238beb03c17797e02b'
+$script:HunterReleaseVersion = '2.0.1-preview.2'
+$script:HunterBootstrapRevision = '4d43d812d927f6211c9255aa67b25d5be50f7b9e'
 $script:HunterRemoteRevision = $script:HunterBootstrapRevision
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = '464e2ea586cd3c519fda8b028a22fb3a90d84100e1cb32d7f6afb553c398ac2e'
+$script:BootstrapLoaderSha256 = '933bb16ac7f1e32e5a970d07b31617b852e9598f7ed6b91090d16f5a86136b9e'
 
 $bootstrapLoaderPath = $null
 $canUseLocalHunterPrivateLayers = $false
@@ -177,7 +177,7 @@ function Invoke-Main {
     $context = Get-HunterContext
     Sync-HunterContextFromScriptState -Context $context
 
-    # Start the run stopwatch immediately — this is the very first executable line
+    # Start the run stopwatch immediately - this is the very first executable line
     $script:RunStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
     try {
@@ -185,7 +185,7 @@ function Invoke-Main {
         # INITIALIZATION
         # --------------------------------------------------------------------
 
-        # Suppress Invoke-WebRequest progress bars — PS5 renders a UI progress bar
+        # Suppress Invoke-WebRequest progress bars - PS5 renders a UI progress bar
         # that slows downloads up to 10x. Ref: https://github.com/PowerShell/PowerShell/issues/2138
         $ProgressPreference = 'SilentlyContinue'
 
