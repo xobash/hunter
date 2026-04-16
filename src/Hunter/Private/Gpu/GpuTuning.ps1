@@ -37,6 +37,18 @@ function Set-DirectXGlobalPreferenceValue {
     Set-RegistryValue -Path $path -Name 'DirectXUserGlobalSettings' -Value $serializedValue -Type String
 }
 
+function Get-HunterObjectPropertyValue {
+    param(
+        [Parameter(Mandatory)][object]$InputObject,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    if ($null -eq $InputObject -or $null -eq $InputObject.PSObject -or $null -eq $InputObject.PSObject.Properties[$Name]) {
+        return $null
+    }
+
+    return $InputObject.$Name
+}
 
 function Get-GpuPciDeviceContexts {
     $displayClassGuid = '{4d36e968-e325-11ce-bfc1-08002be10318}'
@@ -51,19 +63,20 @@ function Get-GpuPciDeviceContexts {
         foreach ($pciInstanceKey in @(Get-ChildItem -Path $pciDeviceKey.PSPath -ErrorAction SilentlyContinue)) {
             try {
                 $instanceProperties = Get-ItemProperty -Path $pciInstanceKey.PSPath -ErrorAction Stop
-                if ([string]$instanceProperties.ClassGUID -ne $displayClassGuid) {
+                $classGuid = [string](Get-HunterObjectPropertyValue -InputObject $instanceProperties -Name 'ClassGUID')
+                if ($classGuid -ne $displayClassGuid) {
                     continue
                 }
 
                 $friendlyName = @(
-                    [string]$instanceProperties.FriendlyName,
-                    [string]$instanceProperties.DeviceDesc,
-                    [string]$instanceProperties.DriverDesc,
+                    [string](Get-HunterObjectPropertyValue -InputObject $instanceProperties -Name 'FriendlyName'),
+                    [string](Get-HunterObjectPropertyValue -InputObject $instanceProperties -Name 'DeviceDesc'),
+                    [string](Get-HunterObjectPropertyValue -InputObject $instanceProperties -Name 'DriverDesc'),
                     [string]$pciInstanceKey.PSChildName
                 ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
 
                 $vendorName = 'Unknown'
-                $hardwareIds = @($instanceProperties.HardwareID)
+                $hardwareIds = @(Get-HunterObjectPropertyValue -InputObject $instanceProperties -Name 'HardwareID')
                 if (([string]::Join(' ', @($hardwareIds))) -match '(?i)VEN_10DE') {
                     $vendorName = 'NVIDIA'
                 } elseif (([string]::Join(' ', @($hardwareIds))) -match '(?i)VEN_1002|VEN_1022') {

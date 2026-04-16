@@ -125,6 +125,17 @@ function Invoke-DisableEdgeUpdateInfrastructure {
             }
         }
 
+        $edgeUpdateProcesses = @(Get-Process -Name 'MicrosoftEdgeUpdate', 'msedgeupdate' -ErrorAction SilentlyContinue)
+        if ($edgeUpdateProcesses.Count -gt 0) {
+            try {
+                $edgeUpdateProcesses | Stop-Process -Force -ErrorAction Stop
+                Write-Log "Stopped $($edgeUpdateProcesses.Count) lingering Edge updater process(es)." 'INFO'
+                Start-Sleep -Milliseconds 500
+            } catch {
+                [void]$warnings.Add("Failed to stop lingering Edge updater processes: $($_.Exception.Message)")
+            }
+        }
+
         $edgeUpdatePaths = @(
             (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\EdgeUpdate'),
             (Join-Path $script:ProgramFilesRoot 'Microsoft\EdgeUpdate')
