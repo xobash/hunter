@@ -65,12 +65,13 @@ if ([string]::IsNullOrWhiteSpace($bootstrapLoaderPath)) {
     }
 }
 
-. $bootstrapLoaderPath
+. ([scriptblock]::Create((Get-Content -Path $bootstrapLoaderPath -Raw -Encoding UTF8)))
 Initialize-HunterPrivateSourceTree `
     -SourceRoot $script:HunterSourceRoot `
     -RemoteRoot $(if ($canUseLocalHunterPrivateLayers) { '' } else { $script:HunterRemoteRoot })
 foreach ($privateScript in @(Get-HunterPrivateScriptManifest)) {
-    . (Join-Path $script:HunterSourceRoot ([string]$privateScript.RelativePath))
+    $privateScriptPath = Join-Path $script:HunterSourceRoot ([string]$privateScript.RelativePath)
+    . ([scriptblock]::Create((Get-Content -Path $privateScriptPath -Raw -Encoding UTF8)))
 }
 
 Remove-Variable -Name bootstrapLoaderPath -ErrorAction SilentlyContinue
