@@ -53,3 +53,27 @@ function Resolve-SkipAppDownloadsPreference {
     return [bool]$script:SkipAppDownloads
 }
 
+function Resolve-CreateLocalUserPreference {
+    if ($null -ne $script:CreateLocalUser) {
+        return [bool]$script:CreateLocalUser
+    }
+
+    if ($script:IsAutomationRun) {
+        $script:CreateLocalUser = $true
+        return $true
+    }
+
+    $script:CreateLocalUser = Show-YesNoDialog `
+        -Title 'Hunter Standard User' `
+        -Message "Create the standard local 'user' account?`n`nChoose Yes to create (or normalize) the standard local user account that Hunter manages, or No to skip this step. Skipping also disables autologin configuration." `
+        -DefaultToNo $false
+
+    if ($script:CreateLocalUser) {
+        Write-Log 'Standard user creation enabled by user.' 'INFO'
+    } else {
+        Write-Log 'Standard user creation skipped by user.' 'INFO'
+    }
+
+    return [bool]$script:CreateLocalUser
+}
+

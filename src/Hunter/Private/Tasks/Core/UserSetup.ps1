@@ -4,6 +4,11 @@ function Invoke-EnsureLocalStandardUser {
         return $true
     }
 
+    if (-not (Resolve-CreateLocalUserPreference)) {
+        Write-Log "Standard user creation declined by user; skipping" 'INFO'
+        return (New-TaskSkipResult -Reason 'Standard user creation declined by user')
+    }
+
     try {
         $localAccountsCommands = @(
             'Get-LocalUser',
@@ -230,6 +235,11 @@ function Invoke-ConfigureAutologin {
     if ($script:IsHyperVGuest) {
         Write-Log "Hyper-V guest detected, skipping autologin" 'INFO'
         return (New-TaskSkipResult -Reason 'Autologin is intentionally skipped on Hyper-V guests')
+    }
+
+    if (-not (Resolve-CreateLocalUserPreference)) {
+        Write-Log "Standard user creation declined; skipping autologin" 'INFO'
+        return (New-TaskSkipResult -Reason 'Autologin requires the standard user account, which the user declined to create')
     }
 
     try {

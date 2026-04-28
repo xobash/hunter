@@ -67,6 +67,7 @@ $script:RunStopwatch = $null
 $script:RunInfrastructureIssues = @()
 $script:ProgressUiIssueLogged = $false
 $script:SkipAppDownloads = $null
+$script:CreateLocalUser = $null
 $script:PackagePipelineBlocked = $false
 $script:PackagePipelineBlockReason = ''
 $script:WingetMinimumVersion = '1.6.0'
