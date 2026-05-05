@@ -52,6 +52,121 @@ function Start-ProcessChecked {
     return $process
 }
 
+function Invoke-NativeCommandWithTimeout {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [int]$TimeoutSeconds = 60,
+        [string]$Description = $FilePath
+    )
+
+    $commandId = [guid]::NewGuid().ToString('N')
+    $stdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) "Hunter-$commandId.out"
+    $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) "Hunter-$commandId.err"
+    $process = $null
+
+    try {
+        $process = Start-Process `
+            -FilePath $FilePath `
+            -ArgumentList $ArgumentList `
+            -PassThru `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -ErrorAction Stop
+
+        if (-not $process.WaitForExit([Math]::Max(1, $TimeoutSeconds) * 1000)) {
+            try {
+                $process.Kill()
+            } catch {
+            }
+
+            throw "$Description timed out after $TimeoutSeconds seconds."
+        }
+
+        $outputText = ''
+        foreach ($outputPath in @($stdoutPath, $stderrPath)) {
+            if (Test-Path $outputPath) {
+                $content = Get-Content -Path $outputPath -Raw -ErrorAction SilentlyContinue
+                if (-not [string]::IsNullOrWhiteSpace([string]$content)) {
+                    if (-not [string]::IsNullOrWhiteSpace($outputText)) {
+                        $outputText += "`n"
+                    }
+                    $outputText += [string]$content
+                }
+            }
+        }
+
+        return [pscustomobject]@{
+            ExitCode = [int]$process.ExitCode
+            Output   = $outputText.Trim()
+        }
+    } finally {
+        Remove-Item -Path $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-DismOptionalFeatureServicingUnavailable {
+    $flag = Get-Variable -Name DismOptionalFeatureServicingUnavailable -Scope Script -ErrorAction SilentlyContinue
+    return ($null -ne $flag -and [bool]$flag.Value)
+}
+
+function Set-DismOptionalFeatureServicingUnavailable {
+    $script:DismOptionalFeatureServicingUnavailable = $true
+}
+
+function Get-DismOptionalFeatureInfo {
+    param([Parameter(Mandatory)][string]$FeatureName)
+
+    $dismPath = Get-NativeSystemExecutablePath -FileName 'dism.exe'
+    $result = Invoke-NativeCommandWithTimeout `
+        -FilePath $dismPath `
+        -ArgumentList @('/Online', '/English', '/Get-FeatureInfo', "/FeatureName:$FeatureName") `
+        -TimeoutSeconds 30 `
+        -Description "DISM optional feature query for $FeatureName"
+
+    $outputText = [string]$result.Output
+    if ([int]$result.ExitCode -ne 0) {
+        if ($outputText -match '(?i)feature name .* is unknown|unknown feature|0x800f080c|not found') {
+            return [pscustomobject]@{
+                FeatureName = $FeatureName
+                Present     = $false
+                State       = ''
+            }
+        }
+
+        throw "dism.exe feature query for $FeatureName exited with code $($result.ExitCode): $outputText"
+    }
+
+    $state = ''
+    if ($outputText -match '(?im)^\s*State\s*:\s*(?<State>.+?)\s*$') {
+        $state = [string]$Matches['State']
+    }
+
+    return [pscustomobject]@{
+        FeatureName = $FeatureName
+        Present     = $true
+        State       = $state.Trim()
+    }
+}
+
+function Disable-DismOptionalFeature {
+    param([Parameter(Mandatory)][string]$FeatureName)
+
+    $dismPath = Get-NativeSystemExecutablePath -FileName 'dism.exe'
+    $result = Invoke-NativeCommandWithTimeout `
+        -FilePath $dismPath `
+        -ArgumentList @('/Online', '/English', '/Disable-Feature', "/FeatureName:$FeatureName", '/NoRestart') `
+        -TimeoutSeconds 120 `
+        -Description "DISM optional feature disable for $FeatureName"
+
+    if (@(0, 3010) -notcontains [int]$result.ExitCode) {
+        throw "dism.exe feature disable for $FeatureName exited with code $($result.ExitCode): $($result.Output)"
+    }
+
+    return $true
+}
+
 function Disable-WindowsOptionalFeatureIfPresent {
     param(
         [string]$DisplayName,
@@ -68,11 +183,16 @@ function Disable-WindowsOptionalFeatureIfPresent {
         return $false
     }
 
+    if (Test-DismOptionalFeatureServicingUnavailable) {
+        Write-Log "Skipping $DisplayName optional feature disable because Windows optional-feature servicing is unavailable in this session." 'WARN'
+        return $false
+    }
+
     try {
         $resolvedFeature = $null
         foreach ($candidateName in $CandidateNames) {
-            $feature = Get-WindowsOptionalFeature -Online -FeatureName $candidateName -ErrorAction SilentlyContinue
-            if ($null -ne $feature) {
+            $feature = Get-DismOptionalFeatureInfo -FeatureName $candidateName
+            if ($null -ne $feature -and $feature.Present) {
                 $resolvedFeature = $feature
                 break
             }
@@ -88,10 +208,14 @@ function Disable-WindowsOptionalFeatureIfPresent {
             return $true
         }
 
-        Disable-WindowsOptionalFeature -Online -FeatureName $resolvedFeature.FeatureName -NoRestart -ErrorAction Stop | Out-Null
+        Disable-DismOptionalFeature -FeatureName $resolvedFeature.FeatureName | Out-Null
         Write-Log "$DisplayName optional feature disabled." 'INFO'
         return $true
     } catch {
+        if ($_.Exception.Message -match '(?i)class not registered|timed out|0x80040154') {
+            Set-DismOptionalFeatureServicingUnavailable
+        }
+
         Write-Log "Failed to disable $DisplayName optional feature: $($_.Exception.Message)" 'WARN'
         return $false
     }

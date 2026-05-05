@@ -7,7 +7,6 @@ function Get-WindowsEditionContext {
     $editionId = ''
     $installationType = ''
     $productName = ''
-    $onlineEdition = ''
 
     try {
         $currentVersion = Get-ItemProperty -Path $currentVersionPath -ErrorAction Stop
@@ -18,19 +17,21 @@ function Get-WindowsEditionContext {
         Write-Log "Failed to query Windows edition metadata from the registry: $($_.Exception.Message)" 'WARN'
     }
 
-    try {
-        $getWindowsEditionCommand = Get-Command Get-WindowsEdition -ErrorAction SilentlyContinue
-        if ($null -ne $getWindowsEditionCommand) {
-            $onlineEditionInfo = Get-WindowsEdition -Online -ErrorAction Stop
-            if ($null -ne $onlineEditionInfo) {
-                $onlineEdition = [string]$onlineEditionInfo.Edition
+    if ([string]::IsNullOrWhiteSpace($productName) -or [string]::IsNullOrWhiteSpace($installationType)) {
+        try {
+            $operatingSystem = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+            if ([string]::IsNullOrWhiteSpace($productName)) {
+                $productName = [string]$operatingSystem.Caption
             }
+            if ([string]::IsNullOrWhiteSpace($installationType)) {
+                $installationType = if ([int]$operatingSystem.ProductType -eq 1) { 'Client' } else { 'Server' }
+            }
+        } catch {
+            Write-Log "Failed to query Windows edition metadata from Win32_OperatingSystem: $($_.Exception.Message)" 'INFO'
         }
-    } catch {
-        Write-Log "Failed to query Get-WindowsEdition -Online: $($_.Exception.Message)" 'INFO'
     }
 
-    $combinedEditionText = (@($onlineEdition, $editionId, $installationType, $productName) | Where-Object {
+    $combinedEditionText = (@($editionId, $installationType, $productName) | Where-Object {
         -not [string]::IsNullOrWhiteSpace([string]$_)
     }) -join ' '
 
@@ -42,7 +43,7 @@ function Get-WindowsEditionContext {
         EditionId                  = $editionId
         InstallationType           = $installationType
         ProductName                = $productName
-        OnlineEdition              = $onlineEdition
+        OnlineEdition              = ''
         IsServer                   = $isServer
         IsLtsc                     = $isLtsc
         IsSupportedConsumerEdition = $isSupportedConsumerEdition
