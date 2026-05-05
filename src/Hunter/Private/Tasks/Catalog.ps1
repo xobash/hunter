@@ -1,5 +1,6 @@
 function Get-HunterTaskCatalog {
     return @(
+        [pscustomobject]@{ Id = 'preflight-driver-install-block'; Phase = '1'; Handler = { Invoke-BlockWindowsUpdateDriverInstallation }; Description = 'Block Windows Update driver installs and automatic driver search' }
         [pscustomobject]@{ Id = 'preflight-internet'; Phase = '1'; Handler = { Invoke-VerifyInternetConnectivity }; Description = 'Verify internet connectivity' }
         [pscustomobject]@{ Id = 'preflight-edition-compatibility'; Phase = '1'; Handler = { Invoke-ValidateSupportedWindowsEdition }; Description = 'Validate supported Windows edition and set Store/AppX compatibility gates' }
         [pscustomobject]@{ Id = 'preflight-restore-point'; Phase = '1'; Handler = { Invoke-CreateRestorePoint }; Description = 'Create Windows System Restore point' }

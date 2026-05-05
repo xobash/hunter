@@ -197,6 +197,94 @@ function Invoke-SetDwmFrameInterval {
 }
 
 
+function Test-WindowsUpdateServiceStoppedAndDisabledOrMissing {
+    try {
+        $service = Get-Service -Name 'wuauserv' -ErrorAction SilentlyContinue
+        if ($null -eq $service) {
+            return $true
+        }
+
+        return (
+            (Test-ServiceStartTypeMatch -Name 'wuauserv' -ExpectedStartType 'Disabled') -and
+            ([string]$service.Status -eq 'Stopped')
+        )
+    } catch {
+        return $false
+    }
+}
+
+function Test-WindowsUpdateDriverInstallBlockingApplied {
+    return (
+        (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' -Name 'ExcludeWUDriversInQualityUpdate' -ExpectedValue 1) -and
+        (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Device Metadata' -Name 'PreventDeviceMetadataFromNetwork' -ExpectedValue 1) -and
+        (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DriverSearching' -Name 'SearchOrderConfig' -ExpectedValue 0) -and
+        (Test-WindowsUpdateServiceStoppedAndDisabledOrMissing)
+    )
+}
+
+function Invoke-BlockWindowsUpdateDriverInstallation {
+    <#
+    .SYNOPSIS
+    Blocks automatic driver installation and driver metadata retrieval.
+    #>
+    param()
+
+    try {
+        Write-Log 'Blocking automatic driver installation from Windows Update...' 'INFO'
+
+        if (Test-WindowsUpdateDriverInstallBlockingApplied) {
+            Write-Log 'Windows Update driver installation blocking is already applied. Skipping.' 'INFO'
+            return $true
+        }
+
+        $driverBlockingSettings = @(
+            @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'; Name = 'ExcludeWUDriversInQualityUpdate'; Value = 1 },
+            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Device Metadata'; Name = 'PreventDeviceMetadataFromNetwork'; Value = 1 },
+            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DriverSearching'; Name = 'SearchOrderConfig'; Value = 0 }
+        )
+
+        $registrySucceeded = $true
+        foreach ($setting in $driverBlockingSettings) {
+            if (-not (Set-RegistryValue -Path $setting.Path -Name $setting.Name -Value $setting.Value -Type 'DWord')) {
+                $registrySucceeded = $false
+            }
+        }
+
+        if (-not $registrySucceeded) {
+            return $false
+        }
+
+        $windowsUpdateService = Get-Service -Name 'wuauserv' -ErrorAction SilentlyContinue
+        if ($null -ne $windowsUpdateService) {
+            Stop-ServiceIfPresent -Name 'wuauserv'
+            Set-ServiceStartType -Name 'wuauserv' -StartType 'Disabled'
+        } else {
+            Write-Log 'Windows Update service was not found; skipping optional service disable.' 'INFO'
+        }
+
+        if (-not (
+            (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' -Name 'ExcludeWUDriversInQualityUpdate' -ExpectedValue 1) -and
+            (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Device Metadata' -Name 'PreventDeviceMetadataFromNetwork' -ExpectedValue 1) -and
+            (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DriverSearching' -Name 'SearchOrderConfig' -ExpectedValue 0)
+        )) {
+            Write-Log 'Windows Update driver installation registry policy verification failed.' 'ERROR'
+            return $false
+        }
+
+        if (-not (Test-WindowsUpdateServiceStoppedAndDisabledOrMissing)) {
+            Write-Log 'Windows Update service could not be confirmed stopped and disabled; driver-blocking registry policies were applied.' 'WARN'
+            return (New-TaskWarningResult -Reason 'Windows Update service could not be confirmed stopped and disabled')
+        }
+
+        Write-Log 'Automatic driver installation from Windows Update is blocked.' 'SUCCESS'
+        return $true
+    } catch {
+        Write-Log "Failed to block automatic driver installation from Windows Update: $($_.Exception.Message)" 'ERROR'
+        return $false
+    }
+}
+
+
 function Invoke-SetServiceProfileManual {
     <#
     .SYNOPSIS

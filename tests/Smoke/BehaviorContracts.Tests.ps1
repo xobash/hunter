@@ -6,8 +6,12 @@ Describe 'Behavior contracts' {
         $repoRoot = Join-Path $PSScriptRoot '..\..'
         . (Join-Path $repoRoot 'src/Hunter/Private/System/Detection.ps1')
         . (Join-Path $repoRoot 'src/Hunter/Private/Common/PathPolicy.ps1')
+        . (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Catalog.ps1')
         $cleanupSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Cleanup.ps1') -Raw -ErrorAction Stop
         $copilotSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/OneDriveCopilot.ps1') -Raw -ErrorAction Stop
+        $detectionSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/System/Detection.ps1') -Raw -ErrorAction Stop
+        $hardwareSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Hardware.ps1') -Raw -ErrorAction Stop
+        $nativeSystemSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Infrastructure/NativeSystem.ps1') -Raw -ErrorAction Stop
     }
 
     BeforeEach {
@@ -50,5 +54,25 @@ Describe 'Behavior contracts' {
 
         $wallpaperPath | Should -BeOfType ([string])
         $wallpaperPath | Should -BeExactly 'C:\ProgramData\Hunter\Assets\hunter-wallpaper.png'
+    }
+
+    It 'blocks Windows Update driver installation before package downloads begin' {
+        $taskIds = @((Get-HunterTaskCatalog).Id)
+
+        [array]::IndexOf($taskIds, 'preflight-driver-install-block') | Should -BeGreaterThan -1
+        [array]::IndexOf($taskIds, 'preflight-driver-install-block') | Should -BeLessThan ([array]::IndexOf($taskIds, 'preflight-predownload-v2'))
+        $hardwareSource | Should -Match 'ExcludeWUDriversInQualityUpdate'
+        $hardwareSource | Should -Match 'PreventDeviceMetadataFromNetwork'
+        $hardwareSource | Should -Match 'SearchOrderConfig'
+        $hardwareSource | Should -Match "Stop-ServiceIfPresent -Name 'wuauserv'"
+        $hardwareSource | Should -Match "Set-ServiceStartType -Name 'wuauserv' -StartType 'Disabled'"
+    }
+
+    It 'avoids blocking DISM PowerShell cmdlets for edition and optional-feature handling' {
+        $detectionSource | Should -Not -Match 'Get-WindowsEdition\s+-Online'
+        $nativeSystemSource | Should -Not -Match 'Get-WindowsOptionalFeature\s+-Online'
+        $nativeSystemSource | Should -Not -Match 'Disable-WindowsOptionalFeature\s+-Online'
+        $nativeSystemSource | Should -Match 'dism\.exe'
+        $nativeSystemSource | Should -Match 'Invoke-NativeCommandWithTimeout'
     }
 }

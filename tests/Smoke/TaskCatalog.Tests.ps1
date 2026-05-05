@@ -11,6 +11,7 @@ Describe 'Task catalog compatibility' {
         $taskCatalog = @(Get-HunterTaskCatalog)
 
         $expectedTaskIds = @(
+            'preflight-driver-install-block',
             'preflight-internet',
             'preflight-edition-compatibility',
             'preflight-restore-point',
@@ -84,7 +85,7 @@ Describe 'Task catalog compatibility' {
         )
 
         $expectedPhases = @(
-            '1', '1', '1', '1', '1', '1',
+            '1', '1', '1', '1', '1', '1', '1',
             '2', '2', '2', '2', '2',
             '3', '3', '3', '3', '3', '3', '3', '3', '3',
             '4', '4', '4', '4', '4',
@@ -97,7 +98,7 @@ Describe 'Task catalog compatibility' {
     }
 
     It 'defines the current total task count' {
-        $taskCatalog.Count | Should -Be 70
+        $taskCatalog.Count | Should -Be 71
     }
 
     It 'preserves the exact task ID order' {
