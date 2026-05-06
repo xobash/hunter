@@ -3,7 +3,9 @@
 from pathlib import Path
 import hashlib
 import re
+import subprocess
 import sys
+from typing import Optional
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -13,6 +15,22 @@ HUNTER_PATH = REPO_ROOT / "hunter.ps1"
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def sha256_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def git_show_bytes(revision: str, relative_path: str) -> Optional[bytes]:
+    result = subprocess.run(
+        ["git", "show", f"{revision}:{relative_path.replace(chr(92), '/')}"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout
 
 
 def main() -> int:
@@ -47,8 +65,11 @@ def main() -> int:
         failures.append(f"{HUNTER_PATH}: HunterReleaseVersion assignment not found")
 
     bootstrap_revision_match = re.search(r"\$script:HunterBootstrapRevision = '([0-9a-fA-F]{40})'", hunter_text)
+    bootstrap_revision = None
     if not bootstrap_revision_match:
         failures.append(f"{HUNTER_PATH}: HunterBootstrapRevision assignment not found")
+    else:
+        bootstrap_revision = bootstrap_revision_match.group(1).lower()
 
     if not re.search(
         r"\$script:HunterRemoteRevision = \$script:HunterBootstrapRevision",
@@ -76,6 +97,51 @@ def main() -> int:
             failures.append(
                 f"loader hash mismatch: hunter.ps1 pins {pinned_loader_hash} but Loader.ps1 is {actual_loader_hash}"
             )
+
+        if bootstrap_revision:
+            revision_loader_bytes = git_show_bytes(
+                bootstrap_revision,
+                "src/Hunter/Private/Bootstrap/Loader.ps1",
+            )
+            if revision_loader_bytes is None:
+                failures.append(
+                    f"{HUNTER_PATH}: HunterBootstrapRevision {bootstrap_revision} does not expose src/Hunter/Private/Bootstrap/Loader.ps1 via git show"
+                )
+            else:
+                revision_loader_hash = sha256_bytes(revision_loader_bytes).lower()
+                if revision_loader_hash != pinned_loader_hash:
+                    failures.append(
+                        f"bootstrap revision drift: HunterBootstrapRevision {bootstrap_revision} resolves Loader.ps1 to {revision_loader_hash}, but hunter.ps1 pins {pinned_loader_hash}"
+                    )
+
+    if not re.search(
+        r"\.\s+\(\[scriptblock\]::Create\(\(Get-Content -Path \$bootstrapLoaderPath -Raw -Encoding UTF8\)\)\)",
+        hunter_text,
+    ):
+        failures.append(
+            f"{HUNTER_PATH}: bootstrap loader is not executed from raw content via ScriptBlock::Create"
+        )
+
+    if not re.search(
+        r"\$privateScriptPath = Join-Path \$script:HunterSourceRoot \(\[string\]\$privateScript\.RelativePath\)",
+        hunter_text,
+    ):
+        failures.append(
+            f"{HUNTER_PATH}: bootstrap private-script path binding not found"
+        )
+
+    if not re.search(
+        r"\.\s+\(\[scriptblock\]::Create\(\(Get-Content -Path \$privateScriptPath -Raw -Encoding UTF8\)\)\)",
+        hunter_text,
+    ):
+        failures.append(
+            f"{HUNTER_PATH}: private bootstrap scripts are not executed from raw content via ScriptBlock::Create"
+        )
+
+    if re.search(r"(?m)^\.\s+\$bootstrapLoaderPath\s*$", hunter_text):
+        failures.append(
+            f"{HUNTER_PATH}: bootstrap loader still dot-sources the downloaded file path directly"
+        )
 
     if failures:
         print("Bootstrap hash audit failed:", file=sys.stderr)
