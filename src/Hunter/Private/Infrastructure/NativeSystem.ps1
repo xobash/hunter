@@ -115,6 +115,92 @@ function Set-DismOptionalFeatureServicingUnavailable {
     $script:DismOptionalFeatureServicingUnavailable = $true
 }
 
+function Get-ServiceRegistryStartType {
+    param([Parameter(Mandatory)][string]$ServiceName)
+
+    $serviceKeyPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
+    if (-not (Test-Path $serviceKeyPath)) {
+        return ''
+    }
+
+    try {
+        $serviceConfig = Get-ItemProperty -Path $serviceKeyPath -Name 'Start' -ErrorAction Stop
+        return switch ([int]$serviceConfig.Start) {
+            0 { 'Boot' }
+            1 { 'System' }
+            2 { 'Automatic' }
+            3 { 'Manual' }
+            4 { 'Disabled' }
+            default { '' }
+        }
+    } catch {
+        return ''
+    }
+}
+
+function Invoke-WithOptionalFeatureServicingPrerequisites {
+    param([Parameter(Mandatory)][scriptblock]$ScriptBlock)
+
+    if (Test-DismOptionalFeatureServicingUnavailable) {
+        return $false
+    }
+
+    $serviceName = 'TrustedInstaller'
+    $serviceDisplayName = 'Windows Modules Installer'
+    $originalStartType = Get-ServiceRegistryStartType -ServiceName $serviceName
+    if ([string]::IsNullOrWhiteSpace($originalStartType)) {
+        Set-DismOptionalFeatureServicingUnavailable
+        throw "$serviceDisplayName service ($serviceName) is unavailable."
+    }
+
+    $startTypeChanged = $false
+    $serviceStarted = $false
+
+    try {
+        if ($originalStartType -eq 'Disabled') {
+            Write-Log "$serviceDisplayName service is disabled. Temporarily restoring it for Windows optional-feature servicing." 'INFO'
+            Set-ServiceStartType -Name $serviceName -StartType 'Manual'
+            $startTypeChanged = $true
+        }
+
+        $service = Get-Service -Name $serviceName -ErrorAction Stop
+        if ($service.Status -ne 'Running') {
+            Start-Service -Name $serviceName -ErrorAction Stop
+            $serviceStarted = $true
+            Write-Log "$serviceDisplayName service started for Windows optional-feature servicing." 'INFO'
+        }
+
+        return (& $ScriptBlock)
+    } catch {
+        if ($_.Exception.Message -match '(?i)class not registered|timed out|0x80040154|unavailable') {
+            Set-DismOptionalFeatureServicingUnavailable
+        }
+
+        throw
+    } finally {
+        if ($serviceStarted) {
+            try {
+                $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+                if ($null -ne $service -and $service.Status -ne 'Stopped') {
+                    Stop-Service -Name $serviceName -Force -ErrorAction Stop
+                    Write-Log "$serviceDisplayName service stopped after Windows optional-feature servicing." 'INFO'
+                }
+            } catch {
+                Write-Log "Failed to stop $serviceDisplayName service after optional-feature servicing: $($_.Exception.Message)" 'WARN'
+            }
+        }
+
+        if ($startTypeChanged) {
+            try {
+                Set-ServiceStartType -Name $serviceName -StartType $originalStartType
+                Write-Log "$serviceDisplayName service startup type restored to $originalStartType after optional-feature servicing." 'INFO'
+            } catch {
+                Write-Log "Failed to restore $serviceDisplayName startup type after optional-feature servicing: $($_.Exception.Message)" 'WARN'
+            }
+        }
+    }
+}
+
 function Get-DismOptionalFeatureInfo {
     param([Parameter(Mandatory)][string]$FeatureName)
 

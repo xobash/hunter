@@ -41,7 +41,9 @@ Describe 'Wrapper compatibility surface' {
         $customAppsListPathParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'CustomAppsListPath' } | Select-Object -First 1
         $disableIPv6Parameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'DisableIPv6' } | Select-Object -First 1
         $disableTeredoParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'DisableTeredo' } | Select-Object -First 1
+        $disableCpuMitigationsParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'DisableCpuMitigations' } | Select-Object -First 1
         $disableHagsParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'DisableHags' } | Select-Object -First 1
+        $pagefileDriveParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'PagefileDrive' } | Select-Object -First 1
 
         $validateSetAttribute = $modeParameter.Attributes | Where-Object {
             $_.TypeName.FullName -eq 'ValidateSet'
@@ -51,7 +53,7 @@ Describe 'Wrapper compatibility surface' {
     }
 
     It 'keeps Invoke-Main with the expected parameters' {
-        @($invokeMainParameters.Name.VariablePath.UserPath) -join '|' | Should -BeExactly 'Mode|Strict|AutomationSafe|SkipTask|CustomAppsListPath|DisableIPv6|DisableTeredo|DisableHags'
+        @($invokeMainParameters.Name.VariablePath.UserPath) -join '|' | Should -BeExactly 'Mode|Strict|AutomationSafe|SkipTask|CustomAppsListPath|DisableIPv6|DisableTeredo|DisableCpuMitigations|DisableHags|PagefileDrive'
     }
 
     It 'keeps Mode defaulted to Execute' {
@@ -69,7 +71,9 @@ Describe 'Wrapper compatibility surface' {
         $customAppsListPathParameter.StaticType.Name | Should -BeExactly 'String'
         $disableIPv6Parameter.StaticType.Name | Should -BeExactly 'SwitchParameter'
         $disableTeredoParameter.StaticType.Name | Should -BeExactly 'SwitchParameter'
+        $disableCpuMitigationsParameter.StaticType.Name | Should -BeExactly 'SwitchParameter'
         $disableHagsParameter.StaticType.Name | Should -BeExactly 'SwitchParameter'
+        $pagefileDriveParameter.StaticType.Name | Should -BeExactly 'String'
     }
 
     It 'keeps raw wrapper defaults intact' {
@@ -81,7 +85,9 @@ Describe 'Wrapper compatibility surface' {
         $sourceText | Should -Match "\\$scriptCustomAppsListPath = \\$null"
         $sourceText | Should -Match "\\$scriptDisableIPv6 = \\$false"
         $sourceText | Should -Match "\\$scriptDisableTeredo = \\$false"
+        $sourceText | Should -Match "\\$scriptDisableCpuMitigations = \\$false"
         $sourceText | Should -Match "\\$scriptDisableHags = \\$false"
+        $sourceText | Should -Match "\\$scriptPagefileDrive = \\$null"
     }
 
     It 'keeps raw wrapper argument parsing for all supported options' {
@@ -93,7 +99,9 @@ Describe 'Wrapper compatibility surface' {
         $sourceText | Should -Match "\$args\[\$i\] -eq '-CustomAppsListPath'"
         $sourceText | Should -Match "\$args\[\$i\] -eq '-DisableIPv6'"
         $sourceText | Should -Match "\$args\[\$i\] -eq '-DisableTeredo'"
+        $sourceText | Should -Match "\$args\[\$i\] -eq '-DisableCpuMitigations'"
         $sourceText | Should -Match "\$args\[\$i\] -eq '-DisableHags'"
+        $sourceText | Should -Match "\$args\[\$i\] -eq '-PagefileDrive'"
     }
 
     It 'keeps the LogPath override behavior' {
@@ -101,7 +109,7 @@ Describe 'Wrapper compatibility surface' {
     }
 
     It 'keeps the wrapper invoking Invoke-Main with parsed arguments' {
-        $sourceText | Should -Match 'Invoke-Main -Mode \$scriptMode -Strict:\$scriptStrict -AutomationSafe:\$scriptAutomationSafe -SkipTask \$scriptSkipTasks -CustomAppsListPath \$scriptCustomAppsListPath -DisableIPv6:\$scriptDisableIPv6 -DisableTeredo:\$scriptDisableTeredo -DisableHags:\$scriptDisableHags'
+        $sourceText | Should -Match 'Invoke-Main -Mode \$scriptMode -Strict:\$scriptStrict -AutomationSafe:\$scriptAutomationSafe -SkipTask \$scriptSkipTasks -CustomAppsListPath \$scriptCustomAppsListPath -DisableIPv6:\$scriptDisableIPv6 -DisableTeredo:\$scriptDisableTeredo -DisableCpuMitigations:\$scriptDisableCpuMitigations -DisableHags:\$scriptDisableHags -PagefileDrive \$scriptPagefileDrive'
     }
 
     It 'syncs context after starting the progress window' {
@@ -120,7 +128,11 @@ Describe 'Wrapper compatibility surface' {
         $sourceText | Should -Match 'Invoke-WebRequest `\s*-Uri \$bootstrapLoaderUri'
         $sourceText | Should -Match 'Initialize-HunterPrivateSourceTree'
         $sourceText | Should -Match 'foreach \(\$privateScript in @\(Get-HunterPrivateScriptManifest\)\)'
-        $sourceText | Should -Match '\. \(Join-Path \$script:HunterSourceRoot \(\[string\]\$privateScript\.RelativePath\)\)'
+        $sourceText | Should -Match '\. \(\[scriptblock\]::Create\(\(Get-Content -Path \$bootstrapLoaderPath -Raw -Encoding UTF8\)\)\)'
+        $sourceText | Should -Match '\$privateScriptPath = Join-Path \$script:HunterSourceRoot \(\[string\]\$privateScript\.RelativePath\)'
+        $sourceText | Should -Match '\. \(\[scriptblock\]::Create\(\(Get-Content -Path \$privateScriptPath -Raw -Encoding UTF8\)\)\)'
+        $sourceText | Should -Not -Match '(?m)^\.\s+\$bootstrapLoaderPath\s*$'
+        $sourceText | Should -Not -Match '\. \(Join-Path \$script:HunterSourceRoot \(\[string\]\$privateScript\.RelativePath\)\)'
     }
 
     It 'initializes rollback capture and run-configuration recording during startup' {

@@ -27,9 +27,11 @@ function New-HunterContext {
             DisableTeredoRequested     = $false
             TeredoPreferenceResolved   = $false
             TeredoDisableResolvedValue = $false
+            DisableCpuMitigationsRequested = $false
             DisableHagsRequested       = $false
             HagsPreferenceResolved     = $false
             HagsDisableResolvedValue   = $false
+            PagefileDriveOverride      = $null
             IsAutomationRun            = $false
             StrictMode                 = $false
             PackagePipelineBlocked     = $false
@@ -94,7 +96,9 @@ function Sync-HunterScriptStateFromContext {
         if ($Context.Flags.ContainsKey('StrictMode')) { $script:StrictMode = [bool]$Context.Flags.StrictMode }
         if ($Context.Flags.ContainsKey('DisableIPv6Requested')) { $script:DisableIPv6Requested = [bool]$Context.Flags.DisableIPv6Requested }
         if ($Context.Flags.ContainsKey('DisableTeredoRequested')) { $script:DisableTeredoRequested = [bool]$Context.Flags.DisableTeredoRequested }
+        if ($Context.Flags.ContainsKey('DisableCpuMitigationsRequested')) { $script:DisableCpuMitigationsRequested = [bool]$Context.Flags.DisableCpuMitigationsRequested }
         if ($Context.Flags.ContainsKey('DisableHagsRequested')) { $script:DisableHagsRequested = [bool]$Context.Flags.DisableHagsRequested }
+        if ($Context.Flags.ContainsKey('PagefileDriveOverride')) { $script:PagefileDriveOverride = [string]$Context.Flags.PagefileDriveOverride }
         if ($Context.Flags.ContainsKey('PackagePipelineBlocked')) { $script:PackagePipelineBlocked = [bool]$Context.Flags.PackagePipelineBlocked }
         if ($Context.Flags.ContainsKey('PackagePipelineBlockReason')) { $script:PackagePipelineBlockReason = [string]$Context.Flags.PackagePipelineBlockReason }
     }
@@ -124,9 +128,11 @@ function Sync-HunterScriptStateFromContext {
     $script:DisableTeredoRequested = [bool]$Context.Runtime.DisableTeredoRequested
     $script:TeredoPreferenceResolved = [bool]$Context.Runtime.TeredoPreferenceResolved
     $script:TeredoDisableResolvedValue = [bool]$Context.Runtime.TeredoDisableResolvedValue
+    $script:DisableCpuMitigationsRequested = [bool]$Context.Runtime.DisableCpuMitigationsRequested
     $script:DisableHagsRequested = [bool]$Context.Runtime.DisableHagsRequested
     $script:HagsPreferenceResolved = [bool]$Context.Runtime.HagsPreferenceResolved
     $script:HagsDisableResolvedValue = [bool]$Context.Runtime.HagsDisableResolvedValue
+    $script:PagefileDriveOverride = [string]$Context.Runtime.PagefileDriveOverride
     $script:IsAutomationRun = [bool]$Context.Runtime.IsAutomationRun
     $script:StrictMode = [bool]$Context.Runtime.StrictMode
     $script:PackagePipelineBlocked = [bool]$Context.Runtime.PackagePipelineBlocked
@@ -172,7 +178,9 @@ function Sync-HunterContextFromScriptState {
         StrictMode                 = $script:StrictMode
         DisableIPv6Requested       = $script:DisableIPv6Requested
         DisableTeredoRequested     = $script:DisableTeredoRequested
+        DisableCpuMitigationsRequested = $script:DisableCpuMitigationsRequested
         DisableHagsRequested       = $script:DisableHagsRequested
+        PagefileDriveOverride      = $script:PagefileDriveOverride
         PackagePipelineBlocked     = $script:PackagePipelineBlocked
         PackagePipelineBlockReason = $script:PackagePipelineBlockReason
     }
@@ -202,9 +210,11 @@ function Sync-HunterContextFromScriptState {
     $Context.Runtime.DisableTeredoRequested = [bool]$script:DisableTeredoRequested
     $Context.Runtime.TeredoPreferenceResolved = [bool]$script:TeredoPreferenceResolved
     $Context.Runtime.TeredoDisableResolvedValue = [bool]$script:TeredoDisableResolvedValue
+    $Context.Runtime.DisableCpuMitigationsRequested = [bool]$script:DisableCpuMitigationsRequested
     $Context.Runtime.DisableHagsRequested = [bool]$script:DisableHagsRequested
     $Context.Runtime.HagsPreferenceResolved = [bool]$script:HagsPreferenceResolved
     $Context.Runtime.HagsDisableResolvedValue = [bool]$script:HagsDisableResolvedValue
+    $Context.Runtime.PagefileDriveOverride = [string]$script:PagefileDriveOverride
     $Context.Runtime.IsAutomationRun = [bool]$script:IsAutomationRun
     $Context.Runtime.StrictMode = [bool]$script:StrictMode
     $Context.Runtime.PackagePipelineBlocked = [bool]$script:PackagePipelineBlocked

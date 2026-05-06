@@ -688,28 +688,169 @@ function Invoke-DisableVirtualizationSecurityOverhead {
 
         $deviceGuardPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
         $hvciPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
+        $memoryManagementPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
 
         Set-RegistryValue -Path $deviceGuardPath -Name 'EnableVirtualizationBasedSecurity' -Value 0 -Type DWord
         Set-RegistryValue -Path $deviceGuardPath -Name 'RequirePlatformSecurityFeatures' -Value 0 -Type DWord
         Set-RegistryValue -Path $hvciPath -Name 'Enabled' -Value 0 -Type DWord
         Set-RegistryValue -Path $hvciPath -Name 'Locked' -Value 0 -Type DWord
         Set-RegistryValue -Path $hvciPath -Name 'WasEnabledBy' -Value 0 -Type DWord
+        $cpuMitigationResult = if (Resolve-DisableCpuMitigationsPreference) {
+            Set-RegistryValue -Path $memoryManagementPath -Name 'FeatureSettingsOverride' -Value 3 -Type DWord | Out-Null
+            Set-RegistryValue -Path $memoryManagementPath -Name 'FeatureSettingsOverrideMask' -Value 3 -Type DWord | Out-Null
+            Write-Log 'Speculative-execution mitigations disabled via FeatureSettingsOverride=3 and FeatureSettingsOverrideMask=3. Restart required.' 'WARN'
+            $true
+        } else {
+            New-TaskSkipResult -Reason 'Speculative-execution mitigation override is opt-in'
+        }
 
-        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Virtual Machine Platform' -CandidateNames @('VirtualMachinePlatform') -SkipOnHyperVGuest | Out-Null
-        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Windows Hypervisor Platform' -CandidateNames @('HypervisorPlatform') -SkipOnHyperVGuest | Out-Null
-        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Hyper-V' -CandidateNames @('Microsoft-Hyper-V-All', 'Microsoft-Hyper-V') -SkipOnHyperVGuest | Out-Null
-        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Windows Sandbox' -CandidateNames @('Containers-DisposableClientVM') -SkipOnHyperVGuest | Out-Null
-        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Application Guard' -CandidateNames @('Windows-Defender-ApplicationGuard') | Out-Null
-        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Windows Subsystem for Linux' -CandidateNames @('Microsoft-Windows-Subsystem-Linux') | Out-Null
-        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'SMB 1.0/CIFS File Sharing Support' -CandidateNames @('SMB1Protocol') | Out-Null
-        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'SMB 1.0/CIFS Client' -CandidateNames @('SMB1Protocol-Client') | Out-Null
-        Disable-WindowsOptionalFeatureIfPresent -DisplayName 'SMB 1.0/CIFS Server' -CandidateNames @('SMB1Protocol-Server') | Out-Null
+        $optionalFeaturePassRan = [bool](Invoke-WithOptionalFeatureServicingPrerequisites -ScriptBlock {
+            $featureResults = @(
+                Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Virtual Machine Platform' -CandidateNames @('VirtualMachinePlatform') -SkipOnHyperVGuest
+                Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Windows Hypervisor Platform' -CandidateNames @('HypervisorPlatform') -SkipOnHyperVGuest
+                Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Hyper-V' -CandidateNames @('Microsoft-Hyper-V-All', 'Microsoft-Hyper-V') -SkipOnHyperVGuest
+                Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Windows Sandbox' -CandidateNames @('Containers-DisposableClientVM') -SkipOnHyperVGuest
+                Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Application Guard' -CandidateNames @('Windows-Defender-ApplicationGuard')
+                Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Windows Subsystem for Linux' -CandidateNames @('Microsoft-Windows-Subsystem-Linux')
+                Disable-WindowsOptionalFeatureIfPresent -DisplayName 'SMB 1.0/CIFS File Sharing Support' -CandidateNames @('SMB1Protocol')
+                Disable-WindowsOptionalFeatureIfPresent -DisplayName 'SMB 1.0/CIFS Client' -CandidateNames @('SMB1Protocol-Client')
+                Disable-WindowsOptionalFeatureIfPresent -DisplayName 'SMB 1.0/CIFS Server' -CandidateNames @('SMB1Protocol-Server')
+            )
 
-        Write-Log 'Virtualization security overhead and legacy optional features disabled.' 'SUCCESS'
-        return $true
+            return (@($featureResults | Where-Object { -not [bool]$_ }).Count -eq 0)
+        })
+
+        if ($optionalFeaturePassRan) {
+            Write-Log 'Virtualization security overhead and legacy optional features disabled.' 'SUCCESS'
+            $optionalFeatureResult = $true
+        } else {
+            Write-Log 'Optional feature disables completed with warnings or skips.' 'WARN'
+            $optionalFeatureResult = New-TaskWarningResult -Reason 'Optional feature disables completed with warnings or skips'
+        }
+        return (Join-TaskResults -TaskResults @($cpuMitigationResult, $optionalFeatureResult) -WarningReason 'Virtualization and mitigation tweaks completed with warnings')
     } catch {
         Write-Log "Error disabling virtualization security overhead: $_" 'ERROR'
         return $false
+    }
+}
+
+function Invoke-DisableHpetDeviceBestEffort {
+    try {
+        if ($script:IsHyperVGuest) {
+            Write-Log 'Skipping HPET device disable on a Hyper-V guest.' 'INFO'
+            return (New-TaskSkipResult -Reason 'HPET device disable is skipped on Hyper-V guests')
+        }
+
+        $hpetDevices = @(
+            Get-CimInstance -ClassName Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object {
+                ([string]$_.Name -match '(?i)high precision event timer|hpet') -or
+                ([string]$_.Caption -match '(?i)high precision event timer|hpet')
+            }
+        )
+
+        if ($hpetDevices.Count -eq 0) {
+            Write-Log 'No HPET device was detected for disablement.' 'INFO'
+            return (New-TaskSkipResult -Reason 'No HPET device was detected')
+        }
+
+        $pnputilPath = Get-NativeSystemExecutablePath -FileName 'pnputil.exe'
+        $disabledCount = 0
+        $failedCount = 0
+        foreach ($hpetDevice in $hpetDevices) {
+            $instanceId = [string]$hpetDevice.PNPDeviceID
+            if ([string]::IsNullOrWhiteSpace($instanceId)) {
+                continue
+            }
+
+            if ($null -ne $hpetDevice.ConfigManagerErrorCode -and [int]$hpetDevice.ConfigManagerErrorCode -eq 22) {
+                Write-Log "HPET device already disabled: $instanceId" 'INFO'
+                $disabledCount++
+                continue
+            }
+
+            $disableResult = Invoke-NativeCommandWithTimeout `
+                -FilePath $pnputilPath `
+                -ArgumentList @('/disable-device', $instanceId, '/force') `
+                -TimeoutSeconds 30 `
+                -Description "HPET device disable for $instanceId"
+
+            if ([int]$disableResult.ExitCode -eq 0) {
+                Write-Log "HPET device disabled: $instanceId" 'INFO'
+                $disabledCount++
+            } else {
+                Write-Log "Failed to disable HPET device $instanceId: $($disableResult.Output)" 'WARN'
+                $failedCount++
+            }
+        }
+
+        if ($failedCount -gt 0) {
+            return (New-TaskWarningResult -Reason "HPET device disable completed with $failedCount warning(s)")
+        }
+
+        if ($disabledCount -gt 0) {
+            return $true
+        }
+
+        return (New-TaskSkipResult -Reason 'No HPET device instance IDs were available for disablement')
+    } catch {
+        Write-Log "Failed to disable HPET device: $($_.Exception.Message)" 'WARN'
+        return (New-TaskWarningResult -Reason 'HPET device disable failed unexpectedly')
+    }
+}
+
+function Invoke-DisableNvidiaTelemetryAndOverlayFeatures {
+    try {
+        $nvidiaGpus = @(Get-GpuPciDeviceContexts | Where-Object { [string]$_.Vendor -eq 'NVIDIA' })
+        if ($nvidiaGpus.Count -eq 0) {
+            return (New-TaskSkipResult -Reason 'No NVIDIA GPU was detected')
+        }
+
+        Write-Log 'Applying NVIDIA telemetry and overlay disables...' 'INFO'
+
+        foreach ($serviceName in @('NvTelemetryContainer')) {
+            Stop-ServiceIfPresent -Name $serviceName
+            Set-ServiceStartType -Name $serviceName -StartType 'Disabled'
+        }
+
+        foreach ($taskSpec in @(
+            @{ Path = '\NVIDIA\'; Name = 'NvTmMon'; DisplayName = 'NVIDIA telemetry monitor task' },
+            @{ Path = '\NVIDIA\'; Name = 'NvTmRep'; DisplayName = 'NVIDIA telemetry reporting task' },
+            @{ Path = '\NVIDIA\'; Name = 'NvProfileUpdaterDaily'; DisplayName = 'NVIDIA profile updater (daily)' },
+            @{ Path = '\NVIDIA\'; Name = 'NvProfileUpdaterOnLogon'; DisplayName = 'NVIDIA profile updater (logon)' }
+        )) {
+            Disable-ScheduledTaskIfPresent -TaskPath $taskSpec.Path -TaskName $taskSpec.Name -DisplayName $taskSpec.DisplayName | Out-Null
+        }
+
+        $cameraToolCandidates = @(
+            (Join-Path $script:ProgramFilesRoot 'NVIDIA Corporation\Ansel\Tools\NvCameraEnable.exe'),
+            (Join-Path $script:ProgramFilesRoot 'NVIDIA Corporation\Ansel\NvCameraEnable.exe')
+        )
+        $cameraToolPath = $cameraToolCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if ($null -eq $cameraToolPath) {
+            $cameraToolPath = Get-ChildItem -Path (Join-Path $script:ProgramFilesRoot 'NVIDIA Corporation') -Filter 'NvCameraEnable.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName -First 1
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($cameraToolPath)) {
+            $cameraDisableResult = Invoke-NativeCommandWithTimeout `
+                -FilePath $cameraToolPath `
+                -ArgumentList @('off') `
+                -TimeoutSeconds 20 `
+                -Description 'NVIDIA Ansel disable'
+
+            if ([int]$cameraDisableResult.ExitCode -eq 0) {
+                Write-Log 'NVIDIA Ansel/NvCamera overlay tooling disabled.' 'INFO'
+            } else {
+                Write-Log "NVIDIA camera utility returned exit code $($cameraDisableResult.ExitCode): $($cameraDisableResult.Output)" 'WARN'
+                return (New-TaskWarningResult -Reason 'NVIDIA overlay utility reported a failure')
+            }
+        } else {
+            Write-Log 'NVIDIA camera utility was not found. Telemetry service/task disables were still applied.' 'INFO'
+        }
+
+        return $true
+    } catch {
+        Write-Log "Failed to disable NVIDIA telemetry or overlay tooling: $($_.Exception.Message)" 'WARN'
+        return (New-TaskWarningResult -Reason 'NVIDIA telemetry/overlay disable failed unexpectedly')
     }
 }
 
@@ -745,6 +886,7 @@ function Invoke-ApplyGraphicsSchedulingTweaks {
         Set-DirectXGlobalPreferenceValue -Key 'VRROptimizeEnable' -Value '1'
         Set-DirectXGlobalPreferenceValue -Key 'SwapEffectUpgradeEnable' -Value '1'
         Set-DirectXGlobalPreferenceValue -Key 'AutoHDREnable' -Value '0'
+        $nvidiaOverlayResult = Invoke-DisableNvidiaTelemetryAndOverlayFeatures
 
         Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR' -Name 'AllowGameDVR' -Value 0 -Type DWord
         Set-DwordBatchForAllUsers -Settings @(
@@ -766,7 +908,7 @@ function Invoke-ApplyGraphicsSchedulingTweaks {
         }
         Write-Log 'Resizable BAR auditing is handled separately because BAR sizing is negotiated by firmware and display drivers on supported hardware.' 'INFO'
         Write-Log 'Graphics scheduling and frame pacing tweaks applied.' 'SUCCESS'
-        return $true
+        return (Join-TaskResults -TaskResults @($nvidiaOverlayResult) -WarningReason 'Graphics scheduling tweaks completed with warnings')
     } catch {
         Write-Log "Error applying graphics scheduling tweaks: $_" 'ERROR'
         return $false
@@ -975,6 +1117,7 @@ function Invoke-ApplyInputAndMaintenanceTweaks {
         Write-Log 'Applying input latency and maintenance tweaks...' 'INFO'
         $maintenancePath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'
         $ctfmonResult = Invoke-DisableCtfmonInterception
+        $hpetDeviceResult = Invoke-DisableHpetDeviceBestEffort
 
         Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseSpeed' -Value '0'
         Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseThreshold1' -Value '0'
@@ -992,7 +1135,7 @@ function Invoke-ApplyInputAndMaintenanceTweaks {
 
         Invoke-BCDEditBestEffort -ArgumentList @('/timeout', '0') -Description 'Boot manager timeout set to 0 seconds.' | Out-Null
         Invoke-BCDEditBestEffort -ArgumentList @('/deletevalue', 'useplatformclock') -Description 'HPET platform clock override removed.' | Out-Null
-        Invoke-BCDEditBestEffort -ArgumentList @('/deletevalue', 'tscsyncpolicy') -Description 'TSC sync policy override removed.' | Out-Null
+        Invoke-BCDEditBestEffort -ArgumentList @('/set', 'tscsyncpolicy', 'Enhanced') -Description 'TSC sync policy set to Enhanced.' | Out-Null
 
         if ($script:IsHyperVGuest) {
             Write-Log 'Skipping useplatformtick/disabledynamictick on a Hyper-V guest.' 'INFO'
@@ -1002,7 +1145,7 @@ function Invoke-ApplyInputAndMaintenanceTweaks {
         }
 
         Write-Log 'Input latency and maintenance tweaks applied.' 'SUCCESS'
-        return (Join-TaskResults -TaskResults @($ctfmonResult) -WarningReason 'Input latency and maintenance tweaks completed with warnings')
+        return (Join-TaskResults -TaskResults @($ctfmonResult, $hpetDeviceResult) -WarningReason 'Input latency and maintenance tweaks completed with warnings')
     } catch {
         Write-Log "Error applying input and maintenance tweaks: $_" 'ERROR'
         return $false
@@ -1495,7 +1638,7 @@ function Invoke-InstallTimerResolutionService {
     param()
 
     try {
-        Write-Log 'Installing timer resolution service...' 'INFO'
+        Write-Log 'Installing timer resolution and standby-list purge service...' 'INFO'
 
         $serviceName = 'SetTimerResolutionService'
         $displayName = 'Set Timer Resolution Service'
@@ -1567,6 +1710,7 @@ namespace HunterTimerResolution
             base.OnStart(args);
             ReadProcessList();
             NtQueryTimerResolution(out this.MinimumResolution, out this.MaximumResolution, out this.DefaultResolution);
+            this.standbyPurgeTimer = new Timer(this.PurgeStandbyListCallback, null, StandbyPurgeIntervalMs, StandbyPurgeIntervalMs);
             if (null != this.EventLog)
                 try { this.EventLog.WriteEntry(String.Format("Minimum={0}; Maximum={1}; Default={2}; Processes='{3}'", this.MinimumResolution, this.MaximumResolution, this.DefaultResolution, null != this.ProcessesNames ? String.Join("','", this.ProcessesNames) : "")); }
                 catch {}
@@ -1601,11 +1745,18 @@ namespace HunterTimerResolution
             {
                 this.startWatch.Stop();
             }
+            if (null != this.standbyPurgeTimer)
+            {
+                this.standbyPurgeTimer.Dispose();
+                this.standbyPurgeTimer = null;
+            }
 
             base.OnStop();
         }
 
         ManagementEventWatcher startWatch;
+        Timer standbyPurgeTimer;
+        const int StandbyPurgeIntervalMs = 300000;
         void startWatch_EventArrived(object sender, EventArrivedEventArgs e)
         {
             try
@@ -1684,11 +1835,41 @@ namespace HunterTimerResolution
         static extern int NtSetTimerResolution(uint DesiredResolution, bool SetResolution, out uint CurrentResolution);
         [DllImport("ntdll.dll", SetLastError = true)]
         static extern int NtQueryTimerResolution(out uint MinimumResolution, out uint MaximumResolution, out uint ActualResolution);
+        [DllImport("ntdll.dll", SetLastError = true)]
+        static extern int NtSetSystemInformation(int SystemInformationClass, ref int SystemInformation, int SystemInformationLength);
 
         uint DefaultResolution = 0;
         uint MinimumResolution = 0;
         uint MaximumResolution = 0;
         long processCounter = 0;
+        const int SystemMemoryListInformation = 80;
+        const int MemoryPurgeStandbyList = 4;
+
+        void PurgeStandbyList()
+        {
+            int command = MemoryPurgeStandbyList;
+            NtSetSystemInformation(SystemMemoryListInformation, ref command, sizeof(int));
+            if (null != this.EventLog)
+                try { this.EventLog.WriteEntry("Standby list purged."); }
+                catch {}
+        }
+
+        void PurgeStandbyListCallback(object state)
+        {
+            try
+            {
+                if (null == this.ProcessesNames || Interlocked.Read(ref this.processCounter) > 0)
+                {
+                    PurgeStandbyList();
+                }
+            }
+            catch (Exception ee)
+            {
+                if (null != this.EventLog)
+                    try { this.EventLog.WriteEntry(ee.ToString(), EventLogEntryType.Warning); }
+                    catch {}
+            }
+        }
 
         void SetMaximumResolution()
         {
@@ -1697,6 +1878,7 @@ namespace HunterTimerResolution
             {
                 uint actual = 0;
                 NtSetTimerResolution(this.MaximumResolution, true, out actual);
+                PurgeStandbyList();
                 if (null != this.EventLog)
                     try { this.EventLog.WriteEntry(String.Format("Actual resolution = {0}", actual)); }
                     catch {}
@@ -1791,7 +1973,7 @@ namespace HunterTimerResolution
         }
 
         New-Service -Name $serviceName -BinaryPathName ('"{0}"' -f $exePath) -DisplayName $displayName -StartupType Automatic -ErrorAction Stop | Out-Null
-        Invoke-NativeCommandChecked -FilePath 'sc.exe' -ArgumentList @('description', $serviceName, 'Mirrors the WinSux timer-resolution service and holds the system timer at maximum resolution, or only while configured processes are running.') | Out-Null
+        Invoke-NativeCommandChecked -FilePath 'sc.exe' -ArgumentList @('description', $serviceName, 'Mirrors the WinSux timer-resolution service, holds the system timer at maximum resolution, and periodically purges the standby list while active.') | Out-Null
         Start-Service -Name $serviceName -ErrorAction Stop
 
         Enable-GlobalTimerResolutionRequests | Out-Null
@@ -1809,7 +1991,7 @@ namespace HunterTimerResolution
 
         $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
         if ($null -ne $svc -and $svc.Status -eq 'Running') {
-            Write-Log "Timer resolution service installed and running ($exePath)." 'SUCCESS'
+            Write-Log "Timer resolution and standby-list purge service installed and running ($exePath)." 'SUCCESS'
             return $true
         } else {
             Write-Log "Timer resolution service did not reach Running state after installation." 'ERROR'
@@ -1866,6 +2048,24 @@ function Set-NetAdapterAdvancedDisplayValueIfPresent {
     }
 }
 
+function Set-NetAdapterAdvancedDisplayValueFromCandidatesIfPresent {
+    param(
+        [Parameter(Mandatory)][string]$AdapterName,
+        [Parameter(Mandatory)][string]$DisplayName,
+        [Parameter(Mandatory)][string[]]$DisplayValues,
+        [string]$SettingLabel = $DisplayName
+    )
+
+    foreach ($displayValue in @($DisplayValues | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })) {
+        if (Set-NetAdapterAdvancedDisplayValueIfPresent -AdapterName $AdapterName -DisplayName $DisplayName -DisplayValue $displayValue -SettingLabel $SettingLabel) {
+            return $true
+        }
+    }
+
+    Write-Log "No supported ${SettingLabel} value was accepted on NIC ${AdapterName}. Tried: $(@($DisplayValues) -join ', ')." 'INFO'
+    return $false
+}
+
 function Invoke-ApplyTcpOptimizerTutorialProfile {
     try {
         Invoke-CollectCompletedExternalAssetPrefetchJobs
@@ -1903,16 +2103,17 @@ function Invoke-ApplyTcpOptimizerTutorialProfile {
         Invoke-NativeCommandChecked -FilePath 'netsh.exe' -ArgumentList @('int', 'tcp', 'set', 'supplemental', 'template=Internet', 'congestionprovider=ctcp') | Out-Null
         # RSS: Enabled
         Invoke-NativeCommandChecked -FilePath 'netsh.exe' -ArgumentList @('int', 'tcp', 'set', 'global', 'rss=enabled') | Out-Null
-        # RSC: Enabled
+        # RSC: Disabled
         foreach ($adapter in $activeAdapters) {
             try {
-                Enable-NetAdapterRsc -Name $adapter.Name -ErrorAction Stop
+                Disable-NetAdapterRsc -Name $adapter.Name -ErrorAction Stop
             } catch {
-                Write-Log "Failed to enable RSC on $($adapter.Name): $_" 'WARN'
+                Write-Log "Failed to disable RSC on $($adapter.Name): $_" 'WARN'
             }
         }
         foreach ($adapter in $activeAdapters) {
             Set-NetAdapterAdvancedDisplayValueIfPresent -AdapterName $adapter.Name -DisplayName 'Interrupt Moderation' -DisplayValue 'Disabled' -SettingLabel 'Interrupt Moderation' | Out-Null
+            Set-NetAdapterAdvancedDisplayValueFromCandidatesIfPresent -AdapterName $adapter.Name -DisplayName 'Interrupt Moderation Rate' -DisplayValues @('Off', 'Disabled', 'Low Latency') -SettingLabel 'Interrupt Moderation Rate' | Out-Null
             Set-NetAdapterAdvancedDisplayValueIfPresent -AdapterName $adapter.Name -DisplayName 'Flow Control' -DisplayValue 'Disabled' -SettingLabel 'Flow Control' | Out-Null
         }
         # ECN: Disabled
@@ -1997,8 +2198,8 @@ function Invoke-ApplyTcpOptimizerTutorialProfile {
         $sysProfile = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
         $gamesTaskPath = Join-Path $sysProfile 'Tasks\Games'
         $priorityControlPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl'
-        # System Responsiveness: reserve 10% CPU for low-priority work
-        Set-RegistryValue -Path $sysProfile -Name 'SystemResponsiveness' -Value 10 -Type DWord
+        # System Responsiveness: 0
+        Set-RegistryValue -Path $sysProfile -Name 'SystemResponsiveness' -Value 0 -Type DWord
         # Requested scheduler overrides
         Set-RegistryValue -Path $gamesTaskPath -Name 'Scheduling Category' -Value 'High' -Type String
         Set-RegistryValue -Path $gamesTaskPath -Name 'SFIO Priority' -Value 'High' -Type String

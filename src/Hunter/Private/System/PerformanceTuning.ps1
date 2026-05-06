@@ -1,3 +1,40 @@
+function Get-TargetPageFilePathByPolicy {
+    param([int]$MinimumFreeSpaceMegabytes = 0)
+
+    $systemDrive = $env:SystemDrive.TrimEnd('\')
+    $defaultPageFilePath = '{0}\pagefile.sys' -f $systemDrive
+    if ([string]::IsNullOrWhiteSpace($script:PagefileDriveOverride)) {
+        return $defaultPageFilePath
+    }
+
+    $requestedDrive = ([string]$script:PagefileDriveOverride).Trim().TrimEnd('\')
+    if ($requestedDrive -notmatch '^[A-Za-z]:$') {
+        Write-Log "Pagefile drive override '$($script:PagefileDriveOverride)' is invalid. Expected a drive letter like D:. Falling back to ${systemDrive}." 'WARN'
+        return $defaultPageFilePath
+    }
+
+    try {
+        $logicalDisk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter ("DeviceID='{0}'" -f $requestedDrive) -ErrorAction Stop
+        if ($null -eq $logicalDisk -or [int]$logicalDisk.DriveType -ne 3) {
+            Write-Log "Pagefile drive override $requestedDrive is not a fixed local drive. Falling back to ${systemDrive}." 'WARN'
+            return $defaultPageFilePath
+        }
+
+        if ($MinimumFreeSpaceMegabytes -gt 0 -and $null -ne $logicalDisk.FreeSpace) {
+            $requiredBytes = [uint64]$MinimumFreeSpaceMegabytes * 1MB
+            if ([uint64]$logicalDisk.FreeSpace -lt $requiredBytes) {
+                Write-Log "Pagefile drive override $requestedDrive does not have enough free space for a ${MinimumFreeSpaceMegabytes} MB pagefile. Falling back to ${systemDrive}." 'WARN'
+                return $defaultPageFilePath
+            }
+        }
+
+        return ('{0}\pagefile.sys' -f $requestedDrive)
+    } catch {
+        Write-Log "Failed to validate pagefile drive override ${requestedDrive}: $($_.Exception.Message). Falling back to ${systemDrive}." 'WARN'
+        return $defaultPageFilePath
+    }
+}
+
 function Set-LargeSystemCacheByRamPolicy {
     param(
         [string]$Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
@@ -15,7 +52,7 @@ function Set-FixedPageFileByRamPolicy {
             return $false
         }
 
-        $pageFilePath = '{0}\pagefile.sys' -f $env:SystemDrive.TrimEnd('\')
+        $pageFilePath = Get-TargetPageFilePathByPolicy -MinimumFreeSpaceMegabytes $targetPageFileSizeMb
         $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
         if ($null -ne $computerSystem -and [bool]$computerSystem.AutomaticManagedPagefile) {
             Set-CimInstance -InputObject $computerSystem -Property @{ AutomaticManagedPagefile = $false } -ErrorAction Stop | Out-Null

@@ -15,12 +15,12 @@ try {
 
 $script:HunterSourceRoot = $null
 $script:HunterReleaseChannel = 'preview'
-$script:HunterReleaseVersion = '2.0.3-preview.1'
-$script:HunterBootstrapRevision = 'aaf08429d58185cf1d34ddcbecc947c1fa7f2e89'
+$script:HunterReleaseVersion = '2.0.3-preview.2'
+$script:HunterBootstrapRevision = '895310ede11173020d723508b16bb80d85060333'
 $script:HunterRemoteRevision = $script:HunterBootstrapRevision
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = 'd03d2ac3a96dc7d26a58fee90c49a0f25ab2942980db85cc6cb025fb4c491207'
+$script:BootstrapLoaderSha256 = '2a85192005a114101a77e2700ba4ef32c45fa99dc544757cf634f3c0d77f6150'
 
 $bootstrapLoaderPath = $null
 $canUseLocalHunterPrivateLayers = $false
@@ -130,9 +130,17 @@ function Invoke-Main {
         Opt in to Hunter's Teredo-disable task. By default Hunter now preserves
         Teredo because some gaming and VPN scenarios still rely on it.
 
+    .PARAMETER DisableCpuMitigations
+        Opt in to disabling Spectre/Meltdown speculative-execution mitigations
+        through FeatureSettingsOverride/FeatureSettingsOverrideMask.
+
     .PARAMETER DisableHags
         Opt out of Hunter's default HAGS enable policy and apply the legacy
         HAGS disable override instead.
+
+    .PARAMETER PagefileDrive
+        Optional fixed-drive letter (for example `D:`) to host `pagefile.sys`
+        instead of the system drive.
     #>
 
     param(
@@ -151,7 +159,11 @@ function Invoke-Main {
 
         [switch]$DisableTeredo,
 
-        [switch]$DisableHags
+        [switch]$DisableCpuMitigations,
+
+        [switch]$DisableHags,
+
+        [string]$PagefileDrive = ''
     )
 
     $script:StrictMode = [bool]$Strict
@@ -168,9 +180,11 @@ function Invoke-Main {
     $script:DisableTeredoRequested = [bool]$DisableTeredo -or $env:HUNTER_DISABLE_TEREDO -eq '1'
     $script:TeredoPreferenceResolved = $false
     $script:TeredoDisableResolvedValue = $false
+    $script:DisableCpuMitigationsRequested = [bool]$DisableCpuMitigations -or $env:HUNTER_DISABLE_CPU_MITIGATIONS -eq '1'
     $script:DisableHagsRequested = [bool]$DisableHags -or $env:HUNTER_DISABLE_HAGS -eq '1'
     $script:HagsPreferenceResolved = $false
     $script:HagsDisableResolvedValue = $false
+    $script:PagefileDriveOverride = if ([string]::IsNullOrWhiteSpace($PagefileDrive)) { $null } else { $PagefileDrive.Trim() }
     $script:RunInfrastructureIssues = @()
     $script:ProgressUiIssueLogged = $false
     $script:PackagePipelineBlocked = $false
@@ -196,7 +210,7 @@ function Invoke-Main {
         Migrate-HunterStateToProgramData
         $script:IsAutomationRun = [bool]$AutomationSafe -or $env:GITHUB_ACTIONS -eq 'true' -or $env:HUNTER_AUTOMATION_SAFE -eq '1'
         Initialize-HunterRollbackState -Mode $Mode
-        Save-HunterRunConfiguration -Mode $Mode -SkipTaskIds $script:SkipTaskIds -CustomAppsListPath $(Get-HunterEffectiveCustomAppsListPath)
+        Save-HunterRunConfiguration -Mode $Mode -SkipTaskIds $script:SkipTaskIds -CustomAppsListPath $(Get-HunterEffectiveCustomAppsListPath) -PagefileDrive ([string]$script:PagefileDriveOverride)
         $buildContext = Get-WindowsBuildContext
         $editionContext = Get-WindowsEditionContext
         $editionSummary = (@(
@@ -272,6 +286,12 @@ function Invoke-Main {
         }
         if (-not [string]::IsNullOrWhiteSpace($script:CustomAppsListPathOverride)) {
             Write-Log "Custom apps list: $($script:CustomAppsListPathOverride)" 'INFO'
+        }
+        if ($script:DisableCpuMitigationsRequested) {
+            Write-Log 'Speculative-execution mitigation override requested explicitly.' 'WARN'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($script:PagefileDriveOverride)) {
+            Write-Log "Pagefile target override: $($script:PagefileDriveOverride)" 'INFO'
         }
 
         Write-Log ""
@@ -406,7 +426,9 @@ $scriptSkipTasks = @()
 $scriptCustomAppsListPath = $null
 $scriptDisableIPv6 = $false
 $scriptDisableTeredo = $false
+$scriptDisableCpuMitigations = $false
 $scriptDisableHags = $false
+$scriptPagefileDrive = $null
 for ($i = 0; $i -lt $args.Count; $i++) {
     if ($args[$i] -eq '-Mode' -and ($i + 1) -lt $args.Count) {
         $scriptMode = $args[$i + 1]
@@ -436,8 +458,14 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     elseif ($args[$i] -eq '-DisableTeredo') {
         $scriptDisableTeredo = $true
     }
+    elseif ($args[$i] -eq '-DisableCpuMitigations') {
+        $scriptDisableCpuMitigations = $true
+    }
     elseif ($args[$i] -eq '-DisableHags') {
         $scriptDisableHags = $true
+    }
+    elseif ($args[$i] -eq '-PagefileDrive' -and ($i + 1) -lt $args.Count) {
+        $scriptPagefileDrive = $args[$i + 1]
     }
 }
 
@@ -447,7 +475,7 @@ if (-not [string]::IsNullOrWhiteSpace($scriptLogPath)) {
 }
 
 # Invoke main orchestrator
-Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -AutomationSafe:$scriptAutomationSafe -SkipTask $scriptSkipTasks -CustomAppsListPath $scriptCustomAppsListPath -DisableIPv6:$scriptDisableIPv6 -DisableTeredo:$scriptDisableTeredo -DisableHags:$scriptDisableHags
+Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -AutomationSafe:$scriptAutomationSafe -SkipTask $scriptSkipTasks -CustomAppsListPath $scriptCustomAppsListPath -DisableIPv6:$scriptDisableIPv6 -DisableTeredo:$scriptDisableTeredo -DisableCpuMitigations:$scriptDisableCpuMitigations -DisableHags:$scriptDisableHags -PagefileDrive $scriptPagefileDrive
 } catch {
     $crashLogPath = Join-Path ([System.IO.Path]::GetTempPath()) 'hunter-crash.txt'
     $crashTimestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'

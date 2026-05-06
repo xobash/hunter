@@ -77,8 +77,14 @@ function Register-ResumeTask {
         if ($script:DisableTeredoRequested) {
             $resumeActionArguments += ' -DisableTeredo'
         }
+        if ($script:DisableCpuMitigationsRequested) {
+            $resumeActionArguments += ' -DisableCpuMitigations'
+        }
         if ($script:DisableHagsRequested) {
             $resumeActionArguments += ' -DisableHags'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($script:PagefileDriveOverride)) {
+            $resumeActionArguments += " -PagefileDrive `"$($script:PagefileDriveOverride)`""
         }
 
         $action = New-ScheduledTaskAction -Execute 'powershell.exe' `

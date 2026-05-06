@@ -810,7 +810,8 @@ function Save-HunterRunConfiguration {
     param(
         [Parameter(Mandatory)][string]$Mode,
         [string[]]$SkipTaskIds = @(),
-        [string]$CustomAppsListPath = ''
+        [string]$CustomAppsListPath = '',
+        [string]$PagefileDrive = ''
     )
 
     if ([string]::IsNullOrWhiteSpace($script:RunConfigurationPath)) {
@@ -828,9 +829,11 @@ function Save-HunterRunConfiguration {
         AutomationSafe      = [bool]$script:IsAutomationRun
         DisableIPv6         = [bool]$script:DisableIPv6Requested
         DisableTeredo       = [bool]$script:DisableTeredoRequested
+        DisableCpuMitigations = [bool]$script:DisableCpuMitigationsRequested
         DisableHags         = [bool]$script:DisableHagsRequested
         SkipTaskIds         = @($SkipTaskIds | Select-Object -Unique)
         CustomAppsListPath  = [string]$CustomAppsListPath
+        PagefileDrive       = [string]$PagefileDrive
         ComputerName        = [string]$env:COMPUTERNAME
         UserName            = [string]$env:USERNAME
     }

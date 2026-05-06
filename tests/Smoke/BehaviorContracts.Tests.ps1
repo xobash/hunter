@@ -80,6 +80,21 @@ Describe 'Behavior contracts' {
         $nativeSystemSource | Should -Match 'Invoke-NativeCommandWithTimeout'
     }
 
+    It 'temporarily restores Windows Modules Installer before optional-feature servicing' {
+        $nativeSystemSource | Should -Match 'function Invoke-WithOptionalFeatureServicingPrerequisites'
+        $nativeSystemSource | Should -Match "TrustedInstaller"
+        $hardwareSource | Should -Match 'Invoke-WithOptionalFeatureServicingPrerequisites'
+    }
+
+    It 'keeps the speculative-execution override opt-in and the latency/network overrides aligned' {
+        $hardwareSource | Should -Match 'FeatureSettingsOverride'
+        $hardwareSource | Should -Match 'FeatureSettingsOverrideMask'
+        $hardwareSource | Should -Match 'Resolve-DisableCpuMitigationsPreference'
+        $hardwareSource | Should -Match 'Disable-NetAdapterRsc'
+        $hardwareSource | Should -Match "SystemResponsiveness' -Value 0"
+        $hardwareSource | Should -Match "tscsyncpolicy', 'Enhanced'"
+    }
+
     It 'suppresses the text input service and preserves REG_EXPAND_SZ verification for the advanced redirect' {
         $hardwareSource | Should -Match 'InputServiceEnabled'
         $hardwareSource | Should -Match 'InputServiceEnabledForCCI'

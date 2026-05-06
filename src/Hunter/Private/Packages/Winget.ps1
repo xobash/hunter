@@ -338,3 +338,13 @@ function Resolve-DisableHagsPreference {
     $script:HagsDisableResolvedValue = $false
     return [bool]$script:HagsDisableResolvedValue
 }
+
+function Resolve-DisableCpuMitigationsPreference {
+    if ([bool]$script:DisableCpuMitigationsRequested -or $env:HUNTER_DISABLE_CPU_MITIGATIONS -eq '1') {
+        $script:DisableCpuMitigationsRequested = $true
+        return $true
+    }
+
+    Write-Log 'Skipping speculative-execution mitigation override by default. Pass -DisableCpuMitigations or set HUNTER_DISABLE_CPU_MITIGATIONS=1 to opt in.' 'INFO'
+    return $false
+}
