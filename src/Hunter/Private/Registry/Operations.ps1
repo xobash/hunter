@@ -71,14 +71,32 @@ function Test-RegistryValue {
         if (-not (Test-Path $Path)) {
             return $false
         }
+        $registryKey = Get-Item -Path $Path -ErrorAction Stop
+        $valueName = [string]$Name
+        $existingValueNames = @($registryKey.GetValueNames())
+        if ($existingValueNames -notcontains $valueName) {
+            return $false
+        }
+
         $prop = Get-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue
         if ($null -eq $prop) {
             return $false
         }
+
         if ($null -eq $ExpectedValue) {
             return $true
         }
-        return (Test-HunterValueEquals -ActualValue $prop.$Name -ExpectedValue $ExpectedValue)
+
+        if (Test-HunterValueEquals -ActualValue $prop.$Name -ExpectedValue $ExpectedValue) {
+            return $true
+        }
+
+        if ($registryKey.GetValueKind($valueName) -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) {
+            $rawValue = $registryKey.GetValue($valueName, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            return (Test-HunterValueEquals -ActualValue $rawValue -ExpectedValue $ExpectedValue)
+        }
+
+        return $false
     } catch {
         return $false
     }

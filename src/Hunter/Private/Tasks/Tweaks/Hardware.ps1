@@ -916,10 +916,65 @@ function Invoke-ApplyUiDesktopPerformanceTweaks {
     }
 }
 
+function Invoke-DisableCtfmonInterception {
+    try {
+        Write-Log 'Applying CTFMON input-service suppression tweaks...' 'INFO'
+
+        $inputServicePath = 'HKLM:\SOFTWARE\Microsoft\Input'
+        $textInputServiceParametersPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\TextInputManagementService\Parameters'
+        $defaultTextInputServiceDll = '%SystemRoot%\System32\TabSvc.dll'
+        $patchedTextInputServiceDll = '%SystemRoot%\System32\MSCTF.DLL'
+        $defaultTextInputServiceDllExpanded = Join-Path $script:WindowsRoot 'System32\TabSvc.dll'
+        $patchedTextInputServiceDllExpanded = Join-Path $script:WindowsRoot 'System32\MSCTF.DLL'
+
+        Set-RegistryValue -Path $inputServicePath -Name 'InputServiceEnabled' -Value 0 -Type DWord | Out-Null
+        Set-RegistryValue -Path $inputServicePath -Name 'InputServiceEnabledForCCI' -Value 0 -Type DWord | Out-Null
+
+        if (-not (Test-Path $textInputServiceParametersPath)) {
+            Write-Log 'TextInputManagementService parameters path not present. Skipping advanced ServiceDll redirect.' 'INFO'
+            return $true
+        }
+
+        $serviceDllSnapshot = Get-HunterRegistryValueSnapshot -Path $textInputServiceParametersPath -Name 'ServiceDll'
+        if (-not [bool]$serviceDllSnapshot.Exists) {
+            Write-Log 'TextInputManagementService ServiceDll value not present. Skipping advanced redirect.' 'INFO'
+            return $true
+        }
+
+        $currentServiceDll = [string]$serviceDllSnapshot.Value
+        $serviceDllAlreadyRedirected = (
+            [string]::Equals($currentServiceDll, $patchedTextInputServiceDll, [System.StringComparison]::OrdinalIgnoreCase) -or
+            [string]::Equals($currentServiceDll, $patchedTextInputServiceDllExpanded, [System.StringComparison]::OrdinalIgnoreCase)
+        )
+        if ($serviceDllAlreadyRedirected) {
+            Write-Log 'TextInputManagementService ServiceDll already redirected to MSCTF.DLL.' 'INFO'
+            return $true
+        }
+
+        $serviceDllMatchesDefault = (
+            [string]::Equals($currentServiceDll, $defaultTextInputServiceDll, [System.StringComparison]::OrdinalIgnoreCase) -or
+            [string]::Equals($currentServiceDll, $defaultTextInputServiceDllExpanded, [System.StringComparison]::OrdinalIgnoreCase)
+        )
+        if (-not $serviceDllMatchesDefault) {
+            Write-Log "TextInputManagementService ServiceDll is '$currentServiceDll'; expected '$defaultTextInputServiceDll'. Skipping advanced redirect." 'WARN'
+            return (New-TaskWarningResult -Reason 'TextInputManagementService ServiceDll did not match the expected TabSvc.dll baseline')
+        }
+
+        Set-RegistryValue -Path $textInputServiceParametersPath -Name 'ServiceDll' -Value $patchedTextInputServiceDll -Type ExpandString | Out-Null
+        Stop-ServiceIfPresent -Name 'TextInputManagementService'
+        Write-Log 'TextInputManagementService ServiceDll redirected from TabSvc.dll to MSCTF.DLL.' 'INFO'
+        return $true
+    } catch {
+        Write-Log "Error applying CTFMON input-service suppression tweaks: $_" 'ERROR'
+        return $false
+    }
+}
+
 function Invoke-ApplyInputAndMaintenanceTweaks {
     try {
         Write-Log 'Applying input latency and maintenance tweaks...' 'INFO'
         $maintenancePath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'
+        $ctfmonResult = Invoke-DisableCtfmonInterception
 
         Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseSpeed' -Value '0'
         Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseThreshold1' -Value '0'
@@ -947,7 +1002,7 @@ function Invoke-ApplyInputAndMaintenanceTweaks {
         }
 
         Write-Log 'Input latency and maintenance tweaks applied.' 'SUCCESS'
-        return $true
+        return (Join-TaskResults -TaskResults @($ctfmonResult) -WarningReason 'Input latency and maintenance tweaks completed with warnings')
     } catch {
         Write-Log "Error applying input and maintenance tweaks: $_" 'ERROR'
         return $false

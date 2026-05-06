@@ -14,6 +14,7 @@ Describe 'Behavior contracts' {
         $hardwareSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Hardware.ps1') -Raw -ErrorAction Stop
         $interactionSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/System/Interaction.ps1') -Raw -ErrorAction Stop
         $nativeSystemSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Infrastructure/NativeSystem.ps1') -Raw -ErrorAction Stop
+        $registryOpsSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Registry/Operations.ps1') -Raw -ErrorAction Stop
         $userSetupSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Core/UserSetup.ps1') -Raw -ErrorAction Stop
     }
 
@@ -77,6 +78,16 @@ Describe 'Behavior contracts' {
         $nativeSystemSource | Should -Not -Match 'Disable-WindowsOptionalFeature\s+-Online'
         $nativeSystemSource | Should -Match 'dism\.exe'
         $nativeSystemSource | Should -Match 'Invoke-NativeCommandWithTimeout'
+    }
+
+    It 'suppresses the text input service and preserves REG_EXPAND_SZ verification for the advanced redirect' {
+        $hardwareSource | Should -Match 'InputServiceEnabled'
+        $hardwareSource | Should -Match 'InputServiceEnabledForCCI'
+        $hardwareSource | Should -Match 'TextInputManagementService\\Parameters'
+        $hardwareSource | Should -Match 'TabSvc\.dll'
+        $hardwareSource | Should -Match 'MSCTF\.DLL'
+        $registryOpsSource | Should -Match 'DoNotExpandEnvironmentNames'
+        $registryOpsSource | Should -Match 'RegistryValueKind\]::ExpandString'
     }
 
     It 'requires explicit user consent for standard user creation and autologin' {

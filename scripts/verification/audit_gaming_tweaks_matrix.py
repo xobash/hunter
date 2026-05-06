@@ -218,6 +218,14 @@ CHECKS: tuple[Check, ...] = (
         EvidenceNeedle('src/Hunter/Private/Tasks/Tweaks/Hardware.ps1', "'MouseSpeed' -Value '0'"),
         EvidenceNeedle('src/Hunter/Private/Tasks/Tweaks/Hardware.ps1', "'MouseThreshold1' -Value '0'"),
     )),
+    Check('Tier 8', 'Disable CTFMON input-service interception', (
+        EvidenceNeedle('src/Hunter/Private/Tasks/Tweaks/Hardware.ps1', 'InputServiceEnabled'),
+        EvidenceNeedle('src/Hunter/Private/Tasks/Tweaks/Hardware.ps1', 'InputServiceEnabledForCCI'),
+    )),
+    Check('Tier 8', 'Redirect TextInputManagementService ServiceDll', (
+        EvidenceNeedle('src/Hunter/Private/Tasks/Tweaks/Hardware.ps1', 'TextInputManagementService\\Parameters'),
+        EvidenceNeedle('src/Hunter/Private/Tasks/Tweaks/Hardware.ps1', 'MSCTF.DLL'),
+    )),
     Check('Tier 8', 'Disable keyboard repeat filtering', (
         EvidenceNeedle('src/Hunter/Private/Tasks/Tweaks/Hardware.ps1', "Control Panel\\Accessibility\\Keyboard Response' -Name 'Flags' -Value '0'"),
     )),
