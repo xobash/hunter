@@ -778,7 +778,7 @@ function Invoke-DisableHpetDeviceBestEffort {
                 Write-Log "HPET device disabled: $instanceId" 'INFO'
                 $disabledCount++
             } else {
-                Write-Log "Failed to disable HPET device $instanceId: $($disableResult.Output)" 'WARN'
+                Write-Log "Failed to disable HPET device ${instanceId}: $($disableResult.Output)" 'WARN'
                 $failedCount++
             }
         }
