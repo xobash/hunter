@@ -16,11 +16,11 @@ try {
 $script:HunterSourceRoot = $null
 $script:HunterReleaseChannel = 'preview'
 $script:HunterReleaseVersion = '2.0.3-preview.2'
-$script:HunterBootstrapRevision = '78908daac6d58f7b4856455550ef465bc45798bf'
+$script:HunterBootstrapRevision = 'cc5401a66a2e24f6c6b2a2f69b6a2c5ede45d754'
 $script:HunterRemoteRevision = $script:HunterBootstrapRevision
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = 'ab63f753d7e85620b1a70db560d6714ec5b1cf3dc51bb2db76a4e940ed636f70'
+$script:BootstrapLoaderSha256 = '67fb3b1b8bff7c68d32db935fec68b772d284c2b49fec62ec05aadfd46c981f0'
 
 $bootstrapLoaderPath = $null
 $canUseLocalHunterPrivateLayers = $false
