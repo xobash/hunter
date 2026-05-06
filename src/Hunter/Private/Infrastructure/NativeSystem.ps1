@@ -125,13 +125,13 @@ function Get-ServiceRegistryStartType {
 
     try {
         $serviceConfig = Get-ItemProperty -Path $serviceKeyPath -Name 'Start' -ErrorAction Stop
-        return switch ([int]$serviceConfig.Start) {
-            0 { 'Boot' }
-            1 { 'System' }
-            2 { 'Automatic' }
-            3 { 'Manual' }
-            4 { 'Disabled' }
-            default { '' }
+        switch ([int]$serviceConfig.Start) {
+            0 { return 'Boot' }
+            1 { return 'System' }
+            2 { return 'Automatic' }
+            3 { return 'Manual' }
+            4 { return 'Disabled' }
+            default { return '' }
         }
     } catch {
         return ''
