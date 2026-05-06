@@ -7,11 +7,14 @@ Describe 'Behavior contracts' {
         . (Join-Path $repoRoot 'src/Hunter/Private/System/Detection.ps1')
         . (Join-Path $repoRoot 'src/Hunter/Private/Common/PathPolicy.ps1')
         . (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Catalog.ps1')
+        $configSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Bootstrap/Config.ps1') -Raw -ErrorAction Stop
         $cleanupSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Cleanup.ps1') -Raw -ErrorAction Stop
         $copilotSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/OneDriveCopilot.ps1') -Raw -ErrorAction Stop
         $detectionSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/System/Detection.ps1') -Raw -ErrorAction Stop
         $hardwareSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Hardware.ps1') -Raw -ErrorAction Stop
+        $interactionSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/System/Interaction.ps1') -Raw -ErrorAction Stop
         $nativeSystemSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Infrastructure/NativeSystem.ps1') -Raw -ErrorAction Stop
+        $userSetupSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Core/UserSetup.ps1') -Raw -ErrorAction Stop
     }
 
     BeforeEach {
@@ -74,5 +77,17 @@ Describe 'Behavior contracts' {
         $nativeSystemSource | Should -Not -Match 'Disable-WindowsOptionalFeature\s+-Online'
         $nativeSystemSource | Should -Match 'dism\.exe'
         $nativeSystemSource | Should -Match 'Invoke-NativeCommandWithTimeout'
+    }
+
+    It 'requires explicit user consent for standard user creation and autologin' {
+        $configSource | Should -Match '\$script:ConfigureAutologin = \$null'
+        $interactionSource | Should -Match 'function Resolve-CreateLocalUserPreference'
+        $interactionSource | Should -Match "-Title 'Hunter Standard User'"
+        $interactionSource | Should -Match 'Skipping this account also skips autologin'
+        $interactionSource | Should -Match 'function Resolve-ConfigureAutologinPreference'
+        $interactionSource | Should -Match "-Title 'Hunter Autologin'"
+        $interactionSource | Should -Match 'Configure automatic sign-in'
+        $userSetupSource | Should -Match 'Resolve-ConfigureAutologinPreference'
+        $userSetupSource | Should -Match 'Autologin declined by user'
     }
 }

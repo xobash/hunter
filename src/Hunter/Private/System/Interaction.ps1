@@ -65,8 +65,8 @@ function Resolve-CreateLocalUserPreference {
 
     $script:CreateLocalUser = Show-YesNoDialog `
         -Title 'Hunter Standard User' `
-        -Message "Create the standard local 'user' account?`n`nChoose Yes to create (or normalize) the standard local user account that Hunter manages, or No to skip this step. Skipping also disables autologin configuration." `
-        -DefaultToNo $false
+        -Message "Create the standard local 'user' account?`n`nChoose Yes to create (or normalize) the standard local user account that Hunter manages, or No to skip this step. Skipping this account also skips autologin." `
+        -DefaultToNo $true
 
     if ($script:CreateLocalUser) {
         Write-Log 'Standard user creation enabled by user.' 'INFO'
@@ -77,3 +77,31 @@ function Resolve-CreateLocalUserPreference {
     return [bool]$script:CreateLocalUser
 }
 
+function Resolve-ConfigureAutologinPreference {
+    if ($null -ne $script:ConfigureAutologin) {
+        return [bool]$script:ConfigureAutologin
+    }
+
+    if ($script:IsAutomationRun) {
+        $script:ConfigureAutologin = $true
+        return $true
+    }
+
+    if (-not (Resolve-CreateLocalUserPreference)) {
+        $script:ConfigureAutologin = $false
+        return $false
+    }
+
+    $script:ConfigureAutologin = Show-YesNoDialog `
+        -Title 'Hunter Autologin' `
+        -Message "Configure automatic sign-in for the standard local 'user' account?`n`nChoose Yes to configure Sysinternals Autologon for this account, or No to leave Windows sign-in manual." `
+        -DefaultToNo $true
+
+    if ($script:ConfigureAutologin) {
+        Write-Log 'Autologin configuration enabled by user.' 'INFO'
+    } else {
+        Write-Log 'Autologin configuration skipped by user.' 'INFO'
+    }
+
+    return [bool]$script:ConfigureAutologin
+}

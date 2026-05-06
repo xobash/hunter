@@ -242,6 +242,11 @@ function Invoke-ConfigureAutologin {
         return (New-TaskSkipResult -Reason 'Autologin requires the standard user account, which the user declined to create')
     }
 
+    if (-not (Resolve-ConfigureAutologinPreference)) {
+        Write-Log "Autologin declined by user; skipping" 'INFO'
+        return (New-TaskSkipResult -Reason 'Autologin declined by user')
+    }
+
     try {
         $passwordContext = Resolve-HunterLocalUserPassword -UserExists:$true
         if ($null -eq $passwordContext -or [string]::IsNullOrWhiteSpace($passwordContext.Password)) {

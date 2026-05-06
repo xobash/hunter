@@ -9,7 +9,7 @@ function Get-HunterTaskCatalog {
         [pscustomobject]@{ Id = 'preflight-predownload-v2'; Phase = '1'; Handler = { Invoke-PreDownloadInstallers }; Description = 'Start background package downloads and installs' }
         [pscustomobject]@{ Id = 'install-launch-packages-v2'; Phase = '2'; Handler = { Invoke-ParallelInstalls -LaunchOnly }; Description = 'Ensure package installers are running in parallel' }
         [pscustomobject]@{ Id = 'core-local-user-v2'; Phase = '2'; Handler = { Invoke-EnsureLocalStandardUser }; Description = 'Ensure standard local user exists' }
-        [pscustomobject]@{ Id = 'core-autologin-v2'; Phase = '2'; Handler = { Invoke-ConfigureAutologin }; Description = 'Configure autologin for standard user' }
+        [pscustomobject]@{ Id = 'core-autologin-v2'; Phase = '2'; Handler = { Invoke-ConfigureAutologin }; Description = 'Prompt and configure autologin for standard user' }
         [pscustomobject]@{ Id = 'core-dark-mode'; Phase = '2'; Handler = { Invoke-EnableDarkMode }; Description = 'Enable Windows dark mode theme' }
         [pscustomobject]@{ Id = 'core-ultimate-performance'; Phase = '2'; Handler = { Invoke-ActivateUltimatePerformance }; Description = 'Activate Ultimate Performance power plan' }
         [pscustomobject]@{ Id = 'startui-bing-search'; Phase = '3'; Handler = { Invoke-DisableBingStartSearch }; Description = 'Disable Bing search in Start Menu' }
