@@ -43,6 +43,9 @@ Describe 'Wrapper compatibility surface' {
         $disableTeredoParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'DisableTeredo' } | Select-Object -First 1
         $disableCpuMitigationsParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'DisableCpuMitigations' } | Select-Object -First 1
         $disableHagsParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'DisableHags' } | Select-Object -First 1
+        $forceStorageOptimizationParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'ForceStorageOptimization' } | Select-Object -First 1
+        $disableAudioEnhancementsParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'DisableAudioEnhancements' } | Select-Object -First 1
+        $disableSystemSoundsParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'DisableSystemSounds' } | Select-Object -First 1
         $pagefileDriveParameter = $invokeMainParameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'PagefileDrive' } | Select-Object -First 1
 
         $validateSetAttribute = $modeParameter.Attributes | Where-Object {
@@ -53,7 +56,7 @@ Describe 'Wrapper compatibility surface' {
     }
 
     It 'keeps Invoke-Main with the expected parameters' {
-        @($invokeMainParameters.Name.VariablePath.UserPath) -join '|' | Should -BeExactly 'Mode|Strict|AutomationSafe|SkipTask|CustomAppsListPath|DisableIPv6|DisableTeredo|DisableCpuMitigations|DisableHags|PagefileDrive'
+        @($invokeMainParameters.Name.VariablePath.UserPath) -join '|' | Should -BeExactly 'Mode|Strict|AutomationSafe|SkipTask|CustomAppsListPath|DisableIPv6|DisableTeredo|DisableCpuMitigations|DisableHags|ForceStorageOptimization|DisableAudioEnhancements|DisableSystemSounds|PagefileDrive'
     }
 
     It 'keeps Mode defaulted to Execute' {
@@ -73,6 +76,9 @@ Describe 'Wrapper compatibility surface' {
         $disableTeredoParameter.StaticType.Name | Should -BeExactly 'SwitchParameter'
         $disableCpuMitigationsParameter.StaticType.Name | Should -BeExactly 'SwitchParameter'
         $disableHagsParameter.StaticType.Name | Should -BeExactly 'SwitchParameter'
+        $forceStorageOptimizationParameter.StaticType.Name | Should -BeExactly 'SwitchParameter'
+        $disableAudioEnhancementsParameter.StaticType.Name | Should -BeExactly 'SwitchParameter'
+        $disableSystemSoundsParameter.StaticType.Name | Should -BeExactly 'SwitchParameter'
         $pagefileDriveParameter.StaticType.Name | Should -BeExactly 'String'
     }
 
@@ -87,6 +93,9 @@ Describe 'Wrapper compatibility surface' {
         $sourceText | Should -Match "\\$scriptDisableTeredo = \\$false"
         $sourceText | Should -Match "\\$scriptDisableCpuMitigations = \\$false"
         $sourceText | Should -Match "\\$scriptDisableHags = \\$false"
+        $sourceText | Should -Match "\\$scriptForceStorageOptimization = \\$false"
+        $sourceText | Should -Match "\\$scriptDisableAudioEnhancements = \\$false"
+        $sourceText | Should -Match "\\$scriptDisableSystemSounds = \\$false"
         $sourceText | Should -Match "\\$scriptPagefileDrive = \\$null"
     }
 
@@ -101,6 +110,9 @@ Describe 'Wrapper compatibility surface' {
         $sourceText | Should -Match "\$args\[\$i\] -eq '-DisableTeredo'"
         $sourceText | Should -Match "\$args\[\$i\] -eq '-DisableCpuMitigations'"
         $sourceText | Should -Match "\$args\[\$i\] -eq '-DisableHags'"
+        $sourceText | Should -Match "\$args\[\$i\] -eq '-ForceStorageOptimization'"
+        $sourceText | Should -Match "\$args\[\$i\] -eq '-DisableAudioEnhancements'"
+        $sourceText | Should -Match "\$args\[\$i\] -eq '-DisableSystemSounds'"
         $sourceText | Should -Match "\$args\[\$i\] -eq '-PagefileDrive'"
     }
 
@@ -109,7 +121,7 @@ Describe 'Wrapper compatibility surface' {
     }
 
     It 'keeps the wrapper invoking Invoke-Main with parsed arguments' {
-        $sourceText | Should -Match 'Invoke-Main -Mode \$scriptMode -Strict:\$scriptStrict -AutomationSafe:\$scriptAutomationSafe -SkipTask \$scriptSkipTasks -CustomAppsListPath \$scriptCustomAppsListPath -DisableIPv6:\$scriptDisableIPv6 -DisableTeredo:\$scriptDisableTeredo -DisableCpuMitigations:\$scriptDisableCpuMitigations -DisableHags:\$scriptDisableHags -PagefileDrive \$scriptPagefileDrive'
+        $sourceText | Should -Match 'Invoke-Main -Mode \$scriptMode -Strict:\$scriptStrict -AutomationSafe:\$scriptAutomationSafe -SkipTask \$scriptSkipTasks -CustomAppsListPath \$scriptCustomAppsListPath -DisableIPv6:\$scriptDisableIPv6 -DisableTeredo:\$scriptDisableTeredo -DisableCpuMitigations:\$scriptDisableCpuMitigations -DisableHags:\$scriptDisableHags -ForceStorageOptimization:\$scriptForceStorageOptimization -DisableAudioEnhancements:\$scriptDisableAudioEnhancements -DisableSystemSounds:\$scriptDisableSystemSounds -PagefileDrive \$scriptPagefileDrive'
     }
 
     It 'syncs context after starting the progress window' {

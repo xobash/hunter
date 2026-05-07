@@ -8,16 +8,7 @@ function Invoke-CreateRestorePoint {
         Write-Log 'Automation-safe mode enabled; skipping restore point creation.' 'INFO'
         return (New-TaskSkipResult -Reason 'Restore point creation skipped in automation-safe mode')
     }
-
-    $shouldCreateRestorePoint = Show-YesNoDialog `
-        -Title 'Hunter Restore Point' `
-        -Message "Create a Windows System Restore point before Hunter continues?`n`nThis can take several minutes and may stall on some systems.`n`nChoose Yes to create one now, or No to skip this step." `
-        -DefaultToNo $true
-
-    if (-not $shouldCreateRestorePoint) {
-        Write-Log 'Restore point creation skipped by user.' 'INFO'
-        return (New-TaskSkipResult -Reason 'Restore point creation was skipped by the user')
-    }
+    Write-Log 'Interactive run detected; creating a restore point before Hunter continues.' 'INFO'
 
     $restorePointJob = $null
     $restorePointTimeoutSeconds = 300
@@ -191,4 +182,3 @@ function Invoke-PreDownloadInstallers {
         return $false
     }
 }
-

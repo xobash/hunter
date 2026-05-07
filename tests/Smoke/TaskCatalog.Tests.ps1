@@ -121,6 +121,11 @@ Describe 'Task catalog compatibility' {
         @($taskCatalog | Where-Object { $_.Handler -isnot [scriptblock] }).Count | Should -Be 0
     }
 
+    It 'keeps every task risk level populated with a supported value' {
+        @($taskCatalog | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.RiskLevel) }).Count | Should -Be 0
+        @($taskCatalog | Where-Object { [string]$_.RiskLevel -notin @('Low', 'Medium', 'High') }).Count | Should -Be 0
+    }
+
     It 'keeps the engine building tasks from the catalog function' {
         (Get-Content -Path $enginePath -Raw -ErrorAction Stop) | Should -Match 'Get-HunterTaskCatalog'
     }

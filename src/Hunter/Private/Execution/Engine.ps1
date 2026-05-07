@@ -172,13 +172,18 @@ function New-Task {
 
     .PARAMETER Description
         Human-readable description of what the task does
+
+    .PARAMETER RiskLevel
+        Relative risk label used for pre-run execution summaries
     #>
 
     param(
         [string]$TaskId,
         [string]$Phase,
         [scriptblock]$ApplyHandler,
-        [string]$Description = ''
+        [string]$Description = '',
+        [ValidateSet('Low', 'Medium', 'High')]
+        [string]$RiskLevel = 'Low'
     )
 
     return @{
@@ -186,6 +191,7 @@ function New-Task {
         Phase        = $Phase
         ApplyHandler = $ApplyHandler
         Description  = $Description
+        RiskLevel    = $RiskLevel
         Status       = 'Pending'
         Error        = $null
     }
@@ -391,7 +397,8 @@ function Build-Tasks {
                 -TaskId ([string]$taskDefinition.Id) `
                 -Phase ([string]$taskDefinition.Phase) `
                 -ApplyHandler $taskDefinition.Handler `
-                -Description ([string]$taskDefinition.Description)
+                -Description ([string]$taskDefinition.Description) `
+                -RiskLevel ([string]$taskDefinition.RiskLevel)
         }
     )
 

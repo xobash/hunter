@@ -83,6 +83,15 @@ function Register-ResumeTask {
         if ($script:DisableHagsRequested) {
             $resumeActionArguments += ' -DisableHags'
         }
+        if ($script:ForceStorageOptimizationRequested) {
+            $resumeActionArguments += ' -ForceStorageOptimization'
+        }
+        if ($script:DisableAudioEnhancementsRequested) {
+            $resumeActionArguments += ' -DisableAudioEnhancements'
+        }
+        if ($script:DisableSystemSoundsRequested) {
+            $resumeActionArguments += ' -DisableSystemSounds'
+        }
         if (-not [string]::IsNullOrWhiteSpace($script:PagefileDriveOverride)) {
             $resumeActionArguments += " -PagefileDrive `"$($script:PagefileDriveOverride)`""
         }

@@ -31,6 +31,9 @@ function New-HunterContext {
             DisableHagsRequested       = $false
             HagsPreferenceResolved     = $false
             HagsDisableResolvedValue   = $false
+            ForceStorageOptimizationRequested = $false
+            DisableAudioEnhancementsRequested = $false
+            DisableSystemSoundsRequested = $false
             PagefileDriveOverride      = $null
             IsAutomationRun            = $false
             StrictMode                 = $false
@@ -98,6 +101,9 @@ function Sync-HunterScriptStateFromContext {
         if ($Context.Flags.ContainsKey('DisableTeredoRequested')) { $script:DisableTeredoRequested = [bool]$Context.Flags.DisableTeredoRequested }
         if ($Context.Flags.ContainsKey('DisableCpuMitigationsRequested')) { $script:DisableCpuMitigationsRequested = [bool]$Context.Flags.DisableCpuMitigationsRequested }
         if ($Context.Flags.ContainsKey('DisableHagsRequested')) { $script:DisableHagsRequested = [bool]$Context.Flags.DisableHagsRequested }
+        if ($Context.Flags.ContainsKey('ForceStorageOptimizationRequested')) { $script:ForceStorageOptimizationRequested = [bool]$Context.Flags.ForceStorageOptimizationRequested }
+        if ($Context.Flags.ContainsKey('DisableAudioEnhancementsRequested')) { $script:DisableAudioEnhancementsRequested = [bool]$Context.Flags.DisableAudioEnhancementsRequested }
+        if ($Context.Flags.ContainsKey('DisableSystemSoundsRequested')) { $script:DisableSystemSoundsRequested = [bool]$Context.Flags.DisableSystemSoundsRequested }
         if ($Context.Flags.ContainsKey('PagefileDriveOverride')) { $script:PagefileDriveOverride = [string]$Context.Flags.PagefileDriveOverride }
         if ($Context.Flags.ContainsKey('PackagePipelineBlocked')) { $script:PackagePipelineBlocked = [bool]$Context.Flags.PackagePipelineBlocked }
         if ($Context.Flags.ContainsKey('PackagePipelineBlockReason')) { $script:PackagePipelineBlockReason = [string]$Context.Flags.PackagePipelineBlockReason }
@@ -132,6 +138,9 @@ function Sync-HunterScriptStateFromContext {
     $script:DisableHagsRequested = [bool]$Context.Runtime.DisableHagsRequested
     $script:HagsPreferenceResolved = [bool]$Context.Runtime.HagsPreferenceResolved
     $script:HagsDisableResolvedValue = [bool]$Context.Runtime.HagsDisableResolvedValue
+    $script:ForceStorageOptimizationRequested = [bool]$Context.Runtime.ForceStorageOptimizationRequested
+    $script:DisableAudioEnhancementsRequested = [bool]$Context.Runtime.DisableAudioEnhancementsRequested
+    $script:DisableSystemSoundsRequested = [bool]$Context.Runtime.DisableSystemSoundsRequested
     $script:PagefileDriveOverride = [string]$Context.Runtime.PagefileDriveOverride
     $script:IsAutomationRun = [bool]$Context.Runtime.IsAutomationRun
     $script:StrictMode = [bool]$Context.Runtime.StrictMode
@@ -180,6 +189,9 @@ function Sync-HunterContextFromScriptState {
         DisableTeredoRequested     = $script:DisableTeredoRequested
         DisableCpuMitigationsRequested = $script:DisableCpuMitigationsRequested
         DisableHagsRequested       = $script:DisableHagsRequested
+        ForceStorageOptimizationRequested = $script:ForceStorageOptimizationRequested
+        DisableAudioEnhancementsRequested = $script:DisableAudioEnhancementsRequested
+        DisableSystemSoundsRequested = $script:DisableSystemSoundsRequested
         PagefileDriveOverride      = $script:PagefileDriveOverride
         PackagePipelineBlocked     = $script:PackagePipelineBlocked
         PackagePipelineBlockReason = $script:PackagePipelineBlockReason
@@ -214,6 +226,9 @@ function Sync-HunterContextFromScriptState {
     $Context.Runtime.DisableHagsRequested = [bool]$script:DisableHagsRequested
     $Context.Runtime.HagsPreferenceResolved = [bool]$script:HagsPreferenceResolved
     $Context.Runtime.HagsDisableResolvedValue = [bool]$script:HagsDisableResolvedValue
+    $Context.Runtime.ForceStorageOptimizationRequested = [bool]$script:ForceStorageOptimizationRequested
+    $Context.Runtime.DisableAudioEnhancementsRequested = [bool]$script:DisableAudioEnhancementsRequested
+    $Context.Runtime.DisableSystemSoundsRequested = [bool]$script:DisableSystemSoundsRequested
     $Context.Runtime.PagefileDriveOverride = [string]$script:PagefileDriveOverride
     $Context.Runtime.IsAutomationRun = [bool]$script:IsAutomationRun
     $Context.Runtime.StrictMode = [bool]$script:StrictMode

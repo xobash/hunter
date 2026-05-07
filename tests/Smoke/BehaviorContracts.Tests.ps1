@@ -12,8 +12,11 @@ Describe 'Behavior contracts' {
         $copilotSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/OneDriveCopilot.ps1') -Raw -ErrorAction Stop
         $detectionSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/System/Detection.ps1') -Raw -ErrorAction Stop
         $hardwareSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Hardware.ps1') -Raw -ErrorAction Stop
+        $hunterSource = Get-Content -Path (Join-Path $repoRoot 'hunter.ps1') -Raw -ErrorAction Stop
         $interactionSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/System/Interaction.ps1') -Raw -ErrorAction Stop
         $nativeSystemSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Infrastructure/NativeSystem.ps1') -Raw -ErrorAction Stop
+        $pathPolicySource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Common/PathPolicy.ps1') -Raw -ErrorAction Stop
+        $preflightSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Preflight.ps1') -Raw -ErrorAction Stop
         $registryOpsSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Registry/Operations.ps1') -Raw -ErrorAction Stop
         $userSetupSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Core/UserSetup.ps1') -Raw -ErrorAction Stop
     }
@@ -95,6 +98,22 @@ Describe 'Behavior contracts' {
         $hardwareSource | Should -Match "tscsyncpolicy', 'Enhanced'"
     }
 
+    It 'uses a recovery-enabled TDR default and pushes risky storage or audio tweaks behind explicit opt-ins' {
+        $hardwareSource | Should -Match "TdrLevel' -Value 3"
+        $hardwareSource | Should -Match 'Resolve-ForceStorageOptimizationPreference'
+        $hardwareSource | Should -Match 'Resolve-DisableAudioEnhancementsPreference'
+        $hardwareSource | Should -Match 'Resolve-DisableSystemSoundsPreference'
+        $interactionSource | Should -Match 'HUNTER_FORCE_STORAGE_OPTIMIZATION=1'
+        $interactionSource | Should -Match 'HUNTER_DISABLE_AUDIO_ENHANCEMENTS=1'
+        $interactionSource | Should -Match 'HUNTER_DISABLE_SYSTEM_SOUNDS=1'
+    }
+
+    It 'runs O&O ShutUp10 quiet imports without restore-point prompts and keeps the preset beside the executable' {
+        $hardwareSource | Should -Match '/nosrp'
+        $hardwareSource | Should -Match 'WorkingDirectory \$oosuWorkingDirectory'
+        $pathPolicySource | Should -Match "Join-Path \\$script:DownloadDir 'ooshutup10_winutil_settings\.cfg'"
+    }
+
     It 'suppresses the text input service and preserves REG_EXPAND_SZ verification for the advanced redirect' {
         $hardwareSource | Should -Match 'InputServiceEnabled'
         $hardwareSource | Should -Match 'InputServiceEnabledForCCI'
@@ -115,5 +134,13 @@ Describe 'Behavior contracts' {
         $interactionSource | Should -Match 'Configure automatic sign-in'
         $userSetupSource | Should -Match 'Resolve-ConfigureAutologinPreference'
         $userSetupSource | Should -Match 'Autologin declined by user'
+    }
+
+    It 'creates restore points automatically in interactive runs and logs a full execution plan with risk levels' {
+        $preflightSource | Should -Not -Match 'Show-YesNoDialog'
+        $preflightSource | Should -Match 'Interactive run detected; creating a restore point before Hunter continues.'
+        $hunterSource | Should -Match 'function Write-HunterExecutionPlan'
+        $hunterSource | Should -Match 'PLANNED EXECUTION SUMMARY:'
+        $hunterSource | Should -Match '\[\{0\}\] \{1\} - \{2\}'
     }
 }

@@ -20,7 +20,7 @@ $script:HunterBootstrapRevision = 'cc5401a66a2e24f6c6b2a2f69b6a2c5ede45d754'
 $script:HunterRemoteRevision = $script:HunterBootstrapRevision
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = '67fb3b1b8bff7c68d32db935fec68b772d284c2b49fec62ec05aadfd46c981f0'
+$script:BootstrapLoaderSha256 = '8e9eb622d8db7244ba12d04a80fa5048ea0d9dd2bffc3712c49b4367d6da2fff'
 
 $bootstrapLoaderPath = $null
 $canUseLocalHunterPrivateLayers = $false
@@ -91,6 +91,53 @@ try {
     $script:SelfScriptContent = $null
 }
 
+function Write-HunterExecutionPlan {
+    param(
+        [Parameter(Mandatory)][object[]]$Tasks,
+        [object]$Context = $null
+    )
+
+    if ($null -ne $Context) {
+        Set-HunterContext -Context $Context
+    } else {
+        $Context = Get-HunterContext
+    }
+
+    $requestedSkipTaskIds = @($script:SkipTaskIds | Select-Object -Unique)
+    $pendingTasks = @(
+        $Tasks | Where-Object {
+            $taskId = [string]$_.TaskId
+            -not (Test-TaskCompleted -TaskId $taskId -Context $Context) -and $taskId -notin $requestedSkipTaskIds
+        }
+    )
+
+    $completedFromCheckpointCount = @(
+        $Tasks | Where-Object { Test-TaskCompleted -TaskId ([string]$_.TaskId) -Context $Context }
+    ).Count
+
+    Write-Log 'PLANNED EXECUTION SUMMARY:' 'INFO'
+    Write-Log "  Pending Tasks:  $($pendingTasks.Count)" 'INFO'
+    Write-Log "  Checkpointed:   $completedFromCheckpointCount" 'INFO'
+    Write-Log "  User Skips:     $($requestedSkipTaskIds.Count)" 'INFO'
+
+    foreach ($riskLevel in @('High', 'Medium', 'Low')) {
+        $riskCount = @($pendingTasks | Where-Object { [string]$_.RiskLevel -eq $riskLevel }).Count
+        Write-Log ("  {0} Risk:      {1}" -f $riskLevel.PadRight(6), $riskCount) 'INFO'
+    }
+
+    if ($pendingTasks.Count -eq 0) {
+        Write-Log '  No pending tasks remain after checkpoint and skip filtering.' 'INFO'
+        return
+    }
+
+    foreach ($phaseGroup in @($pendingTasks | Group-Object Phase | Sort-Object { [int]$_.Name })) {
+        Write-Log ("  Phase {0} ({1} task(s))" -f $phaseGroup.Name, $phaseGroup.Count) 'INFO'
+        foreach ($task in @($phaseGroup.Group)) {
+            Write-Log ("    [{0}] {1} - {2}" -f $task.RiskLevel, $task.TaskId, $task.Description) 'INFO'
+        }
+    }
+}
+
 
 function Invoke-Main {
     <#
@@ -138,6 +185,17 @@ function Invoke-Main {
         Opt out of Hunter's default HAGS enable policy and apply the legacy
         HAGS disable override instead.
 
+    .PARAMETER ForceStorageOptimization
+        Opt in to aggressive storage tweaks that delete the NTFS USN journal
+        and disable disk write-cache buffer flushing.
+
+    .PARAMETER DisableAudioEnhancements
+        Opt in to disabling Windows audio enhancements.
+
+    .PARAMETER DisableSystemSounds
+        Opt in to replacing the Windows sound scheme with Hunter's silent
+        profile.
+
     .PARAMETER PagefileDrive
         Optional fixed-drive letter (for example `D:`) to host `pagefile.sys`
         instead of the system drive.
@@ -163,6 +221,12 @@ function Invoke-Main {
 
         [switch]$DisableHags,
 
+        [switch]$ForceStorageOptimization,
+
+        [switch]$DisableAudioEnhancements,
+
+        [switch]$DisableSystemSounds,
+
         [string]$PagefileDrive = ''
     )
 
@@ -184,6 +248,9 @@ function Invoke-Main {
     $script:DisableHagsRequested = [bool]$DisableHags -or $env:HUNTER_DISABLE_HAGS -eq '1'
     $script:HagsPreferenceResolved = $false
     $script:HagsDisableResolvedValue = $false
+    $script:ForceStorageOptimizationRequested = [bool]$ForceStorageOptimization -or $env:HUNTER_FORCE_STORAGE_OPTIMIZATION -eq '1'
+    $script:DisableAudioEnhancementsRequested = [bool]$DisableAudioEnhancements -or $env:HUNTER_DISABLE_AUDIO_ENHANCEMENTS -eq '1'
+    $script:DisableSystemSoundsRequested = [bool]$DisableSystemSounds -or $env:HUNTER_DISABLE_SYSTEM_SOUNDS -eq '1'
     $script:PagefileDriveOverride = if ([string]::IsNullOrWhiteSpace($PagefileDrive)) { $null } else { $PagefileDrive.Trim() }
     $script:RunInfrastructureIssues = @()
     $script:ProgressUiIssueLogged = $false
@@ -290,9 +357,19 @@ function Invoke-Main {
         if ($script:DisableCpuMitigationsRequested) {
             Write-Log 'Speculative-execution mitigation override requested explicitly.' 'WARN'
         }
+        if ($script:ForceStorageOptimizationRequested) {
+            Write-Log 'Aggressive storage tweaks were requested explicitly.' 'WARN'
+        }
+        if ($script:DisableAudioEnhancementsRequested) {
+            Write-Log 'Audio-enhancement disable was requested explicitly.' 'WARN'
+        }
+        if ($script:DisableSystemSoundsRequested) {
+            Write-Log 'System sound-scheme disable was requested explicitly.' 'WARN'
+        }
         if (-not [string]::IsNullOrWhiteSpace($script:PagefileDriveOverride)) {
             Write-Log "Pagefile target override: $($script:PagefileDriveOverride)" 'INFO'
         }
+        Write-HunterExecutionPlan -Tasks $tasks -Context $context
 
         Write-Log ""
 
@@ -428,6 +505,9 @@ $scriptDisableIPv6 = $false
 $scriptDisableTeredo = $false
 $scriptDisableCpuMitigations = $false
 $scriptDisableHags = $false
+$scriptForceStorageOptimization = $false
+$scriptDisableAudioEnhancements = $false
+$scriptDisableSystemSounds = $false
 $scriptPagefileDrive = $null
 for ($i = 0; $i -lt $args.Count; $i++) {
     if ($args[$i] -eq '-Mode' -and ($i + 1) -lt $args.Count) {
@@ -464,6 +544,15 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     elseif ($args[$i] -eq '-DisableHags') {
         $scriptDisableHags = $true
     }
+    elseif ($args[$i] -eq '-ForceStorageOptimization') {
+        $scriptForceStorageOptimization = $true
+    }
+    elseif ($args[$i] -eq '-DisableAudioEnhancements') {
+        $scriptDisableAudioEnhancements = $true
+    }
+    elseif ($args[$i] -eq '-DisableSystemSounds') {
+        $scriptDisableSystemSounds = $true
+    }
     elseif ($args[$i] -eq '-PagefileDrive' -and ($i + 1) -lt $args.Count) {
         $scriptPagefileDrive = $args[$i + 1]
     }
@@ -475,7 +564,7 @@ if (-not [string]::IsNullOrWhiteSpace($scriptLogPath)) {
 }
 
 # Invoke main orchestrator
-Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -AutomationSafe:$scriptAutomationSafe -SkipTask $scriptSkipTasks -CustomAppsListPath $scriptCustomAppsListPath -DisableIPv6:$scriptDisableIPv6 -DisableTeredo:$scriptDisableTeredo -DisableCpuMitigations:$scriptDisableCpuMitigations -DisableHags:$scriptDisableHags -PagefileDrive $scriptPagefileDrive
+Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -AutomationSafe:$scriptAutomationSafe -SkipTask $scriptSkipTasks -CustomAppsListPath $scriptCustomAppsListPath -DisableIPv6:$scriptDisableIPv6 -DisableTeredo:$scriptDisableTeredo -DisableCpuMitigations:$scriptDisableCpuMitigations -DisableHags:$scriptDisableHags -ForceStorageOptimization:$scriptForceStorageOptimization -DisableAudioEnhancements:$scriptDisableAudioEnhancements -DisableSystemSounds:$scriptDisableSystemSounds -PagefileDrive $scriptPagefileDrive
 } catch {
     $crashLogPath = Join-Path ([System.IO.Path]::GetTempPath()) 'hunter-crash.txt'
     $crashTimestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'

@@ -831,6 +831,9 @@ function Save-HunterRunConfiguration {
         DisableTeredo       = [bool]$script:DisableTeredoRequested
         DisableCpuMitigations = [bool]$script:DisableCpuMitigationsRequested
         DisableHags         = [bool]$script:DisableHagsRequested
+        ForceStorageOptimization = [bool]$script:ForceStorageOptimizationRequested
+        DisableAudioEnhancements = [bool]$script:DisableAudioEnhancementsRequested
+        DisableSystemSounds = [bool]$script:DisableSystemSoundsRequested
         SkipTaskIds         = @($SkipTaskIds | Select-Object -Unique)
         CustomAppsListPath  = [string]$CustomAppsListPath
         PagefileDrive       = [string]$PagefileDrive

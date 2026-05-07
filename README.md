@@ -1,92 +1,36 @@
 # Hunter
 
-Opinionated Windows 10/11 debloat and gaming-PC setup script. Hunter applies a repeatable multi-phase workflow for cleanup, app removal, privacy suppression, package installs, gaming-oriented tuning, and report export, with checkpoint/resume support across reboots.
+Hunter is a PowerShell-based Windows setup script for personal Windows 10 and Windows 11 systems. It applies a single multi-phase pass that handles debloat, privacy changes, app removal, package install, performance tuning, cleanup, reporting, and rollback capture.
 
-## Quickstart
+## Scope
 
-Recommended host on the target machine: elevated Windows PowerShell (`powershell.exe`).
+- Supported target: personal Windows 10 and Windows 11 installs
+- Recommended host: elevated Windows PowerShell (`powershell.exe`)
+- Primary use case: fresh installs, rebuilds, and repeatable baseline setup
+- Exclusions: managed enterprise machines, shared systems, and minimal one-setting tweak workflows
 
-Run directly from GitHub:
+## Safety
+
+- Hunter runs as administrator and changes system settings.
+- The `stable` channel is the public release channel. `main` is the preview channel.
+- Hunter captures rollback data for shared registry, service, scheduled task, and active power-plan changes.
+- Interactive runs now create a restore point before execution continues.
+- Hunter exports a report, full log, restore script, and run configuration on every run.
+- App removals and third-party tool imports are documented and accompanied by explicit restore guidance.
+- Use `stable` for production baselines and `main` only to validate upcoming changes.
+
+## Quick Start
+
+Stable:
 
 ```powershell
 irm https://raw.githubusercontent.com/xobash/hunter/stable/hunter.ps1 | iex
 ```
 
-Run from a local checkout:
+Preview:
 
 ```powershell
-git clone https://github.com/xobash/hunter.git
-cd hunter
-powershell -ExecutionPolicy Bypass -File .\hunter.ps1
-```
-
-## Table of Contents
-
-- [Features](#features)
-- [When to Use Hunter](#when-to-use-hunter)
-- [When Not to Use Hunter](#when-not-to-use-hunter)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Configuration](#configuration)
-- [Surgical App Removal](#surgical-app-removal)
-- [What Hunter Changes](#what-hunter-changes)
-- [Outputs and Logs](#outputs-and-logs)
-- [Project Structure](#project-structure)
-- [Verification](#verification)
-- [Contributing](#contributing)
-- [FAQ](#faq)
-- [Acknowledgements](#acknowledgements)
-- [License](#license)
-
-## Features
-
-- One-command execution from GitHub or a local checkout.
-- Explicit release channels for public `stable`, development `preview`, and exact versioned entrypoints.
-- Checkpoint and resume support so long-running runs can survive reboots.
-- Parallel package installs and background asset prefetch.
-- Surgical app removal driven by `src/Hunter/Config/Apps.json`, with protected system apps excluded.
-- Three-layer app removal strategy:
-  - WinGet uninstall for modern packaged apps where available.
-  - Custom handlers for awkward edge cases such as Edge and OneDrive.
-  - Selective targeting through a user-supplied custom app list.
-- Windows build-aware behavior for Win10 and Win11-specific registry and shell changes.
-- Gaming-focused tuning across graphics, power, device management, networking, and storage.
-- Rollback capture for shared registry, service, scheduled-task, and power-plan mutations.
-- Desktop summary report plus full execution log, restore script, and run-configuration export at the end of the run.
-
-## When to Use Hunter
-
-- You want a fast, repeatable baseline for Windows gaming desktops or bare-metal installs.
-- You prefer one broad, opinionated setup pass over manual point-and-click tuning.
-- You want app removal, privacy cleanup, package install, and gaming tweaks in one workflow.
-- You need resume/retry behavior for machines that reboot during setup.
-
-## When Not to Use Hunter
-
-- You want a minimal tweak tool that only changes one or two settings.
-- You need to preserve most default Microsoft apps and inbox experiences.
-- The machine is corporate-managed, policy-managed, or shared with other users.
-- You are looking for a GUI-first tuning tool instead of a scripted workflow.
-
-## Requirements
-
-- Windows 10 or Windows 11.
-- Best fit today: Windows 10 22H2+ and Windows 11 22H2+.
-- Administrator privileges.
-- Internet connection.
-- `winget` available on the target machine if you want package installs and WinGet-backed app removal.
-
-## Installation
-
-Hunter does not need a traditional installer.
-
-### Remote one-liner
-
-Stable channel:
-
-```powershell
-irm https://raw.githubusercontent.com/xobash/hunter/stable/hunter.ps1 | iex
+irm https://raw.githubusercontent.com/xobash/hunter/main/hunter.ps1 | iex
 ```
 
 Exact version:
@@ -95,13 +39,7 @@ Exact version:
 irm https://raw.githubusercontent.com/xobash/hunter/v2.0.1/hunter.ps1 | iex
 ```
 
-Preview channel (`main`, for development validation rather than public use):
-
-```powershell
-irm https://raw.githubusercontent.com/xobash/hunter/main/hunter.ps1 | iex
-```
-
-### Local checkout
+Local checkout:
 
 ```powershell
 git clone https://github.com/xobash/hunter.git
@@ -109,328 +47,184 @@ cd hunter
 powershell -ExecutionPolicy Bypass -File .\hunter.ps1
 ```
 
-### Notes
+## Requirements
 
-- Hunter bootstraps `src/Hunter/Private/Bootstrap/Loader.ps1`, validates its SHA-256, then downloads any missing private assets from the loader manifest when you run `hunter.ps1` directly from GitHub.
-- The wrapper now self-identifies its release channel and release version, while private bootstrap assets remain pinned to an immutable bootstrap revision for integrity and reproducibility.
-- PowerShell 7 can launch Hunter, but Hunter still uses Windows PowerShell internally for some AppX operations because the desktop AppX tooling is not consistently available in `pwsh` on Windows clients.
+- Windows 10 or Windows 11
+- Administrator privileges
+- Internet access
+- `winget` for package installs and WinGet-backed app removal
+
+## What Hunter Does
+
+- Builds a fixed task catalog and executes it with checkpoint and resume support
+- Logs a pre-run execution plan with per-task risk labels before mutation begins
+- Applies Windows build-aware UI, privacy, explorer, cloud, app, and hardware changes
+- Removes supported apps from the catalog in `src/Hunter/Config/Apps.json`
+- Runs package and external-tool steps where configured
+- Exports a report, full log, restore script, and run configuration at the end of the run
 
 ## Usage
 
-### Default run
+Default run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\hunter.ps1
 ```
 
-### Strict mode
-
-Abort the overall run when a mandatory task fails after retries.
+Strict mode:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -Strict
 ```
 
-### Automation-safe mode
-
-Skip UI-only launches and automatic reboot/sign-out behavior for unattended runs.
+Automation-safe mode:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -AutomationSafe
 ```
 
-### Skip specific tasks
-
-Useful for isolating a problem task or tailoring a run without editing code.
+Skip specific tasks:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -SkipTask tweaks-ipv6,tweaks-timer-resolution
 ```
 
-### Use a custom app list
-
-Override the default Phase 6 broad-removal selection.
+Use a custom app list:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -CustomAppsListPath .\CustomAppsList.txt
 ```
 
-### Write logs to a custom path
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -LogPath C:\Temp\hunter.log
-```
-
-### Opt-in legacy network and graphics toggles
+Opt into legacy disable flags:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -DisableIPv6 -DisableTeredo -DisableHags
 ```
 
+Opt into the aggressive storage and audio tweaks that are now disabled by default:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -ForceStorageOptimization -DisableAudioEnhancements -DisableSystemSounds
+```
+
+Write the log to a custom path:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -LogPath .\hunter.log
+```
+
 ## Configuration
 
-### Command-line flags
+### Flags
 
-| Flag | Description |
-|------|-------------|
-| `-Strict` | Stop the run when a mandatory task fails after retries. |
-| `-AutomationSafe` | Skip UI-only launches and automatic reboot/sign-out behavior. |
-| `-SkipTask <id1,id2>` | Skip one or more task IDs for this run. |
-| `-CustomAppsListPath <path>` | Use a text or JSON custom app selection file for Phase 6 app removal. |
-| `-DisableIPv6` | Opt in to Hunter's legacy IPv6-disable task. |
+| Flag | Purpose |
+| --- | --- |
+| `-Strict` | Fail the overall run if a mandatory task still fails after retry handling. |
+| `-AutomationSafe` | Skip UI-only launches and automatic reboot or sign-out behavior. |
+| `-SkipTask <id1,id2>` | Skip one or more task IDs for the current run. |
+| `-CustomAppsListPath <path>` | Override the default broad app-removal selection. |
+| `-DisableIPv6` | Opt in to Hunter's IPv6-disable task. |
 | `-DisableTeredo` | Opt in to Hunter's Teredo-disable task. |
-| `-DisableHags` | Opt out of Hunter's default HAGS-enable policy and apply the legacy disable override. |
+| `-DisableCpuMitigations` | Opt in to disabling speculative-execution mitigations. |
+| `-DisableHags` | Opt out of Hunter's default HAGS-enable policy. |
+| `-ForceStorageOptimization` | Opt in to NTFS USN journal deletion and disk write-cache buffer-flushing disable. |
+| `-DisableAudioEnhancements` | Opt in to disabling Windows audio enhancements. |
+| `-DisableSystemSounds` | Opt in to Hunter's silent system sound-scheme change. |
+| `-PagefileDrive <drive>` | Move the fixed pagefile target to a specific drive letter. |
 | `-LogPath <path>` | Write the main log to a custom path. |
-| `-Mode Resume` | Internal recovery mode used by the resume scheduled task. |
+| `-Mode Resume` | Internal recovery mode used by the scheduled resume task. |
 
-### Environment variables
+### Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `HUNTER_LOCAL_USER_PASSWORD` | Overrides the generated/stored password for Hunter's managed local `user` account. |
-| `HUNTER_AUTOMATION_SAFE=1` | Forces automation-safe behavior without passing `-AutomationSafe`. |
-| `HUNTER_CUSTOM_APPS_LIST=<path>` | Provides a default custom app list path when `-CustomAppsListPath` is not passed. |
-| `HUNTER_DISABLE_IPV6=1` | Opts in to Hunter's IPv6-disable task. |
-| `HUNTER_DISABLE_TEREDO=1` | Opts in to Hunter's Teredo-disable task. |
-| `HUNTER_DISABLE_HAGS=1` | Opts out of Hunter's default HAGS-enable policy and applies the legacy disable override. |
+| Variable | Purpose |
+| --- | --- |
+| `HUNTER_AUTOMATION_SAFE=1` | Force automation-safe behavior without passing `-AutomationSafe`. |
+| `HUNTER_CUSTOM_APPS_LIST=<path>` | Provide a default custom apps list path. |
+| `HUNTER_DISABLE_IPV6=1` | Opt in to IPv6 disable. |
+| `HUNTER_DISABLE_TEREDO=1` | Opt in to Teredo disable. |
+| `HUNTER_DISABLE_CPU_MITIGATIONS=1` | Opt in to disabling speculative-execution mitigations. |
+| `HUNTER_DISABLE_HAGS=1` | Opt out of default HAGS enablement. |
+| `HUNTER_FORCE_STORAGE_OPTIMIZATION=1` | Opt in to the aggressive storage tweaks Hunter now preserves by default. |
+| `HUNTER_DISABLE_AUDIO_ENHANCEMENTS=1` | Opt in to disabling Windows audio enhancements. |
+| `HUNTER_DISABLE_SYSTEM_SOUNDS=1` | Opt in to Hunter's silent system sound-scheme change. |
+| `HUNTER_LOCAL_USER_PASSWORD=<value>` | Override the managed local-user password if that path is used. |
 
-## Surgical App Removal
+## Custom App Lists
 
-Hunter now uses a three-layer app removal model influenced by tools such as Win11Debloat, but adapted to Hunter's task engine.
+Hunter reads app targets from `src/Hunter/Config/Apps.json`. A custom app list narrows the broad app-removal phase to only the entries you specify.
 
-### Layer 1: WinGet uninstall
-
-Hunter uses WinGet when the target app has a reliable packaged uninstall path.
-
-Examples:
-
-- Edge
-- OneDrive
-
-### Layer 2: Custom edge-case handlers
-
-Some apps still need dedicated logic instead of blind package removal.
-
-Examples:
-
-- Edge removal while checking that WebView2 survives.
-- OneDrive cleanup and leftover folder handling.
-
-### Layer 3: User-defined selective targeting
-
-Hunter can narrow its broad app-removal pass with a custom apps list instead of using the default catalog selection.
-
-Text format example:
+Text example:
 
 ```text
 xbox
-teams
 clipchamp
+teams
 ```
 
-JSON format example:
+JSON example:
 
 ```json
 {
   "Apps": [
     { "AppId": "xbox", "SelectedByDefault": true },
-    { "AppId": "teams", "SelectedByDefault": true },
-    { "AppId": "clipchamp", "SelectedByDefault": true }
+    { "AppId": "clipchamp", "SelectedByDefault": true },
+    { "AppId": "teams", "SelectedByDefault": true }
   ]
 }
 ```
 
-Run with that list:
+Protected apps are enforced by the catalog and will be skipped.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -CustomAppsListPath .\CustomAppsList.txt
-```
+## Outputs
 
-### Catalog
+Hunter stores working state under `%ProgramData%\Hunter`.
 
-`src/Hunter/Config/Apps.json` is the authoritative app-removal catalog.
+Important runtime artifacts:
 
-It tracks:
+- `hunter.log`
+- `checkpoint.json`
+- `run-configuration.json`
+- `Rollback\rollback-manifest.json`
+- `Rollback\Restore-HunterState.ps1`
+- `Resume\hunter.ps1`
 
-- Protected system apps that Hunter must not target.
-- Friendly names and app identifiers.
-- Default-selection behavior.
-- Build gates.
-- Removal strategies per app.
+Desktop exports at the end of a run:
 
-Critical shell and security apps such as Windows Security, Shell Experience Host, Start Menu Experience Host, Settings, and Windows Store are explicitly preserved.
+- operation report
+- full log copy
+- restore script copy
+- run-configuration copy
 
-## What Hunter Changes
+## Release Channels
 
-Hunter runs a fixed multi-phase workflow.
+| Channel | Ref | Intended use |
+| --- | --- | --- |
+| `stable` | `stable` | Public one-liner |
+| `preview` | `main` | Pre-release validation |
+| versioned | `v<semver>` | Exact reproducible release |
 
-| Phase | Area | Examples |
-|------|------|----------|
-| 1 | Preflight | Connectivity checks, optional restore point, app-download prompt, package/asset prefetch startup |
-| 2 | Core setup | Local user normalization, dark mode, Ultimate Performance activation |
-| 3 | Start / UI | Search cleanup, Start recommendations, Widgets, notifications, taskbar options |
-| 4 | Explorer | This PC as home, namespace cleanup, auto-discovery reset |
-| 5 | Microsoft cloud | Edge, OneDrive, Copilot, Edge shortcut/pin cleanup |
-| 6 | Broad app removal | Surgical catalog-driven app removal, consumer features, activity history |
-| 7 | System tweaks | Services, telemetry, virtualization, graphics, MPO, GPU MSI, GPU interrupt affinity, ReBAR audit, power tuning, storage, input, IPv6 |
-| 8 | External tools | Wallpaper, TCP Optimizer, O&O ShutUp10, classic system tools |
-| 9 | Cleanup | Finalize installs, retry failed tasks, temp cleanup, Explorer restart, report export |
+The wrapper logs its release channel and version at startup. Private bootstrap assets are pinned to an immutable bootstrap revision for integrity and reproducibility.
 
-### Tuning highlights
+## Development
 
-- Graphics:
-  - GPU MSI mode for detected PCI display adapters.
-  - MPO disable via `OverlayTestMode=5`.
-  - Windowed-game swap-effect upgrade.
-  - GPU interrupt affinity pinning on supported single-group systems.
-  - ReBAR audit instead of undocumented force-enablement.
-- CPU and power:
-  - Ultimate Performance activation.
-  - Core parking suppression and processor minimum/maximum performance state changes.
-  - Windows 11 SMT unpark policy tuning where that power setting exists.
-  - Additional device and plan-level power tuning.
-- Storage and memory:
-  - RAM-aware `LargeSystemCache` policy.
-  - Disable 8.3 short names and NTFS last-access updates.
-  - Delete the NTFS USN journal when present.
-  - Disk write-cache policy tuning where exposed.
-- Shell and UX:
-  - Start/taskbar cleanup.
-  - Explorer namespace cleanup.
-  - Notification and toast suppression.
-  - No-sounds profile and desktop visual-effect trimming.
+Key files:
 
-## Outputs and Logs
+- `hunter.ps1`
+- `src/Hunter/Config/Apps.json`
+- `src/Hunter/Private/Bootstrap/Loader.ps1`
+- `src/Hunter/Private/Tasks/Catalog.ps1`
+- `src/Hunter/Private/State/Rollback.ps1`
+- `tests/Smoke`
 
-Hunter writes working state under `C:\ProgramData\Hunter\`.
-
-| File | Purpose |
-|------|---------|
-| `hunter.log` | Main execution log |
-| `checkpoint.json` | Completed-task tracking for resume/retry logic |
-| `Rollback\rollback-manifest.json` | Captured rollback manifest for shared system mutations |
-| `Rollback\Restore-HunterState.ps1` | Generated restore script for captured rollback entries |
-| `Resume\hunter.ps1` | Resume-script copy used by the scheduled recovery task |
-| `run-configuration.json` | Release metadata and run inputs for reproducibility |
-| `Secrets\local-user.secret` | Machine-protected credential payload for Hunter's managed local user |
-| `Temp\` | Temporary helper assets used during some operations |
-
-At the end of the run Hunter exports:
-
-- A desktop summary report.
-- A desktop copy of the full execution log.
-- A desktop copy of the generated restore script.
-- A desktop copy of the run configuration used for the run.
-
-## Project Structure
-
-```text
-hunter.ps1
-README.md
-LICENSE
-docs/
-scripts/
-  verification/
-src/
-  Hunter/
-    Config/
-    Private/
-tests/
-  Fixtures/
-  Smoke/
-```
-
-### Important paths
-
-- `hunter.ps1`: stable entrypoint and compatibility surface.
-- `src/Hunter/Config/Apps.json`: surgical app-removal catalog.
-- `src/Hunter/Private/Bootstrap`: bootstrap configuration and runtime state.
-- `src/Hunter/Private/Tasks/Catalog.ps1`: declarative task catalog.
-- `src/Hunter/Private/Execution`: execution engine and resume logic.
-- `src/Hunter/Private/Infrastructure`: native-system wrappers and low-level helpers.
-- `tests/Smoke`: compatibility and task-catalog checks.
-- `scripts/verification`: repo-local verification and before/after comparison helpers.
-- `tests/Fixtures/Baseline/README.md`: manual baseline-capture workflow for refactor comparisons.
-
-## Verification
-
-Fast checks:
+Recommended checks:
 
 ```powershell
 git diff --check
-python3 .\scripts\verification\audit_task_issue_compatibility.py
 python3 .\scripts\verification\audit_bootstrap_hashes.py
-```
-
-Smoke tests:
-
-```powershell
+python3 .\scripts\verification\audit_task_issue_compatibility.py
 Invoke-Pester .\tests\Smoke
 ```
 
-Module manifest validation:
-
-```powershell
-Test-ModuleManifest .\src\Hunter\Hunter.psd1
-```
-
-PowerShell syntax parse:
-
-```powershell
-[void][System.Management.Automation.Language.Parser]::ParseFile('hunter.ps1',[ref]$null,[ref]$null)
-```
-
-Manual before/after artifact capture:
-
-See `tests/Fixtures/Baseline/README.md` for the `Capture-Baseline.ps1` and `Compare-Baseline.ps1` workflow.
-
-## Contributing
-
-Pull requests are welcome, but Hunter is intentionally opinionated. Keep changes practical and behavior-focused.
-
-### Suggested workflow
-
-1. Fork the repository.
-2. Create a feature branch.
-3. Make the smallest behaviorally coherent change you can.
-4. Update tests or smoke coverage when behavior changes.
-5. Update the README when flags, outputs, or runtime behavior change.
-6. Open a pull request with before/after notes.
-
-### Useful local checks
-
-Use the verification commands above before opening a pull request.
-
-## FAQ
-
-### Is Hunter safe to re-run?
-
-Usually yes. Hunter checkpoints completed tasks and skips work where possible. It is still a full-machine tuning script, so review changes before repeatedly running it on a daily-driver machine.
-
-### Do I need `winget`?
-
-You need `winget` for Hunter's package installs and WinGet-backed app removal paths. Core tuning tasks can still run even if package-install tasks are skipped.
-
-### Can I remove only a few apps instead of the default bundle?
-
-Yes. Pass `-CustomAppsListPath` or set `HUNTER_CUSTOM_APPS_LIST` and target only the app IDs you want from `src/Hunter/Config/Apps.json`.
-
-### Does Hunter reboot the machine?
-
-It can. If a pending reboot is detected at the end of a clean run, Hunter may reboot automatically unless automation-safe behavior is active or the run completed with issues.
-
-### Does Hunter force-enable Resizable BAR?
-
-No. Hunter audits likely support and logs what it finds, but does not use undocumented force-enable registry hacks. BAR sizing is negotiated by firmware and display drivers on supported hardware.
-
-## Acknowledgements
-
-Hunter is informed by and borrows ideas from:
-
-- [ChrisTitusTech/winutil](https://github.com/ChrisTitusTech/winutil)
-- [Raphire/Win11Debloat](https://github.com/Raphire/Win11Debloat)
-- [FR33THYFR33THY/WinSux-Windows-Optimization-Guide](https://github.com/FR33THYFR33THY/WinSux-Windows-Optimization-Guide)
-
 ## License
 
-[GPL-3.0](LICENSE)
+GPL-3.0. See `LICENSE`.

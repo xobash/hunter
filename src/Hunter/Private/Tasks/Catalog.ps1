@@ -1,5 +1,67 @@
+function Get-HunterTaskRiskLevel {
+    param([Parameter(Mandatory)][string]$TaskId)
+
+    $highRiskTaskIds = @(
+        'core-autologin-v2',
+        'cloud-edge-remove',
+        'cloud-onedrive-remove',
+        'apps-nuke-block',
+        'tweaks-services',
+        'tweaks-virtualization-security',
+        'tweaks-graphics-scheduling',
+        'tweaks-power-tuning',
+        'tweaks-memory-disk',
+        'tweaks-input-maintenance',
+        'tweaks-timer-resolution',
+        'external-tcp-optimizer'
+    )
+    $mediumRiskTaskIds = @(
+        'preflight-driver-install-block',
+        'preflight-edition-compatibility',
+        'preflight-restore-point',
+        'preflight-winget-version',
+        'install-launch-packages-v2',
+        'install-finalize-packages-v2',
+        'core-local-user-v2',
+        'core-ultimate-performance',
+        'cloud-edge-update-block',
+        'cloud-onedrive-backup',
+        'cloud-copilot-remove',
+        'apps-consumer-features',
+        'apps-inking-typing',
+        'apps-delivery-opt',
+        'apps-activity-history',
+        'tweaks-telemetry',
+        'tweaks-location',
+        'tweaks-hibernation',
+        'tweaks-background-apps',
+        'tweaks-teredo',
+        'tweaks-fso',
+        'tweaks-gpu-interrupt-affinity',
+        'tweaks-dwm-frame-interval',
+        'tweaks-ui-desktop',
+        'tweaks-razer',
+        'tweaks-adobe',
+        'tweaks-nic-power-management',
+        'tweaks-store-search',
+        'tweaks-ipv6',
+        'external-oosu',
+        'cleanup-autologin-secrets'
+    )
+
+    if ($TaskId -in $highRiskTaskIds) {
+        return 'High'
+    }
+
+    if ($TaskId -in $mediumRiskTaskIds) {
+        return 'Medium'
+    }
+
+    return 'Low'
+}
+
 function Get-HunterTaskCatalog {
-    return @(
+    $catalog = @(
         [pscustomobject]@{ Id = 'preflight-driver-install-block'; Phase = '1'; Handler = { Invoke-BlockWindowsUpdateDriverInstallation }; Description = 'Block Windows Update driver installs and automatic driver search' }
         [pscustomobject]@{ Id = 'preflight-internet'; Phase = '1'; Handler = { Invoke-VerifyInternetConnectivity }; Description = 'Verify internet connectivity' }
         [pscustomobject]@{ Id = 'preflight-edition-compatibility'; Phase = '1'; Handler = { Invoke-ValidateSupportedWindowsEdition }; Description = 'Validate supported Windows edition and set Store/AppX compatibility gates' }
@@ -72,4 +134,10 @@ function Get-HunterTaskCatalog {
         [pscustomobject]@{ Id = 'cleanup-explorer-restart'; Phase = '9'; Handler = { Invoke-DeferredExplorerRestart }; Description = 'Restart Explorer with pending changes' }
         [pscustomobject]@{ Id = 'cleanup-export-log'; Phase = '9'; Handler = { Invoke-ExportDesktopOperationLog }; Description = 'Export operation report to desktop' }
     )
+
+    foreach ($task in @($catalog)) {
+        $task | Add-Member -NotePropertyName RiskLevel -NotePropertyValue (Get-HunterTaskRiskLevel -TaskId ([string]$task.Id)) -Force
+    }
+
+    return $catalog
 }

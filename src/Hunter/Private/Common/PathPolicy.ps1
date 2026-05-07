@@ -21,7 +21,7 @@ function Get-OOSUDownloadPath {
 }
 
 function Get-OOSUConfigPath {
-    return (Join-Path $script:HunterRoot 'ooshutup10_winutil_settings.cfg')
+    return (Join-Path $script:DownloadDir 'ooshutup10_winutil_settings.cfg')
 }
 
 function Get-ResolvedWallpaperAssetUrl {

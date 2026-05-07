@@ -874,7 +874,7 @@ function Invoke-ApplyGraphicsSchedulingTweaks {
         }
 
         if ($gpuDetectionIsReliable) {
-            Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrLevel' -Value 0 -Type DWord
+            Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrLevel' -Value 3 -Type DWord
             Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrDelay' -Value 10 -Type DWord
             Set-RegistryValue -Path $graphicsDriversPath -Name 'TdrDdiDelay' -Value 10 -Type DWord
             Set-RegistryValue -Path $dwmPath -Name 'OverlayTestMode' -Value 5 -Type DWord
@@ -991,21 +991,23 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
             Write-Log "Failed to disable NTFS last access updates: $($_.Exception.Message)" 'WARN'
         }
 
-        $currentMemoryDiskStep = 'deleting the NTFS USN journal'
-        try {
-            & $fsutilPath usn queryjournal $systemVolume *> $null
-            if ($LASTEXITCODE -eq 0) {
-                Invoke-NativeCommandChecked -FilePath $fsutilPath -ArgumentList @('usn', 'deletejournal', '/d', $systemVolume) | Out-Null
-                Write-Log "NTFS USN journal deleted on ${systemVolume}." 'INFO'
-            } else {
-                Write-Log "NTFS USN journal is not active on ${systemVolume}. Skipping delete." 'INFO'
+        if (Resolve-ForceStorageOptimizationPreference) {
+            $currentMemoryDiskStep = 'deleting the NTFS USN journal'
+            try {
+                & $fsutilPath usn queryjournal $systemVolume *> $null
+                if ($LASTEXITCODE -eq 0) {
+                    Invoke-NativeCommandChecked -FilePath $fsutilPath -ArgumentList @('usn', 'deletejournal', '/d', $systemVolume) | Out-Null
+                    Write-Log "NTFS USN journal deleted on ${systemVolume}." 'INFO'
+                } else {
+                    Write-Log "NTFS USN journal is not active on ${systemVolume}. Skipping delete." 'INFO'
+                }
+            } catch {
+                Write-Log "Failed to delete the NTFS USN journal on ${systemVolume}: $($_.Exception.Message)" 'WARN'
             }
-        } catch {
-            Write-Log "Failed to delete the NTFS USN journal on ${systemVolume}: $($_.Exception.Message)" 'WARN'
-        }
 
-        $currentMemoryDiskStep = 'disabling disk write-cache buffer flushing'
-        Invoke-DisableDiskWriteCacheBufferFlushing | Out-Null
+            $currentMemoryDiskStep = 'disabling disk write-cache buffer flushing'
+            Invoke-DisableDiskWriteCacheBufferFlushing | Out-Null
+        }
 
         Write-Log 'Memory and disk behavior tweaks applied.' 'SUCCESS'
         return $true
@@ -1044,10 +1046,14 @@ function Invoke-ApplyUiDesktopPerformanceTweaks {
 
         Set-StringForAllUsers -SubPath 'Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Value '0'
         Set-StringForAllUsers -SubPath 'Control Panel\Desktop' -Name 'WindowArrangementActive' -Value '0'
-        Set-StringForAllUsers -SubPath 'Control Panel\Desktop' -Name 'MenuShowDelay' -Value '0'
+        Set-StringForAllUsers -SubPath 'Control Panel\Desktop' -Name 'MenuShowDelay' -Value '50'
         Set-StringForAllUsers -SubPath 'Control Panel\Desktop' -Name 'SmoothScroll' -Value '0'
-        Invoke-DisableAudioEnhancements | Out-Null
-        Set-NoSoundsSchemeForAllUsers | Out-Null
+        if (Resolve-DisableAudioEnhancementsPreference) {
+            Invoke-DisableAudioEnhancements | Out-Null
+        }
+        if (Resolve-DisableSystemSoundsPreference) {
+            Set-NoSoundsSchemeForAllUsers | Out-Null
+        }
 
         Request-ExplorerRestart
         Write-Log 'Desktop compositor and UI performance tweaks applied.' 'SUCCESS'
@@ -2295,6 +2301,7 @@ function Invoke-ApplyOOSUSilentRecommendedPlusSomewhat {
         # Download O&O ShutUp10
         $oosuPath = Get-OOSUDownloadPath
         $oosuConfigPath = Get-OOSUConfigPath
+        $oosuWorkingDirectory = Split-Path -Parent $oosuPath
         if (-not (Test-Path $oosuPath)) {
             Write-Log "Downloading O&O ShutUp10..." 'INFO'
             Download-File -Url 'https://dl5.oo-software.com/files/ooshutup10/OOSU10.exe' -Destination $oosuPath
@@ -2305,18 +2312,32 @@ function Invoke-ApplyOOSUSilentRecommendedPlusSomewhat {
         Write-Log "Downloading O&O ShutUp10 preset..." 'INFO'
         $forceOOSUConfigRefresh = -not ($script:PrefetchedExternalAssets.ContainsKey('oosu-config') -and [bool]$script:PrefetchedExternalAssets['oosu-config'])
         Download-File -Url $script:OOSUConfigUrl -Destination $oosuConfigPath -Force:$forceOOSUConfigRefresh | Out-Null
+        if (-not (Test-Path $oosuConfigPath)) {
+            throw "O&O ShutUp10 preset was not found after download: $oosuConfigPath"
+        }
 
         Write-Log "Importing O&O ShutUp10 preset silently..." 'INFO'
-        Start-ProcessChecked -FilePath $oosuPath -ArgumentList @($oosuConfigPath, '/quiet', '/force') -WindowStyle Hidden | Out-Null
+        $oosuImportResult = $true
+        try {
+            Start-ProcessChecked `
+                -FilePath $oosuPath `
+                -ArgumentList @($oosuConfigPath, '/quiet', '/force', '/nosrp') `
+                -WorkingDirectory $oosuWorkingDirectory `
+                -WindowStyle Hidden | Out-Null
+        } catch {
+            Write-Log "O&O ShutUp10 silent preset import failed: $($_.Exception.Message)" 'WARN'
+            $oosuImportResult = New-TaskWarningResult -Reason 'O&O ShutUp10 silent preset import failed; utility opened for manual review'
+        }
 
         Initialize-DesktopShortcut -ShortcutName 'O&O ShutUp10' -TargetPath $oosuPath -Description 'O&O ShutUp10' | Out-Null
         if ($script:IsAutomationRun) {
             Write-Log 'Automation-safe mode enabled; skipping O&O ShutUp10 UI launch.' 'INFO'
         } else {
-            Start-Process -FilePath $oosuPath | Out-Null
+            Start-Process -FilePath $oosuPath -WorkingDirectory $oosuWorkingDirectory | Out-Null
         }
 
-        Write-Log "O&O ShutUp10 preset imported silently.$(if ($script:IsAutomationRun) { ' UI launch skipped for automation-safe mode.' } else { ' Window opened for review.' })" 'SUCCESS'
+        Write-Log "O&O ShutUp10 preset import finished.$(if ($script:IsAutomationRun) { ' UI launch skipped for automation-safe mode.' } else { ' Window opened for review.' })" 'SUCCESS'
+        return $oosuImportResult
 
     } catch {
         Write-Log "Error applying O&O ShutUp10: $_" 'ERROR'

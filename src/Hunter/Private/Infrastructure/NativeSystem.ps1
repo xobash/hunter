@@ -36,11 +36,24 @@ function Start-ProcessChecked {
         [Parameter(Mandatory)][string]$FilePath,
         [string[]]$ArgumentList = @(),
         [int[]]$SuccessExitCodes = @(0),
+        [string]$WorkingDirectory = '',
         [ValidateSet('Normal','Hidden','Minimized','Maximized')]
         [string]$WindowStyle = 'Normal'
     )
 
-    $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -Wait -PassThru -WindowStyle $WindowStyle -ErrorAction Stop
+    $startProcessParameters = @{
+        FilePath     = $FilePath
+        ArgumentList = $ArgumentList
+        Wait         = $true
+        PassThru     = $true
+        WindowStyle  = $WindowStyle
+        ErrorAction  = 'Stop'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+        $startProcessParameters.WorkingDirectory = $WorkingDirectory
+    }
+
+    $process = Start-Process @startProcessParameters
     if ($null -eq $process) {
         throw "Failed to start process $FilePath"
     }

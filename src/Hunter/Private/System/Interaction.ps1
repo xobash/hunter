@@ -105,3 +105,33 @@ function Resolve-ConfigureAutologinPreference {
 
     return [bool]$script:ConfigureAutologin
 }
+
+function Resolve-ForceStorageOptimizationPreference {
+    if ([bool]$script:ForceStorageOptimizationRequested -or $env:HUNTER_FORCE_STORAGE_OPTIMIZATION -eq '1') {
+        $script:ForceStorageOptimizationRequested = $true
+        return $true
+    }
+
+    Write-Log 'Skipping NTFS USN journal deletion and disk write-cache buffer-flushing disable by default. Pass -ForceStorageOptimization or set HUNTER_FORCE_STORAGE_OPTIMIZATION=1 to opt in.' 'INFO'
+    return $false
+}
+
+function Resolve-DisableAudioEnhancementsPreference {
+    if ([bool]$script:DisableAudioEnhancementsRequested -or $env:HUNTER_DISABLE_AUDIO_ENHANCEMENTS -eq '1') {
+        $script:DisableAudioEnhancementsRequested = $true
+        return $true
+    }
+
+    Write-Log 'Skipping audio-enhancement disable by default. Pass -DisableAudioEnhancements or set HUNTER_DISABLE_AUDIO_ENHANCEMENTS=1 to opt in.' 'INFO'
+    return $false
+}
+
+function Resolve-DisableSystemSoundsPreference {
+    if ([bool]$script:DisableSystemSoundsRequested -or $env:HUNTER_DISABLE_SYSTEM_SOUNDS -eq '1') {
+        $script:DisableSystemSoundsRequested = $true
+        return $true
+    }
+
+    Write-Log 'Skipping Windows sound-scheme disable by default. Pass -DisableSystemSounds or set HUNTER_DISABLE_SYSTEM_SOUNDS=1 to opt in.' 'INFO'
+    return $false
+}
