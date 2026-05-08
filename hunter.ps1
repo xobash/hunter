@@ -16,7 +16,7 @@ try {
 $script:HunterSourceRoot = $null
 $script:HunterReleaseChannel = 'preview'
 $script:HunterReleaseVersion = '2.0.3-preview.2'
-$script:HunterBootstrapRevision = '7626c3340625052b6ef0fafbe85f7bad5c24725a'
+$script:HunterBootstrapRevision = '16efb5e6a874a855837ea8c311be84774653691a'
 $script:HunterRemoteRevision = $script:HunterBootstrapRevision
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
