@@ -16,6 +16,60 @@ function Invoke-SetExplorerHomeThisPC {
     }
 }
 
+function Invoke-ShowExplorerFileExtensions {
+    <#
+    .SYNOPSIS
+    Shows file extensions in File Explorer.
+    WinUtil parity: https://winutil.christitus.com/dev/tweaks/customize-preferences/showext/
+    #>
+    if (Test-TaskCompleted -TaskId 'explorer-show-file-extensions') {
+        Write-Log 'Explorer file extensions already visible, skipping'
+        return (New-TaskSkipResult -Reason 'Explorer file extensions are already visible')
+    }
+
+    try {
+        $advancedPath = 'Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+
+        Set-DwordForAllUsers -SubPath $advancedPath -Name 'HideFileExt' -Value 0
+        if (-not (Test-RegistryValue -Path "HKCU:\$advancedPath" -Name 'HideFileExt' -ExpectedValue 0)) {
+            throw 'Explorer file-extension visibility did not persist for the current user.'
+        }
+
+        Request-ExplorerRestart
+        return $true
+    } catch {
+        Write-Log "Failed to show Explorer file extensions : $_" 'ERROR'
+        return $false
+    }
+}
+
+function Invoke-ShowExplorerHiddenFiles {
+    <#
+    .SYNOPSIS
+    Shows hidden files in File Explorer.
+    WinUtil parity: https://winutil.christitus.com/dev/tweaks/customize-preferences/hiddenfiles/
+    #>
+    if (Test-TaskCompleted -TaskId 'explorer-show-hidden-files') {
+        Write-Log 'Explorer hidden files already visible, skipping'
+        return (New-TaskSkipResult -Reason 'Explorer hidden files are already visible')
+    }
+
+    try {
+        $advancedPath = 'Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+
+        Set-DwordForAllUsers -SubPath $advancedPath -Name 'Hidden' -Value 1
+        if (-not (Test-RegistryValue -Path "HKCU:\$advancedPath" -Name 'Hidden' -ExpectedValue 1)) {
+            throw 'Explorer hidden-file visibility did not persist for the current user.'
+        }
+
+        Request-ExplorerRestart
+        return $true
+    } catch {
+        Write-Log "Failed to show Explorer hidden files : $_" 'ERROR'
+        return $false
+    }
+}
+
 function Invoke-RemoveExplorerHomeTab {
     try {
         $homeGuid = '{f874310e-b6b7-47dc-bc84-b9e6b38f5903}'

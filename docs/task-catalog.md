@@ -36,9 +36,12 @@ Risk labels:
 | 3 | `startui-widgets` | Safe | Minimal, Balanced, Aggressive, VMReset | Disable Windows Widgets |
 | 3 | `startui-end-task` | Safe | Minimal, Balanced, Aggressive, VMReset | Enable End Task option on taskbar |
 | 3 | `startui-notifications` | Safe | Minimal, Balanced, Aggressive, VMReset | Disable notifications, tray, and calendar |
+| 3 | `startui-battery-percentage` | Safe | Minimal, Balanced, Aggressive, VMReset | Enable battery percentage in the taskbar on portable systems |
 | 3 | `startui-new-outlook` | Safe | Minimal, Balanced, Aggressive, VMReset | Disable new Outlook and auto-migration |
 | 3 | `startui-settings-home` | Safe | Minimal, Balanced, Aggressive, VMReset | Hide Settings home page |
 | 4 | `explorer-home-thispc` | Safe | Minimal, Balanced, Aggressive, VMReset | Set Explorer home to This PC |
+| 4 | `explorer-show-file-extensions` | Safe | Minimal, Balanced, Aggressive, VMReset | Show file extensions in Explorer |
+| 4 | `explorer-show-hidden-files` | Safe | Minimal, Balanced, Aggressive, VMReset | Show hidden files in Explorer |
 | 4 | `explorer-remove-home-v2` | Safe | Minimal, Balanced, Aggressive, VMReset | Remove Home tab from Explorer |
 | 4 | `explorer-remove-gallery-v2` | Safe | Minimal, Balanced, Aggressive, VMReset | Remove Gallery tab from Explorer |
 | 4 | `explorer-remove-onedrive` | Safe | Minimal, Balanced, Aggressive, VMReset | Remove OneDrive tab from Explorer |
@@ -58,6 +61,10 @@ Risk labels:
 | 7 | `tweaks-virtualization-security` | Aggressive | Aggressive, VMReset | Disable HVCI, Hyper-V side features, Sandbox, and Application Guard |
 | 7 | `tweaks-telemetry` | Moderate | Minimal, Balanced, Aggressive, VMReset | Disable telemetry plus Hunter privacy/web-content policies |
 | 7 | `tweaks-location` | Moderate | Minimal, Balanced, Aggressive, VMReset | Disable location tracking |
+| 7 | `tweaks-wpbt` | Moderate | Minimal, Balanced, Aggressive, VMReset | Disable Windows Platform Binary Table execution |
+| 7 | `tweaks-detailed-bsod` | Safe | Minimal, Balanced, Aggressive, VMReset | Enable detailed BSOD parameters and disable the simplified crash emoticon |
+| 7 | `tweaks-verbose-logon` | Safe | Minimal, Balanced, Aggressive, VMReset | Enable verbose status messages during logon and shutdown |
+| 7 | `tweaks-numlock` | Safe | Minimal, Balanced, Aggressive, VMReset | Enable Num Lock on startup for current, default, and logon users |
 | 7 | `tweaks-hibernation` | Moderate | Aggressive, VMReset | Disable hibernation mode |
 | 7 | `tweaks-background-apps` | Moderate | Minimal, Balanced, Aggressive, VMReset | Disable background apps plus OneDrive, Widgets, and Edge background activity |
 | 7 | `tweaks-teredo` | Moderate | Balanced, Aggressive, VMReset | Disable Teredo tunneling protocol |

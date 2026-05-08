@@ -30,9 +30,12 @@ Describe 'Task catalog compatibility' {
             'startui-widgets',
             'startui-end-task',
             'startui-notifications',
+            'startui-battery-percentage',
             'startui-new-outlook',
             'startui-settings-home',
             'explorer-home-thispc',
+            'explorer-show-file-extensions',
+            'explorer-show-hidden-files',
             'explorer-remove-home-v2',
             'explorer-remove-gallery-v2',
             'explorer-remove-onedrive',
@@ -52,6 +55,10 @@ Describe 'Task catalog compatibility' {
             'tweaks-virtualization-security',
             'tweaks-telemetry',
             'tweaks-location',
+            'tweaks-wpbt',
+            'tweaks-detailed-bsod',
+            'tweaks-verbose-logon',
+            'tweaks-numlock',
             'tweaks-hibernation',
             'tweaks-background-apps',
             'tweaks-teredo',
@@ -88,11 +95,11 @@ Describe 'Task catalog compatibility' {
         $expectedPhases = @(
             '1', '1', '1', '1', '1', '1', '1',
             '2', '2', '2', '2', '2',
-            '3', '3', '3', '3', '3', '3', '3', '3', '3',
-            '4', '4', '4', '4', '4',
+            '3', '3', '3', '3', '3', '3', '3', '3', '3', '3',
+            '4', '4', '4', '4', '4', '4', '4',
             '5', '5', '5', '5', '5', '5',
             '6', '6', '6', '6', '6',
-            '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7',
+            '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7',
             '8', '8', '8', '8', '8',
             '9', '9', '9', '9', '9', '9', '9',
             '10'
@@ -100,7 +107,7 @@ Describe 'Task catalog compatibility' {
     }
 
     It 'defines the current total task count' {
-        $taskCatalog.Count | Should -Be 72
+        $taskCatalog.Count | Should -Be 79
     }
 
     It 'preserves the exact task ID order' {

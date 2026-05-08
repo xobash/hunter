@@ -1,3 +1,105 @@
+function Invoke-DisableWpbtExecution {
+    <#
+    .SYNOPSIS
+    Disables Windows Platform Binary Table execution.
+    WinUtil parity: https://winutil.christitus.com/dev/tweaks/essential-tweaks/wpbt/
+    #>
+    if (Test-TaskCompleted -TaskId 'tweaks-wpbt') {
+        Write-Log 'WPBT execution already disabled, skipping'
+        return (New-TaskSkipResult -Reason 'WPBT execution is already disabled')
+    }
+
+    try {
+        if (-not (Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name 'DisableWpbtExecution' -Value 1 -Type 'DWord')) {
+            return $false
+        }
+        return $true
+    } catch {
+        Write-Log "Failed to disable WPBT execution : $_" 'ERROR'
+        return $false
+    }
+}
+
+function Invoke-EnableDetailedBsod {
+    <#
+    .SYNOPSIS
+    Enables detailed crash parameters and disables the simplified BSOD emoticon.
+    WinUtil parity: https://winutil.christitus.com/dev/tweaks/customize-preferences/detailedbsod/
+    #>
+    if (Test-TaskCompleted -TaskId 'tweaks-detailed-bsod') {
+        Write-Log 'Detailed BSOD output already enabled, skipping'
+        return (New-TaskSkipResult -Reason 'Detailed BSOD output is already enabled')
+    }
+
+    try {
+        $crashControlPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl'
+
+        if (-not (Set-RegistryValue -Path $crashControlPath -Name 'DisplayParameters' -Value 1 -Type 'DWord')) {
+            return $false
+        }
+        if (-not (Set-RegistryValue -Path $crashControlPath -Name 'DisableEmoticon' -Value 1 -Type 'DWord')) {
+            return $false
+        }
+
+        return $true
+    } catch {
+        Write-Log "Failed to enable detailed BSOD output : $_" 'ERROR'
+        return $false
+    }
+}
+
+function Invoke-EnableVerboseLogon {
+    <#
+    .SYNOPSIS
+    Enables verbose status messages during logon and shutdown.
+    WinUtil parity: https://winutil.christitus.com/dev/tweaks/customize-preferences/verboselogon/
+    #>
+    if (Test-TaskCompleted -TaskId 'tweaks-verbose-logon') {
+        Write-Log 'Verbose logon messages already enabled, skipping'
+        return (New-TaskSkipResult -Reason 'Verbose logon messages are already enabled')
+    }
+
+    try {
+        if (-not (Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name 'VerboseStatus' -Value 1 -Type 'DWord')) {
+            return $false
+        }
+        return $true
+    } catch {
+        Write-Log "Failed to enable verbose logon messages : $_" 'ERROR'
+        return $false
+    }
+}
+
+function Invoke-EnableNumLockOnStartup {
+    <#
+    .SYNOPSIS
+    Enables Num Lock at startup for the current user, future users, and the logon screen.
+    WinUtil parity: https://winutil.christitus.com/dev/tweaks/customize-preferences/numlock/
+    #>
+    if (Test-TaskCompleted -TaskId 'tweaks-numlock') {
+        Write-Log 'Num Lock startup policy already enabled, skipping'
+        return (New-TaskSkipResult -Reason 'Num Lock startup policy is already enabled')
+    }
+
+    try {
+        $keyboardSubPath = 'Control Panel\Keyboard'
+        $defaultDesktopPath = 'Registry::HKEY_USERS\.DEFAULT\Control Panel\Keyboard'
+
+        Set-StringForAllUsers -SubPath $keyboardSubPath -Name 'InitialKeyboardIndicators' -Value '2'
+        if (-not (Test-RegistryValue -Path "HKCU:\$keyboardSubPath" -Name 'InitialKeyboardIndicators' -ExpectedValue '2')) {
+            throw 'Num Lock startup preference did not persist for the current user.'
+        }
+        if (-not (Set-RegistryValue -Path $defaultDesktopPath -Name 'InitialKeyboardIndicators' -Value '2' -Type 'String')) {
+            return $false
+        }
+
+        return $true
+    } catch {
+        Write-Log "Failed to enable Num Lock on startup : $_" 'ERROR'
+        return $false
+    }
+}
+
 function Invoke-DisableIPv6 {
     <#
     .SYNOPSIS

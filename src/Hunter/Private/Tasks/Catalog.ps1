@@ -33,6 +33,7 @@ function Get-HunterTaskRiskLevel {
         'apps-activity-history',
         'tweaks-telemetry',
         'tweaks-location',
+        'tweaks-wpbt',
         'tweaks-hibernation',
         'tweaks-background-apps',
         'tweaks-teredo',
@@ -79,9 +80,12 @@ function Get-HunterTaskProfiles {
         'startui-widgets',
         'startui-end-task',
         'startui-notifications',
+        'startui-battery-percentage',
         'startui-new-outlook',
         'startui-settings-home',
         'explorer-home-thispc',
+        'explorer-show-file-extensions',
+        'explorer-show-hidden-files',
         'explorer-remove-home-v2',
         'explorer-remove-gallery-v2',
         'explorer-remove-onedrive',
@@ -99,6 +103,10 @@ function Get-HunterTaskProfiles {
         'apps-activity-history',
         'tweaks-telemetry',
         'tweaks-location',
+        'tweaks-wpbt',
+        'tweaks-detailed-bsod',
+        'tweaks-verbose-logon',
+        'tweaks-numlock',
         'tweaks-background-apps',
         'tweaks-store-search',
         'external-oosu',
@@ -171,9 +179,12 @@ function Get-HunterTaskCatalog {
         [pscustomobject]@{ Id = 'startui-widgets'; Phase = '3'; Handler = { Invoke-DisableWidgets }; Description = 'Disable Windows Widgets' }
         [pscustomobject]@{ Id = 'startui-end-task'; Phase = '3'; Handler = { Invoke-EnableEndTaskOnTaskbar }; Description = 'Enable End Task option on taskbar' }
         [pscustomobject]@{ Id = 'startui-notifications'; Phase = '3'; Handler = { Invoke-DisableNotificationsTrayCalendar }; Description = 'Disable notifications, tray, and calendar' }
+        [pscustomobject]@{ Id = 'startui-battery-percentage'; Phase = '3'; Handler = { Invoke-EnableBatteryPercentage }; Description = 'Enable battery percentage in the taskbar on portable systems' }
         [pscustomobject]@{ Id = 'startui-new-outlook'; Phase = '3'; Handler = { Invoke-DisableNewOutlook }; Description = 'Disable new Outlook and auto-migration' }
         [pscustomobject]@{ Id = 'startui-settings-home'; Phase = '3'; Handler = { Invoke-HideSettingsHome }; Description = 'Hide Settings home page' }
         [pscustomobject]@{ Id = 'explorer-home-thispc'; Phase = '4'; Handler = { Invoke-SetExplorerHomeThisPC }; Description = 'Set Explorer home to This PC' }
+        [pscustomobject]@{ Id = 'explorer-show-file-extensions'; Phase = '4'; Handler = { Invoke-ShowExplorerFileExtensions }; Description = 'Show file extensions in Explorer' }
+        [pscustomobject]@{ Id = 'explorer-show-hidden-files'; Phase = '4'; Handler = { Invoke-ShowExplorerHiddenFiles }; Description = 'Show hidden files in Explorer' }
         [pscustomobject]@{ Id = 'explorer-remove-home-v2'; Phase = '4'; Handler = { Invoke-RemoveExplorerHomeTab }; Description = 'Remove Home tab from Explorer' }
         [pscustomobject]@{ Id = 'explorer-remove-gallery-v2'; Phase = '4'; Handler = { Invoke-RemoveExplorerGalleryTab }; Description = 'Remove Gallery tab from Explorer' }
         [pscustomobject]@{ Id = 'explorer-remove-onedrive'; Phase = '4'; Handler = { Invoke-RemoveExplorerOneDriveTab }; Description = 'Remove OneDrive tab from Explorer' }
@@ -193,6 +204,10 @@ function Get-HunterTaskCatalog {
         [pscustomobject]@{ Id = 'tweaks-virtualization-security'; Phase = '7'; Handler = { Invoke-DisableVirtualizationSecurityOverhead }; Description = 'Disable HVCI, Hyper-V side features, Sandbox, and Application Guard' }
         [pscustomobject]@{ Id = 'tweaks-telemetry'; Phase = '7'; Handler = { Invoke-DisableTelemetry }; Description = 'Disable telemetry plus Hunter privacy/web-content policies' }
         [pscustomobject]@{ Id = 'tweaks-location'; Phase = '7'; Handler = { Invoke-DisableLocationTracking }; Description = 'Disable location tracking' }
+        [pscustomobject]@{ Id = 'tweaks-wpbt'; Phase = '7'; Handler = { Invoke-DisableWpbtExecution }; Description = 'Disable Windows Platform Binary Table execution' }
+        [pscustomobject]@{ Id = 'tweaks-detailed-bsod'; Phase = '7'; Handler = { Invoke-EnableDetailedBsod }; Description = 'Enable detailed BSOD parameters and disable the simplified crash emoticon' }
+        [pscustomobject]@{ Id = 'tweaks-verbose-logon'; Phase = '7'; Handler = { Invoke-EnableVerboseLogon }; Description = 'Enable verbose status messages during logon and shutdown' }
+        [pscustomobject]@{ Id = 'tweaks-numlock'; Phase = '7'; Handler = { Invoke-EnableNumLockOnStartup }; Description = 'Enable Num Lock on startup for current, default, and logon users' }
         [pscustomobject]@{ Id = 'tweaks-hibernation'; Phase = '7'; Handler = { Invoke-DisableHibernation }; Description = 'Disable hibernation mode' }
         [pscustomobject]@{ Id = 'tweaks-background-apps'; Phase = '7'; Handler = { Invoke-DisableBackgroundApps }; Description = 'Disable background apps plus OneDrive, Widgets, and Edge background activity' }
         [pscustomobject]@{ Id = 'tweaks-teredo'; Phase = '7'; Handler = { Invoke-DisableTeredo }; Description = 'Disable Teredo tunneling protocol' }

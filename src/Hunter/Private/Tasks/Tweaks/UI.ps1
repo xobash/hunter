@@ -254,6 +254,39 @@ function Invoke-DisableNotificationsTrayCalendar {
     }
 }
 
+function Invoke-EnableBatteryPercentage {
+    <#
+    .SYNOPSIS
+    Enables taskbar battery percentage on portable systems.
+    WinUtil parity: https://winutil.christitus.com/dev/tweaks/customize-preferences/batterypercentage/
+    #>
+    if (Test-TaskCompleted -TaskId 'startui-battery-percentage') {
+        Write-Log 'Taskbar battery percentage already enabled, skipping'
+        return (New-TaskSkipResult -Reason 'Taskbar battery percentage is already enabled')
+    }
+
+    try {
+        $powerPlatformContext = Get-HunterPowerPlatformContext
+        if (-not $powerPlatformContext.IsPortable) {
+            Write-Log 'Battery percentage is not applicable on non-portable systems. Skipping.' 'INFO'
+            return (New-TaskSkipResult -Reason 'Battery percentage only applies to portable systems')
+        }
+
+        $advancedPath = 'Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+
+        Set-DwordForAllUsers -SubPath $advancedPath -Name 'IsBatteryPercentageEnabled' -Value 1
+        if (-not (Test-RegistryValue -Path "HKCU:\$advancedPath" -Name 'IsBatteryPercentageEnabled' -ExpectedValue 1)) {
+            throw 'Battery percentage preference did not persist for the current user.'
+        }
+
+        Request-ExplorerRestart
+        return $true
+    } catch {
+        Write-Log "Failed to enable taskbar battery percentage : $_" 'ERROR'
+        return $false
+    }
+}
+
 function Invoke-DisableNewOutlook {
     <#
     .SYNOPSIS

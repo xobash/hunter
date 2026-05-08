@@ -11,6 +11,8 @@ Describe 'Behavior contracts' {
         $cleanupSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Cleanup.ps1') -Raw -ErrorAction Stop
         $copilotSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/OneDriveCopilot.ps1') -Raw -ErrorAction Stop
         $detectionSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/System/Detection.ps1') -Raw -ErrorAction Stop
+        $explorerSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Explorer.ps1') -Raw -ErrorAction Stop
+        $featuresSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Features.ps1') -Raw -ErrorAction Stop
         $hardwareSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Hardware.ps1') -Raw -ErrorAction Stop
         $hunterSource = Get-Content -Path (Join-Path $repoRoot 'hunter.ps1') -Raw -ErrorAction Stop
         $interactionSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/System/Interaction.ps1') -Raw -ErrorAction Stop
@@ -18,6 +20,7 @@ Describe 'Behavior contracts' {
         $pathPolicySource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Common/PathPolicy.ps1') -Raw -ErrorAction Stop
         $preflightSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Preflight.ps1') -Raw -ErrorAction Stop
         $registryOpsSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Registry/Operations.ps1') -Raw -ErrorAction Stop
+        $uiSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/UI.ps1') -Raw -ErrorAction Stop
         $userSetupSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Core/UserSetup.ps1') -Raw -ErrorAction Stop
     }
 
@@ -126,6 +129,19 @@ Describe 'Behavior contracts' {
         $interactionSource | Should -Match 'HUNTER_FORCE_TEXT_INPUT_SERVICE_REDIRECT=1'
         $registryOpsSource | Should -Match 'DoNotExpandEnvironmentNames'
         $registryOpsSource | Should -Match 'RegistryValueKind\]::ExpandString'
+    }
+
+    It 'adds WinUtil-aligned WPBT, Explorer visibility, and diagnostic preference coverage' {
+        $uiSource | Should -Match 'IsBatteryPercentageEnabled'
+        $uiSource | Should -Match 'Get-HunterPowerPlatformContext'
+        $explorerSource | Should -Match "HideFileExt' -Value 0"
+        $explorerSource | Should -Match "Hidden' -Value 1"
+        $featuresSource | Should -Match 'DisableWpbtExecution'
+        $featuresSource | Should -Match 'DisplayParameters'
+        $featuresSource | Should -Match 'DisableEmoticon'
+        $featuresSource | Should -Match 'VerboseStatus'
+        $featuresSource | Should -Match 'InitialKeyboardIndicators'
+        $registryOpsSource | Should -Match 'HKEY_USERS'
     }
 
     It 'requires explicit user consent for standard user creation and autologin' {

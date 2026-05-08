@@ -20,7 +20,7 @@ $script:HunterBootstrapRevision = '16efb5e6a874a855837ea8c311be84774653691a'
 $script:HunterRemoteRevision = $script:HunterBootstrapRevision
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = 'ff8defde260ab57d49dec65d4784dc21448d4044a17b185fe1553880f14d7d0c'
+$script:BootstrapLoaderSha256 = '52d6f19037ad15370ed4873be68b55df68960c547de600ef87b3ce433818f44c'
 
 $bootstrapLoaderPath = $null
 $canUseLocalHunterPrivateLayers = $false
