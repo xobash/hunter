@@ -78,6 +78,42 @@ function Add-RunInfrastructureIssue {
     Write-Log $Message $Level
 }
 
+function Reset-HunterValidationResults {
+    $script:ValidationResults = @()
+}
+
+function Add-HunterValidationResult {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][bool]$Passed,
+        [string]$Detail = '',
+        [switch]$Skipped
+    )
+
+    if (-not $script:ValidationResults) {
+        $script:ValidationResults = @()
+    }
+
+    $status = if ($Skipped) { 'Skipped' } elseif ($Passed) { 'Passed' } else { 'Failed' }
+    $entry = [pscustomobject]@{
+        Name   = $Name
+        Status = $status
+        Passed = [bool]$Passed
+        Detail = [string]$Detail
+    }
+
+    $script:ValidationResults += @($entry)
+    $prefix = if ($Skipped) { '[VERIFY] SKIP' } elseif ($Passed) { '[VERIFY] PASS' } else { '[VERIFY] FAIL' }
+    $message = if ([string]::IsNullOrWhiteSpace($Detail)) {
+        "$prefix $Name"
+    } else {
+        "$prefix $Name: $Detail"
+    }
+    Write-Log $message $(if ($Skipped) { 'INFO' } elseif ($Passed) { 'SUCCESS' } else { 'WARN' })
+
+    return $entry
+}
+
 function New-TaskSkipResult {
     param([string]$Reason = '')
 

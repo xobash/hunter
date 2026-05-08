@@ -825,6 +825,8 @@ function Save-HunterRunConfiguration {
         ReleaseVersion      = [string]$script:HunterReleaseVersion
         BootstrapRevision   = [string]$script:HunterBootstrapRevision
         Mode                = [string]$Mode
+        DryRunMode          = [bool]$script:DryRunMode
+        Profile             = [string]$script:SelectedProfile
         StrictMode          = [bool]$script:StrictMode
         AutomationSafe      = [bool]$script:IsAutomationRun
         DisableIPv6         = [bool]$script:DisableIPv6Requested
@@ -834,6 +836,7 @@ function Save-HunterRunConfiguration {
         ForceStorageOptimization = [bool]$script:ForceStorageOptimizationRequested
         DisableAudioEnhancements = [bool]$script:DisableAudioEnhancementsRequested
         DisableSystemSounds = [bool]$script:DisableSystemSoundsRequested
+        ForceTextInputServiceRedirect = [bool]$script:ForceTextInputServiceRedirectRequested
         SkipTaskIds         = @($SkipTaskIds | Select-Object -Unique)
         CustomAppsListPath  = [string]$CustomAppsListPath
         PagefileDrive       = [string]$PagefileDrive

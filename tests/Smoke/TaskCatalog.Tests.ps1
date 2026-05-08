@@ -81,7 +81,8 @@ Describe 'Task catalog compatibility' {
             'cleanup-autologin-secrets',
             'cleanup-disk-cleanup',
             'cleanup-explorer-restart',
-            'cleanup-export-log'
+            'cleanup-export-log',
+            'validation-post-run-state'
         )
 
         $expectedPhases = @(
@@ -93,12 +94,13 @@ Describe 'Task catalog compatibility' {
             '6', '6', '6', '6', '6',
             '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7',
             '8', '8', '8', '8', '8',
-            '9', '9', '9', '9', '9', '9', '9'
+            '9', '9', '9', '9', '9', '9', '9',
+            '10'
         )
     }
 
     It 'defines the current total task count' {
-        $taskCatalog.Count | Should -Be 71
+        $taskCatalog.Count | Should -Be 72
     }
 
     It 'preserves the exact task ID order' {
@@ -123,7 +125,16 @@ Describe 'Task catalog compatibility' {
 
     It 'keeps every task risk level populated with a supported value' {
         @($taskCatalog | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.RiskLevel) }).Count | Should -Be 0
-        @($taskCatalog | Where-Object { [string]$_.RiskLevel -notin @('Low', 'Medium', 'High') }).Count | Should -Be 0
+        @($taskCatalog | Where-Object { [string]$_.RiskLevel -notin @('Safe', 'Moderate', 'Aggressive') }).Count | Should -Be 0
+    }
+
+    It 'keeps every task profile list populated with supported values' {
+        @($taskCatalog | Where-Object { $null -eq $_.Profiles -or @($_.Profiles).Count -eq 0 }).Count | Should -Be 0
+        @(
+            $taskCatalog | Where-Object {
+                @($_.Profiles | Where-Object { [string]$_ -notin @('Minimal', 'Balanced', 'Aggressive', 'VMReset') }).Count -gt 0
+            }
+        ).Count | Should -Be 0
     }
 
     It 'keeps the engine building tasks from the catalog function' {

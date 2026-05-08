@@ -15,13 +15,22 @@ Hunter is a PowerShell-based baseline script for personal Windows installs. It r
 > [!WARNING]
 > Hunter runs as administrator and changes system settings. Use the `stable` channel for real machines and `main` only when validating preview changes. It is not intended for managed enterprise devices, shared systems, or one-off single-setting tweaks.
 
+## Safety
+
+- Hunter captures rollback data for shared registry, service, scheduled task, and active power-plan changes.
+- Interactive runs create a restore point before mutation continues unless the selected profile is `VMReset`.
+- Hunter supports `-WhatIf` preview mode plus `Minimal`, `Balanced`, `Aggressive`, and `VMReset` execution profiles.
+- Hunter validates critical registry, service, and power-plan outcomes after the main run completes.
+- Hunter preserves prefetch and scheduled defrag defaults on rotational disks and blocks disk write-cache flushing changes on battery-backed systems.
+- Hunter exports a report, full log, restore script, and run configuration on every run.
+
 ## Quick Start
 
 Run from an elevated Windows PowerShell session:
 
 ```powershell
 irm https://raw.githubusercontent.com/xobash/hunter/stable/hunter.ps1 | iex
-````
+```
 
 Preview channel:
 
@@ -45,24 +54,23 @@ powershell -ExecutionPolicy Bypass -File .\hunter.ps1
 
 ## Requirements
 
-| Requirement | Notes                                                                      |
-| ----------- | -------------------------------------------------------------------------- |
-| Windows     | Windows 10 or Windows 11                                                   |
-| Shell       | Elevated Windows PowerShell, `powershell.exe`                              |
-| Network     | Internet access for bootstrap, package, and external-tool steps            |
-| Packages    | `winget` is used for supported package installs and WinGet-backed removals |
+| Requirement | Notes |
+| --- | --- |
+| Windows | Windows 10 or Windows 11 |
+| Shell | Elevated Windows PowerShell, `powershell.exe` |
+| Network | Internet access for bootstrap, package, and external-tool steps |
+| Packages | `winget` is used for supported package installs and WinGet-backed removals |
 
 ## What It Does
 
-Hunter builds a task plan, labels task risk, resumes from checkpoints, and exports run artifacts under `%ProgramData%\Hunter`.
-
-Core areas:
-
-* preflight validation, restore point creation, and checkpoint setup
-* Windows UI, Explorer, Start, privacy, cloud, and hardware policy changes
-* catalog-driven app removal from `src/Hunter/Config/Apps.json`
-* package and external-tool steps where configured
-* final cleanup, report export, rollback manifest, and restore script generation
+- Builds a fixed task catalog and executes it with checkpoint and resume support.
+- Logs a pre-run execution plan with per-task risk labels before mutation begins.
+- Supports no-mutation `-WhatIf` previews for every execution profile.
+- Applies Windows build-aware UI, privacy, Explorer, cloud, app, and hardware changes.
+- Removes supported apps from the catalog in `src/Hunter/Config/Apps.json`.
+- Runs package and external-tool steps where configured.
+- Re-checks critical settings after execution and records validation results in the final report.
+- Exports a report, full log, restore script, and run configuration at the end of the run.
 
 ## Usage
 
@@ -72,6 +80,9 @@ powershell -ExecutionPolicy Bypass -File .\hunter.ps1
 
 # Fail the run if a mandatory task still fails after retry handling
 powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -Strict
+
+# Preview the selected run without mutating the system
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -WhatIf -Profile Balanced
 
 # Avoid UI-only launches and automatic reboot/sign-out behavior
 powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -AutomationSafe
@@ -86,48 +97,82 @@ powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -CustomAppsListPath .\Cust
 powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -LogPath .\hunter.log
 ```
 
-<details>
-<summary>Advanced and opt-in flags</summary>
+Profile presets:
 
-| Flag                        | Purpose                                                    |
-| --------------------------- | ---------------------------------------------------------- |
-| `-DisableIPv6`              | Opt in to Hunter's IPv6-disable task.                      |
-| `-DisableTeredo`            | Opt in to Hunter's Teredo-disable task.                    |
-| `-DisableHags`              | Opt out of Hunter's default HAGS-enable policy.            |
-| `-DisableCpuMitigations`    | Opt in to disabling speculative-execution mitigations.     |
-| `-ForceStorageOptimization` | Opt in to aggressive NTFS and disk write-cache tweaks.     |
-| `-DisableAudioEnhancements` | Opt in to disabling Windows audio enhancements.            |
-| `-DisableSystemSounds`      | Opt in to Hunter's silent system sound scheme.             |
-| `-PagefileDrive <drive>`    | Move the fixed pagefile target to a specific drive letter. |
-| `-Mode Resume`              | Internal recovery mode used by the scheduled resume task.  |
+```powershell
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -Profile Minimal
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -Profile Balanced
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -Profile Aggressive
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -Profile VMReset
+```
 
-Some advanced flags may appear first on `main` before they are available in `stable`.
+Opt into legacy disable flags:
 
-</details>
+```powershell
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -DisableIPv6 -DisableTeredo -DisableHags
+```
 
-<details>
-<summary>Environment variables</summary>
+Opt into the aggressive storage and audio tweaks that are now disabled by default:
 
-| Variable                              | Purpose                                                        |
-| ------------------------------------- | -------------------------------------------------------------- |
-| `HUNTER_AUTOMATION_SAFE=1`            | Force automation-safe behavior.                                |
-| `HUNTER_CUSTOM_APPS_LIST=<path>`      | Provide a default custom app list path.                        |
-| `HUNTER_DISABLE_IPV6=1`               | Opt in to IPv6 disable.                                        |
-| `HUNTER_DISABLE_TEREDO=1`             | Opt in to Teredo disable.                                      |
-| `HUNTER_DISABLE_HAGS=1`               | Opt out of default HAGS enablement.                            |
-| `HUNTER_DISABLE_CPU_MITIGATIONS=1`    | Opt in to disabling speculative-execution mitigations.         |
-| `HUNTER_FORCE_STORAGE_OPTIMIZATION=1` | Opt in to aggressive storage tweaks.                           |
-| `HUNTER_DISABLE_AUDIO_ENHANCEMENTS=1` | Opt in to disabling audio enhancements.                        |
-| `HUNTER_DISABLE_SYSTEM_SOUNDS=1`      | Opt in to the silent sound scheme.                             |
-| `HUNTER_LOCAL_USER_PASSWORD=<value>`  | Override the managed local-user password if that path is used. |
+```powershell
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -ForceStorageOptimization -DisableAudioEnhancements -DisableSystemSounds -ForceTextInputServiceRedirect
+```
 
-</details>
+## Configuration
+
+### Flags
+
+| Flag | Purpose |
+| --- | --- |
+| `-Strict` | Fail the overall run if a mandatory task still fails after retry handling. |
+| `-WhatIf` | Print the selected execution plan and exit before Hunter mutates the system. |
+| `-Profile <name>` | Select `Minimal`, `Balanced`, `Aggressive`, or `VMReset`. |
+| `-AutomationSafe` | Skip UI-only launches and automatic reboot or sign-out behavior. |
+| `-SkipTask <id1,id2>` | Skip one or more task IDs for the current run. |
+| `-CustomAppsListPath <path>` | Override the default broad app-removal selection. |
+| `-DisableIPv6` | Opt in to Hunter's IPv6-disable task. |
+| `-DisableTeredo` | Opt in to Hunter's Teredo-disable task. |
+| `-DisableCpuMitigations` | Opt in to disabling speculative-execution mitigations. |
+| `-DisableHags` | Opt out of Hunter's default HAGS-enable policy. |
+| `-ForceStorageOptimization` | Opt in to NTFS USN journal deletion and disk write-cache buffer-flushing disable. |
+| `-DisableAudioEnhancements` | Opt in to disabling Windows audio enhancements. |
+| `-DisableSystemSounds` | Opt in to Hunter's silent system sound-scheme change. |
+| `-ForceTextInputServiceRedirect` | Opt in to the advanced `TextInputManagementService` `ServiceDll` redirect. |
+| `-PagefileDrive <drive>` | Move the fixed pagefile target to a specific drive letter. |
+| `-LogPath <path>` | Write the main log to a custom path. |
+| `-Mode Resume` | Internal recovery mode used by the scheduled resume task. |
+
+### Environment Variables
+
+| Variable | Purpose |
+| --- | --- |
+| `HUNTER_AUTOMATION_SAFE=1` | Force automation-safe behavior without passing `-AutomationSafe`. |
+| `HUNTER_WHATIF=1` | Force dry-run preview behavior without passing `-WhatIf`. |
+| `HUNTER_CUSTOM_APPS_LIST=<path>` | Provide a default custom apps list path. |
+| `HUNTER_DISABLE_IPV6=1` | Opt in to IPv6 disable. |
+| `HUNTER_DISABLE_TEREDO=1` | Opt in to Teredo disable. |
+| `HUNTER_DISABLE_CPU_MITIGATIONS=1` | Opt in to disabling speculative-execution mitigations. |
+| `HUNTER_DISABLE_HAGS=1` | Opt out of default HAGS enablement. |
+| `HUNTER_FORCE_STORAGE_OPTIMIZATION=1` | Opt in to the aggressive storage tweaks Hunter now preserves by default. |
+| `HUNTER_DISABLE_AUDIO_ENHANCEMENTS=1` | Opt in to disabling Windows audio enhancements. |
+| `HUNTER_DISABLE_SYSTEM_SOUNDS=1` | Opt in to Hunter's silent system sound-scheme change. |
+| `HUNTER_FORCE_TEXT_INPUT_SERVICE_REDIRECT=1` | Opt in to the advanced text-input service redirect. |
+| `HUNTER_LOCAL_USER_PASSWORD=<value>` | Override the managed local-user password if that path is used. |
+
+### Profiles
+
+| Profile | Intent |
+| --- | --- |
+| `Minimal` | Debloat, privacy, and cleanup without the performance and system-overhead tuning pass. |
+| `Balanced` | Debloat, privacy, and safer gaming-oriented tweaks while skipping the most invasive tuning tasks. |
+| `Aggressive` | Full Hunter task catalog with the new opt-in-only aggressive exceptions still preserved by default. |
+| `VMReset` | Non-interactive aggressive run intended for disposable systems, with restore-point creation skipped and aggressive opt-ins forced on. |
 
 ## Custom App Lists
 
-Hunter reads app targets from `src/Hunter/Config/Apps.json`. A custom app list narrows the broad app-removal phase to only the app IDs you specify.
+Hunter reads app targets from `src/Hunter/Config/Apps.json`. A custom app list narrows the broad app-removal phase to only the entries you specify.
 
-Text format:
+Text example:
 
 ```text
 xbox
@@ -135,7 +180,7 @@ clipchamp
 teams
 ```
 
-JSON format:
+JSON example:
 
 ```json
 {
@@ -151,47 +196,48 @@ Protected apps are enforced by the catalog and skipped automatically.
 
 ## Outputs
 
-Hunter stores runtime state in:
+Hunter stores working state under `%ProgramData%\Hunter`.
 
-```text
-%ProgramData%\Hunter
-```
+Important runtime artifacts:
 
-Important artifacts:
+- `hunter.log`
+- `checkpoint.json`
+- `run-configuration.json`
+- `Rollback\rollback-manifest.json`
+- `Rollback\Restore-HunterState.ps1`
+- `Resume\hunter.ps1`
 
-| Artifact                           | Purpose                   |
-| ---------------------------------- | ------------------------- |
-| `hunter.log`                       | Full run log              |
-| `checkpoint.json`                  | Resume and recovery state |
-| `run-configuration.json`           | Captured run options      |
-| `Rollback\rollback-manifest.json`  | Rollback metadata         |
-| `Rollback\Restore-HunterState.ps1` | Generated restore script  |
-| `Resume\hunter.ps1`                | Scheduled resume copy     |
+Desktop exports at the end of a run:
 
-At the end of a run, Hunter also exports desktop copies of the operation report, full log, restore script, and run configuration.
+- operation report
+- full log copy
+- restore script copy
+- run-configuration copy
 
 ## Release Channels
 
-| Channel   | Ref         | Use                                       |
-| --------- | ----------- | ----------------------------------------- |
-| Stable    | `stable`    | Public one-liner and production baselines |
-| Preview   | `main`      | Pre-release validation                    |
-| Versioned | `v<semver>` | Exact reproducible release                |
+| Channel | Ref | Intended use |
+| --- | --- | --- |
+| `stable` | `stable` | Public one-liner |
+| `preview` | `main` | Pre-release validation |
+| versioned | `v<semver>` | Exact reproducible release |
 
 The wrapper logs its release channel and version at startup. Bootstrap assets are pinned to immutable revisions for integrity and reproducibility.
 
 ## Development
 
-Key paths:
+Reference docs:
 
-```text
-hunter.ps1
-src/Hunter/Config/Apps.json
-src/Hunter/Private/Bootstrap/Loader.ps1
-src/Hunter/Private/Tasks/Catalog.ps1
-src/Hunter/Private/State/Rollback.ps1
-tests/Smoke
-```
+- `docs/task-catalog.md`
+
+Key files:
+
+- `hunter.ps1`
+- `src/Hunter/Config/Apps.json`
+- `src/Hunter/Private/Bootstrap/Loader.ps1`
+- `src/Hunter/Private/Tasks/Catalog.ps1`
+- `src/Hunter/Private/State/Rollback.ps1`
+- `tests/Smoke`
 
 Recommended checks:
 
@@ -205,6 +251,3 @@ Invoke-Pester .\tests\Smoke
 ## License
 
 GPL-3.0. See `LICENSE`.
-
-```
-```

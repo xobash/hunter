@@ -135,3 +135,13 @@ function Resolve-DisableSystemSoundsPreference {
     Write-Log 'Skipping Windows sound-scheme disable by default. Pass -DisableSystemSounds or set HUNTER_DISABLE_SYSTEM_SOUNDS=1 to opt in.' 'INFO'
     return $false
 }
+
+function Resolve-ForceTextInputServiceRedirectPreference {
+    if ([bool]$script:ForceTextInputServiceRedirectRequested -or $env:HUNTER_FORCE_TEXT_INPUT_SERVICE_REDIRECT -eq '1') {
+        $script:ForceTextInputServiceRedirectRequested = $true
+        return $true
+    }
+
+    Write-Log 'Skipping the advanced TextInputManagementService ServiceDll redirect by default. Pass -ForceTextInputServiceRedirect or set HUNTER_FORCE_TEXT_INPUT_SERVICE_REDIRECT=1 to opt in.' 'INFO'
+    return $false
+}

@@ -182,8 +182,9 @@ function New-Task {
         [string]$Phase,
         [scriptblock]$ApplyHandler,
         [string]$Description = '',
-        [ValidateSet('Low', 'Medium', 'High')]
-        [string]$RiskLevel = 'Low'
+        [ValidateSet('Safe', 'Moderate', 'Aggressive')]
+        [string]$RiskLevel = 'Safe',
+        [string[]]$Profiles = @('Aggressive')
     )
 
     return @{
@@ -192,9 +193,24 @@ function New-Task {
         ApplyHandler = $ApplyHandler
         Description  = $Description
         RiskLevel    = $RiskLevel
+        Profiles     = @($Profiles)
         Status       = 'Pending'
         Error        = $null
     }
+}
+
+function Test-HunterTaskIncludedInProfile {
+    param(
+        [string[]]$Profiles,
+        [string]$Profile = 'Aggressive'
+    )
+
+    $normalizedProfiles = @($Profiles | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($normalizedProfiles.Count -eq 0) {
+        return $true
+    }
+
+    return ([string]$Profile) -in $normalizedProfiles
 }
 
 
@@ -375,7 +391,7 @@ function Build-Tasks {
         Builds and returns the complete ordered task list for Hunter execution.
 
     .DESCRIPTION
-        Constructs all tasks across 9 phases in proper execution order.
+        Constructs all tasks across 10 phases in proper execution order.
         Each task references an Invoke-* function from Parts A, B, or C.
         Tasks are organized by phase for logical dependency management.
 
@@ -391,14 +407,26 @@ function Build-Tasks {
         $Context = Get-HunterContext
     }
 
+    $selectedProfile = if ([string]::IsNullOrWhiteSpace($script:SelectedProfile)) {
+        'Aggressive'
+    } else {
+        [string]$script:SelectedProfile
+    }
+
     $tasks = @(
         foreach ($taskDefinition in @(Get-HunterTaskCatalog)) {
+            $taskProfiles = @($taskDefinition.Profiles | ForEach-Object { [string]$_ })
+            if (-not (Test-HunterTaskIncludedInProfile -Profiles $taskProfiles -Profile $selectedProfile)) {
+                continue
+            }
+
             New-Task `
                 -TaskId ([string]$taskDefinition.Id) `
                 -Phase ([string]$taskDefinition.Phase) `
                 -ApplyHandler $taskDefinition.Handler `
                 -Description ([string]$taskDefinition.Description) `
-                -RiskLevel ([string]$taskDefinition.RiskLevel)
+                -RiskLevel ([string]$taskDefinition.RiskLevel) `
+                -Profiles $taskProfiles
         }
     )
 

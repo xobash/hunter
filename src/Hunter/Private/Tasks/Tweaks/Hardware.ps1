@@ -922,6 +922,7 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
         $mmAgentState = $null
         $fsutilPath = Get-NativeSystemExecutablePath -FileName 'fsutil.exe'
         $systemVolume = $env:SystemDrive.TrimEnd('\')
+        $storageMediaContext = Get-HunterStorageMediaContext
         try {
             $mmAgentState = Get-MMAgent -ErrorAction Stop
         } catch {
@@ -931,8 +932,12 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
         $prefetchPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters'
         $memoryManagementPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
 
-        Set-RegistryValue -Path $prefetchPath -Name 'EnablePrefetcher' -Value 0 -Type DWord
-        Set-RegistryValue -Path $prefetchPath -Name 'EnableSuperfetch' -Value 0 -Type DWord
+        if ($storageMediaContext.HasHardDiskDrives) {
+            Write-Log 'Detected at least one hard disk drive; preserving Prefetch and SysMain registry policy.' 'INFO'
+        } else {
+            Set-RegistryValue -Path $prefetchPath -Name 'EnablePrefetcher' -Value 0 -Type DWord
+            Set-RegistryValue -Path $prefetchPath -Name 'EnableSuperfetch' -Value 0 -Type DWord
+        }
         Set-LargeSystemCacheByRamPolicy -Path $memoryManagementPath | Out-Null
         Set-RegistryValue -Path $memoryManagementPath -Name 'DisablePagingExecutive' -Value 1 -Type DWord
         Set-FixedPageFileByRamPolicy | Out-Null
@@ -1078,6 +1083,11 @@ function Invoke-DisableCtfmonInterception {
         Set-RegistryValue -Path $inputServicePath -Name 'InputServiceEnabled' -Value 0 -Type DWord | Out-Null
         Set-RegistryValue -Path $inputServicePath -Name 'InputServiceEnabledForCCI' -Value 0 -Type DWord | Out-Null
 
+        if (-not (Resolve-ForceTextInputServiceRedirectPreference)) {
+            Write-Log 'Skipping advanced TextInputManagementService ServiceDll redirect by default.' 'INFO'
+            return $true
+        }
+
         if (-not (Test-Path $textInputServiceParametersPath)) {
             Write-Log 'TextInputManagementService parameters path not present. Skipping advanced ServiceDll redirect.' 'INFO'
             return $true
@@ -1137,7 +1147,14 @@ function Invoke-ApplyInputAndMaintenanceTweaks {
         Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Regular Maintenance' -DisplayName 'Regular Maintenance' | Out-Null
         Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Idle Maintenance' -DisplayName 'Idle Maintenance' | Out-Null
         Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Maintenance Configurator' -DisplayName 'Maintenance Configurator' | Out-Null
-        Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\Defrag\' -TaskName 'ScheduledDefrag' -DisplayName 'Scheduled Defrag' | Out-Null
+        $storageMediaContext = Get-HunterStorageMediaContext
+        if ($storageMediaContext.HasHardDiskDrives) {
+            Write-Log 'Detected at least one hard disk drive; preserving Scheduled Defrag for rotational-media optimization.' 'INFO'
+        } elseif ($storageMediaContext.HasSolidStateDrives) {
+            Write-Log 'Detected SSD-backed storage; preserving Scheduled Defrag so Windows retrim maintenance remains available.' 'INFO'
+        } else {
+            Write-Log 'Storage media type could not be determined; preserving Scheduled Defrag by default.' 'INFO'
+        }
 
         Invoke-BCDEditBestEffort -ArgumentList @('/timeout', '0') -Description 'Boot manager timeout set to 0 seconds.' | Out-Null
         Invoke-BCDEditBestEffort -ArgumentList @('/deletevalue', 'useplatformclock') -Description 'HPET platform clock override removed.' | Out-Null

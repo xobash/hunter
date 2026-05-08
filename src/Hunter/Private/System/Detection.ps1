@@ -88,6 +88,140 @@ function Get-WindowsBuildContext {
     return $script:WindowsBuildContext
 }
 
+function Get-HunterStorageMediaContext {
+    if ($null -ne $script:StorageMediaContext) {
+        return $script:StorageMediaContext
+    }
+
+    $diskSummaries = New-Object 'System.Collections.Generic.List[object]'
+    $hasSsd = $false
+    $hasHdd = $false
+    $probeWarnings = New-Object 'System.Collections.Generic.List[string]'
+
+    $physicalDiskCommand = Get-Command -Name 'Get-PhysicalDisk' -ErrorAction SilentlyContinue
+    if ($null -ne $physicalDiskCommand) {
+        try {
+            foreach ($disk in @(Get-PhysicalDisk -ErrorAction Stop)) {
+                if ($null -eq $disk) {
+                    continue
+                }
+
+                $mediaType = [string]$disk.MediaType
+                $friendlyName = [string]$disk.FriendlyName
+                if ($mediaType -match '(?i)\bssd\b|solid state|scm') {
+                    $hasSsd = $true
+                } elseif ($mediaType -match '(?i)\bhdd\b|hard disk') {
+                    $hasHdd = $true
+                }
+
+                [void]$diskSummaries.Add([pscustomobject]@{
+                    Name      = $friendlyName
+                    MediaType = $mediaType
+                    Source    = 'Get-PhysicalDisk'
+                })
+            }
+        } catch {
+            [void]$probeWarnings.Add("Get-PhysicalDisk probe failed: $($_.Exception.Message)")
+        }
+    }
+
+    if ($diskSummaries.Count -eq 0) {
+        try {
+            foreach ($disk in @(Get-CimInstance -ClassName Win32_DiskDrive -ErrorAction Stop)) {
+                if ($null -eq $disk) {
+                    continue
+                }
+
+                $combinedText = [string]::Join(' ', @(
+                    [string]$disk.Model,
+                    [string]$disk.MediaType,
+                    [string]$disk.InterfaceType
+                ))
+                $normalizedText = $combinedText.ToLowerInvariant()
+
+                if ($normalizedText -match 'ssd|solid state|nvme') {
+                    $hasSsd = $true
+                } elseif ($normalizedText -match 'hdd|hard disk|rotational') {
+                    $hasHdd = $true
+                }
+
+                [void]$diskSummaries.Add([pscustomobject]@{
+                    Name      = [string]$disk.Model
+                    MediaType = [string]$disk.MediaType
+                    Source    = 'Win32_DiskDrive'
+                })
+            }
+        } catch {
+            [void]$probeWarnings.Add("Win32_DiskDrive probe failed: $($_.Exception.Message)")
+        }
+    }
+
+    $script:StorageMediaContext = [pscustomobject]@{
+        HasSolidStateDrives = [bool]$hasSsd
+        HasHardDiskDrives   = [bool]$hasHdd
+        DiskSummaries       = @($diskSummaries)
+        ProbeWarnings       = @($probeWarnings)
+    }
+
+    if ($probeWarnings.Count -gt 0) {
+        Write-Log ("Storage media detection completed with warnings: {0}" -f ($probeWarnings -join ' | ')) 'WARN'
+    }
+
+    return $script:StorageMediaContext
+}
+
+function Get-HunterPowerPlatformContext {
+    if ($null -ne $script:PowerPlatformContext) {
+        return $script:PowerPlatformContext
+    }
+
+    $batteryCount = 0
+    $pcSystemTypeEx = -1
+    $pcSystemType = -1
+    $probeWarnings = New-Object 'System.Collections.Generic.List[string]'
+
+    try {
+        $batteryCount = @(
+            Get-CimInstance -ClassName Win32_Battery -ErrorAction Stop |
+                Where-Object { $null -ne $_ }
+        ).Count
+    } catch {
+        [void]$probeWarnings.Add("Win32_Battery probe failed: $($_.Exception.Message)")
+    }
+
+    try {
+        $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+        if ($null -ne $computerSystem) {
+            if ($null -ne $computerSystem.PSObject.Properties['PCSystemTypeEx']) {
+                $pcSystemTypeEx = [int]$computerSystem.PCSystemTypeEx
+            }
+            if ($null -ne $computerSystem.PSObject.Properties['PCSystemType']) {
+                $pcSystemType = [int]$computerSystem.PCSystemType
+            }
+        }
+    } catch {
+        [void]$probeWarnings.Add("Win32_ComputerSystem power-platform probe failed: $($_.Exception.Message)")
+    }
+
+    $portableSystemTypes = @(2, 8, 9, 10, 14)
+    $isPortable = ($batteryCount -gt 0) -or ($pcSystemTypeEx -in $portableSystemTypes) -or ($pcSystemType -in $portableSystemTypes)
+
+    $script:PowerPlatformContext = [pscustomobject]@{
+        HasBattery      = ($batteryCount -gt 0)
+        BatteryCount    = [int]$batteryCount
+        IsPortable      = [bool]$isPortable
+        PcSystemType    = [int]$pcSystemType
+        PcSystemTypeEx  = [int]$pcSystemTypeEx
+        ProbeWarnings   = @($probeWarnings)
+    }
+
+    if ($probeWarnings.Count -gt 0) {
+        Write-Log ("Power-platform detection completed with warnings: {0}" -f ($probeWarnings -join ' | ')) 'WARN'
+    }
+
+    return $script:PowerPlatformContext
+}
+
 function Test-WindowsBuildInRange {
     param(
         [Nullable[int]]$MinBuild = $null,

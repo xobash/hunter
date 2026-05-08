@@ -103,6 +103,8 @@ Describe 'Behavior contracts' {
         $hardwareSource | Should -Match 'Resolve-ForceStorageOptimizationPreference'
         $hardwareSource | Should -Match 'Resolve-DisableAudioEnhancementsPreference'
         $hardwareSource | Should -Match 'Resolve-DisableSystemSoundsPreference'
+        $hardwareSource | Should -Match 'Get-HunterStorageMediaContext'
+        $hardwareSource | Should -Match 'Skipping prefetch and SysMain policy changes because rotational storage was detected'
         $interactionSource | Should -Match 'HUNTER_FORCE_STORAGE_OPTIMIZATION=1'
         $interactionSource | Should -Match 'HUNTER_DISABLE_AUDIO_ENHANCEMENTS=1'
         $interactionSource | Should -Match 'HUNTER_DISABLE_SYSTEM_SOUNDS=1'
@@ -120,6 +122,8 @@ Describe 'Behavior contracts' {
         $hardwareSource | Should -Match 'TextInputManagementService\\Parameters'
         $hardwareSource | Should -Match 'TabSvc\.dll'
         $hardwareSource | Should -Match 'MSCTF\.DLL'
+        $hardwareSource | Should -Match 'Resolve-ForceTextInputServiceRedirectPreference'
+        $interactionSource | Should -Match 'HUNTER_FORCE_TEXT_INPUT_SERVICE_REDIRECT=1'
         $registryOpsSource | Should -Match 'DoNotExpandEnvironmentNames'
         $registryOpsSource | Should -Match 'RegistryValueKind\]::ExpandString'
     }
@@ -136,11 +140,28 @@ Describe 'Behavior contracts' {
         $userSetupSource | Should -Match 'Autologin declined by user'
     }
 
-    It 'creates restore points automatically in interactive runs and logs a full execution plan with risk levels' {
+    It 'creates restore points automatically in interactive runs and logs a full execution plan with profile-aware risk levels' {
         $preflightSource | Should -Not -Match 'Show-YesNoDialog'
         $preflightSource | Should -Match 'Interactive run detected; creating a restore point before Hunter continues.'
         $hunterSource | Should -Match 'function Write-HunterExecutionPlan'
         $hunterSource | Should -Match 'PLANNED EXECUTION SUMMARY:'
+        $hunterSource | Should -Match 'Dry-run preview complete\. Re-run without -WhatIf to execute the selected profile\.'
+        $hunterSource | Should -Match 'Preview Only:'
+        $hunterSource | Should -Match 'Profile:\s+\$\(\$script:SelectedProfile\)'
+        $hunterSource | Should -Match "'Aggressive', 'Moderate', 'Safe'"
         $hunterSource | Should -Match '\[\{0\}\] \{1\} - \{2\}'
+    }
+
+    It 'captures storage and power-platform context for hardware-aware guardrails and exposes a validation phase' {
+        $detectionSource | Should -Match 'function Get-HunterStorageMediaContext'
+        $detectionSource | Should -Match 'Get-PhysicalDisk'
+        $detectionSource | Should -Match 'Win32_DiskDrive'
+        $detectionSource | Should -Match 'function Get-HunterPowerPlatformContext'
+        $detectionSource | Should -Match 'Win32_Battery'
+        $detectionSource | Should -Match 'Win32_ComputerSystem'
+        $hardwareSource | Should -Match 'Get-HunterPowerPlatformContext'
+        $cleanupSource | Should -Match 'function Invoke-ValidateAppliedConfiguration'
+        $cleanupSource | Should -Match '\[VERIFY\] PASS'
+        $cleanupSource | Should -Match 'VALIDATION CHECKS'
     }
 }

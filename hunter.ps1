@@ -16,11 +16,11 @@ try {
 $script:HunterSourceRoot = $null
 $script:HunterReleaseChannel = 'preview'
 $script:HunterReleaseVersion = '2.0.3-preview.2'
-$script:HunterBootstrapRevision = 'cc5401a66a2e24f6c6b2a2f69b6a2c5ede45d754'
+$script:HunterBootstrapRevision = '7626c3340625052b6ef0fafbe85f7bad5c24725a'
 $script:HunterRemoteRevision = $script:HunterBootstrapRevision
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = '8e9eb622d8db7244ba12d04a80fa5048ea0d9dd2bffc3712c49b4367d6da2fff'
+$script:BootstrapLoaderSha256 = 'ff8defde260ab57d49dec65d4784dc21448d4044a17b185fe1553880f14d7d0c'
 
 $bootstrapLoaderPath = $null
 $canUseLocalHunterPrivateLayers = $false
@@ -116,11 +116,12 @@ function Write-HunterExecutionPlan {
     ).Count
 
     Write-Log 'PLANNED EXECUTION SUMMARY:' 'INFO'
+    Write-Log "  Profile:        $($script:SelectedProfile)" 'INFO'
     Write-Log "  Pending Tasks:  $($pendingTasks.Count)" 'INFO'
     Write-Log "  Checkpointed:   $completedFromCheckpointCount" 'INFO'
     Write-Log "  User Skips:     $($requestedSkipTaskIds.Count)" 'INFO'
 
-    foreach ($riskLevel in @('High', 'Medium', 'Low')) {
+    foreach ($riskLevel in @('Aggressive', 'Moderate', 'Safe')) {
         $riskCount = @($pendingTasks | Where-Object { [string]$_.RiskLevel -eq $riskLevel }).Count
         Write-Log ("  {0} Risk:      {1}" -f $riskLevel.PadRight(6), $riskCount) 'INFO'
     }
@@ -157,6 +158,15 @@ function Invoke-Main {
 
     .PARAMETER Strict
         When set, any mandatory task failure after retries causes the entire run to fail immediately.
+
+    .PARAMETER WhatIf
+        Preview mode. Hunter builds the selected task list, logs the full execution plan,
+        and exits before it mutates the system.
+
+    .PARAMETER Profile
+        Preset task selection. Minimal focuses on debloat/privacy, Balanced keeps
+        safer gaming-oriented tweaks, Aggressive runs the full catalog, and VMReset
+        enables the aggressive opt-ins while suppressing prompts and GUI-only steps.
 
     .PARAMETER AutomationSafe
         Suppresses UI-only launches and reboot/sign-out actions so the script can
@@ -196,6 +206,9 @@ function Invoke-Main {
         Opt in to replacing the Windows sound scheme with Hunter's silent
         profile.
 
+    .PARAMETER ForceTextInputServiceRedirect
+        Opt in to the advanced TextInputManagementService ServiceDll redirect.
+
     .PARAMETER PagefileDrive
         Optional fixed-drive letter (for example `D:`) to host `pagefile.sys`
         instead of the system drive.
@@ -206,6 +219,11 @@ function Invoke-Main {
         [string]$Mode = 'Execute',
 
         [switch]$Strict,
+
+        [switch]$WhatIf,
+
+        [ValidateSet('Minimal', 'Balanced', 'Aggressive', 'VMReset')]
+        [string]$Profile = 'Aggressive',
 
         [switch]$AutomationSafe,
 
@@ -227,10 +245,14 @@ function Invoke-Main {
 
         [switch]$DisableSystemSounds,
 
+        [switch]$ForceTextInputServiceRedirect,
+
         [string]$PagefileDrive = ''
     )
 
     $script:StrictMode = [bool]$Strict
+    $script:DryRunMode = [bool]$WhatIf -or $env:HUNTER_WHATIF -eq '1'
+    $script:SelectedProfile = if ([string]::IsNullOrWhiteSpace($Profile)) { 'Aggressive' } else { [string]$Profile }
     $script:SkipTaskIds = @(
         $SkipTask |
             ForEach-Object { [string]$_ } |
@@ -251,11 +273,24 @@ function Invoke-Main {
     $script:ForceStorageOptimizationRequested = [bool]$ForceStorageOptimization -or $env:HUNTER_FORCE_STORAGE_OPTIMIZATION -eq '1'
     $script:DisableAudioEnhancementsRequested = [bool]$DisableAudioEnhancements -or $env:HUNTER_DISABLE_AUDIO_ENHANCEMENTS -eq '1'
     $script:DisableSystemSoundsRequested = [bool]$DisableSystemSounds -or $env:HUNTER_DISABLE_SYSTEM_SOUNDS -eq '1'
+    $script:ForceTextInputServiceRedirectRequested = [bool]$ForceTextInputServiceRedirect -or $env:HUNTER_FORCE_TEXT_INPUT_SERVICE_REDIRECT -eq '1'
     $script:PagefileDriveOverride = if ([string]::IsNullOrWhiteSpace($PagefileDrive)) { $null } else { $PagefileDrive.Trim() }
     $script:RunInfrastructureIssues = @()
     $script:ProgressUiIssueLogged = $false
     $script:PackagePipelineBlocked = $false
     $script:PackagePipelineBlockReason = ''
+    $profileIsVmReset = $script:SelectedProfile -eq 'VMReset'
+    if ($profileIsVmReset) {
+        $AutomationSafe = $true
+        $script:DisableIPv6Requested = $true
+        $script:DisableTeredoRequested = $true
+        $script:DisableCpuMitigationsRequested = $true
+        $script:ForceStorageOptimizationRequested = $true
+        $script:DisableAudioEnhancementsRequested = $true
+        $script:DisableSystemSoundsRequested = $true
+        $script:ForceTextInputServiceRedirectRequested = $true
+    }
+    $script:IsAutomationRun = [bool]$AutomationSafe -or $env:GITHUB_ACTIONS -eq 'true' -or $env:HUNTER_AUTOMATION_SAFE -eq '1'
     $context = Get-HunterContext
     Sync-HunterContextFromScriptState -Context $context
 
@@ -275,9 +310,6 @@ function Invoke-Main {
         Initialize-HunterDirectory $script:HunterRoot
         Initialize-HunterDirectory $script:DownloadDir
         Migrate-HunterStateToProgramData
-        $script:IsAutomationRun = [bool]$AutomationSafe -or $env:GITHUB_ACTIONS -eq 'true' -or $env:HUNTER_AUTOMATION_SAFE -eq '1'
-        Initialize-HunterRollbackState -Mode $Mode
-        Save-HunterRunConfiguration -Mode $Mode -SkipTaskIds $script:SkipTaskIds -CustomAppsListPath $(Get-HunterEffectiveCustomAppsListPath) -PagefileDrive ([string]$script:PagefileDriveOverride)
         $buildContext = Get-WindowsBuildContext
         $editionContext = Get-WindowsEditionContext
         $editionSummary = (@(
@@ -304,6 +336,8 @@ function Invoke-Main {
         Write-Log "User:            $env:USERNAME on $env:COMPUTERNAME" 'INFO'
         Write-Log "Timestamp:       $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" 'INFO'
         Write-Log "Automation:      $(if ($script:IsAutomationRun) { 'YES' } else { 'NO' })" 'INFO'
+        Write-Log "Profile:         $($script:SelectedProfile)" 'INFO'
+        Write-Log "Preview Only:    $(if ($script:DryRunMode) { 'YES' } else { 'NO' })" 'INFO'
         Write-Log ""
 
         # Log administrator status (#Requires -RunAsAdministrator already enforces elevation)
@@ -354,6 +388,9 @@ function Invoke-Main {
         if (-not [string]::IsNullOrWhiteSpace($script:CustomAppsListPathOverride)) {
             Write-Log "Custom apps list: $($script:CustomAppsListPathOverride)" 'INFO'
         }
+        if ($profileIsVmReset) {
+            Write-Log 'VMReset profile selected. Hunter is suppressing prompts and GUI-only launches, skipping restore-point creation, and enabling the aggressive opt-in tweak set.' 'WARN'
+        }
         if ($script:DisableCpuMitigationsRequested) {
             Write-Log 'Speculative-execution mitigation override requested explicitly.' 'WARN'
         }
@@ -366,12 +403,23 @@ function Invoke-Main {
         if ($script:DisableSystemSoundsRequested) {
             Write-Log 'System sound-scheme disable was requested explicitly.' 'WARN'
         }
+        if ($script:ForceTextInputServiceRedirectRequested) {
+            Write-Log 'Advanced text-input service redirect was requested explicitly.' 'WARN'
+        }
         if (-not [string]::IsNullOrWhiteSpace($script:PagefileDriveOverride)) {
             Write-Log "Pagefile target override: $($script:PagefileDriveOverride)" 'INFO'
         }
         Write-HunterExecutionPlan -Tasks $tasks -Context $context
 
         Write-Log ""
+
+        if ($script:DryRunMode) {
+            Write-Log 'Dry-run preview complete. Re-run without -WhatIf to execute the selected profile.' 'INFO'
+            return $true
+        }
+
+        Initialize-HunterRollbackState -Mode $Mode
+        Save-HunterRunConfiguration -Mode $Mode -SkipTaskIds $script:SkipTaskIds -CustomAppsListPath $(Get-HunterEffectiveCustomAppsListPath) -PagefileDrive ([string]$script:PagefileDriveOverride)
 
         # Initialize tracking arrays
         if (-not $script:TaskResults) {
@@ -497,6 +545,8 @@ function Invoke-Main {
 # Determine execution parameters from command-line arguments
 $scriptMode = 'Execute'
 $scriptStrict = $false
+$scriptWhatIf = $false
+$scriptProfile = 'Aggressive'
 $scriptLogPath = $null
 $scriptAutomationSafe = $false
 $scriptSkipTasks = @()
@@ -508,6 +558,7 @@ $scriptDisableHags = $false
 $scriptForceStorageOptimization = $false
 $scriptDisableAudioEnhancements = $false
 $scriptDisableSystemSounds = $false
+$scriptForceTextInputServiceRedirect = $false
 $scriptPagefileDrive = $null
 for ($i = 0; $i -lt $args.Count; $i++) {
     if ($args[$i] -eq '-Mode' -and ($i + 1) -lt $args.Count) {
@@ -515,6 +566,12 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     }
     elseif ($args[$i] -eq '-Strict') {
         $scriptStrict = $true
+    }
+    elseif ($args[$i] -eq '-WhatIf') {
+        $scriptWhatIf = $true
+    }
+    elseif ($args[$i] -eq '-Profile' -and ($i + 1) -lt $args.Count) {
+        $scriptProfile = $args[$i + 1]
     }
     elseif ($args[$i] -eq '-LogPath' -and ($i + 1) -lt $args.Count) {
         $scriptLogPath = $args[$i + 1]
@@ -553,6 +610,9 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     elseif ($args[$i] -eq '-DisableSystemSounds') {
         $scriptDisableSystemSounds = $true
     }
+    elseif ($args[$i] -eq '-ForceTextInputServiceRedirect') {
+        $scriptForceTextInputServiceRedirect = $true
+    }
     elseif ($args[$i] -eq '-PagefileDrive' -and ($i + 1) -lt $args.Count) {
         $scriptPagefileDrive = $args[$i + 1]
     }
@@ -564,7 +624,7 @@ if (-not [string]::IsNullOrWhiteSpace($scriptLogPath)) {
 }
 
 # Invoke main orchestrator
-Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -AutomationSafe:$scriptAutomationSafe -SkipTask $scriptSkipTasks -CustomAppsListPath $scriptCustomAppsListPath -DisableIPv6:$scriptDisableIPv6 -DisableTeredo:$scriptDisableTeredo -DisableCpuMitigations:$scriptDisableCpuMitigations -DisableHags:$scriptDisableHags -ForceStorageOptimization:$scriptForceStorageOptimization -DisableAudioEnhancements:$scriptDisableAudioEnhancements -DisableSystemSounds:$scriptDisableSystemSounds -PagefileDrive $scriptPagefileDrive
+Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -WhatIf:$scriptWhatIf -Profile $scriptProfile -AutomationSafe:$scriptAutomationSafe -SkipTask $scriptSkipTasks -CustomAppsListPath $scriptCustomAppsListPath -DisableIPv6:$scriptDisableIPv6 -DisableTeredo:$scriptDisableTeredo -DisableCpuMitigations:$scriptDisableCpuMitigations -DisableHags:$scriptDisableHags -ForceStorageOptimization:$scriptForceStorageOptimization -DisableAudioEnhancements:$scriptDisableAudioEnhancements -DisableSystemSounds:$scriptDisableSystemSounds -ForceTextInputServiceRedirect:$scriptForceTextInputServiceRedirect -PagefileDrive $scriptPagefileDrive
 } catch {
     $crashLogPath = Join-Path ([System.IO.Path]::GetTempPath()) 'hunter-crash.txt'
     $crashTimestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'

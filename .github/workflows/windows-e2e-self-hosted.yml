@@ -1,0 +1,55 @@
+name: Windows E2E (Self-Hosted)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  disposable-runner-validation:
+    runs-on:
+      - self-hosted
+      - windows
+      - hunter-e2e
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Pester
+        shell: powershell
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Run repository audits
+        shell: powershell
+        run: |
+          python scripts/verification/audit_bootstrap_hashes.py
+          python scripts/verification/audit_task_issue_compatibility.py
+
+      - name: Run smoke tests
+        shell: powershell
+        run: Invoke-Pester .\tests\Smoke -CI -Output Detailed
+
+      - name: First disposable VMReset baseline pass
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\hunter.ps1 -Profile VMReset -Strict
+
+      - name: Idempotency pass
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\hunter.ps1 -Profile VMReset -Strict
+
+      - name: Roll back Hunter-managed state
+        shell: powershell
+        run: |
+          $restoreScript = Join-Path $env:ProgramData 'Hunter\Rollback\Restore-HunterState.ps1'
+          if (-not (Test-Path $restoreScript)) {
+            throw "Restore script was not found at $restoreScript"
+          }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $restoreScript

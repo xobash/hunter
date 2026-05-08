@@ -107,6 +107,12 @@ function Set-FixedPageFileByRamPolicy {
 
 function Invoke-DisableDiskWriteCacheBufferFlushing {
     try {
+        $powerPlatformContext = Get-HunterPowerPlatformContext
+        if ($powerPlatformContext.IsPortable -or $powerPlatformContext.HasBattery) {
+            Write-Log 'Skipping disk write-cache buffer-flushing disable because the system appears to be portable or battery-backed.' 'WARN'
+            return (New-TaskWarningResult -Reason 'Disk write-cache buffer-flushing disable skipped on a portable or battery-backed system')
+        }
+
         $diskDeviceEntries = @(Get-CimInstance -ClassName Win32_DiskDrive -ErrorAction SilentlyContinue | Where-Object {
             $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_.PNPDeviceID)
         })

@@ -1,7 +1,7 @@
 function Get-HunterTaskRiskLevel {
     param([Parameter(Mandatory)][string]$TaskId)
 
-    $highRiskTaskIds = @(
+    $aggressiveRiskTaskIds = @(
         'core-autologin-v2',
         'cloud-edge-remove',
         'cloud-onedrive-remove',
@@ -15,7 +15,7 @@ function Get-HunterTaskRiskLevel {
         'tweaks-timer-resolution',
         'external-tcp-optimizer'
     )
-    $mediumRiskTaskIds = @(
+    $moderateRiskTaskIds = @(
         'preflight-driver-install-block',
         'preflight-edition-compatibility',
         'preflight-restore-point',
@@ -49,15 +49,105 @@ function Get-HunterTaskRiskLevel {
         'cleanup-autologin-secrets'
     )
 
-    if ($TaskId -in $highRiskTaskIds) {
-        return 'High'
+    if ($TaskId -in $aggressiveRiskTaskIds) {
+        return 'Aggressive'
     }
 
-    if ($TaskId -in $mediumRiskTaskIds) {
-        return 'Medium'
+    if ($TaskId -in $moderateRiskTaskIds) {
+        return 'Moderate'
     }
 
-    return 'Low'
+    return 'Safe'
+}
+
+function Get-HunterTaskProfiles {
+    param([Parameter(Mandatory)][string]$TaskId)
+
+    $minimalTaskIds = @(
+        'preflight-driver-install-block',
+        'preflight-internet',
+        'preflight-edition-compatibility',
+        'preflight-restore-point',
+        'preflight-winget-version',
+        'preflight-app-downloads',
+        'preflight-predownload-v2',
+        'install-launch-packages-v2',
+        'startui-bing-search',
+        'startui-start-recommendations-v4',
+        'startui-search-box',
+        'startui-task-view',
+        'startui-widgets',
+        'startui-end-task',
+        'startui-notifications',
+        'startui-new-outlook',
+        'startui-settings-home',
+        'explorer-home-thispc',
+        'explorer-remove-home-v2',
+        'explorer-remove-gallery-v2',
+        'explorer-remove-onedrive',
+        'explorer-auto-discovery',
+        'cloud-edge-remove',
+        'cloud-edge-pins',
+        'cloud-edge-update-block',
+        'cloud-onedrive-remove',
+        'cloud-onedrive-backup',
+        'cloud-copilot-remove',
+        'apps-consumer-features',
+        'apps-nuke-block',
+        'apps-inking-typing',
+        'apps-delivery-opt',
+        'apps-activity-history',
+        'tweaks-telemetry',
+        'tweaks-location',
+        'tweaks-background-apps',
+        'tweaks-store-search',
+        'external-oosu',
+        'install-finalize-packages-v2',
+        'cleanup-temp-files',
+        'cleanup-retry-failed',
+        'cleanup-autologin-secrets',
+        'cleanup-disk-cleanup',
+        'cleanup-explorer-restart',
+        'cleanup-export-log',
+        'validation-post-run-state'
+    )
+
+    $balancedExcludedTaskIds = @(
+        'core-local-user-v2',
+        'core-autologin-v2',
+        'tweaks-services',
+        'tweaks-virtualization-security',
+        'tweaks-hibernation',
+        'tweaks-power-tuning',
+        'tweaks-memory-disk',
+        'tweaks-input-maintenance',
+        'tweaks-timer-resolution',
+        'external-tcp-optimizer',
+        'external-system-properties'
+    )
+
+    $vmResetExcludedTaskIds = @(
+        'preflight-restore-point',
+        'external-system-properties'
+    )
+
+    $profiles = New-Object 'System.Collections.Generic.List[string]'
+
+    if ($TaskId -in $minimalTaskIds) {
+        [void]$profiles.Add('Minimal')
+    }
+
+    if ($TaskId -notin $balancedExcludedTaskIds) {
+        [void]$profiles.Add('Balanced')
+    }
+
+    [void]$profiles.Add('Aggressive')
+
+    if ($TaskId -notin $vmResetExcludedTaskIds) {
+        [void]$profiles.Add('VMReset')
+    }
+
+    return @($profiles.ToArray())
 }
 
 function Get-HunterTaskCatalog {
@@ -133,10 +223,12 @@ function Get-HunterTaskCatalog {
         [pscustomobject]@{ Id = 'cleanup-disk-cleanup'; Phase = '9'; Handler = { Invoke-RunDiskCleanup }; Description = 'Run Windows Disk Cleanup' }
         [pscustomobject]@{ Id = 'cleanup-explorer-restart'; Phase = '9'; Handler = { Invoke-DeferredExplorerRestart }; Description = 'Restart Explorer with pending changes' }
         [pscustomobject]@{ Id = 'cleanup-export-log'; Phase = '9'; Handler = { Invoke-ExportDesktopOperationLog }; Description = 'Export operation report to desktop' }
+        [pscustomobject]@{ Id = 'validation-post-run-state'; Phase = '10'; Handler = { Invoke-ValidateAppliedConfiguration }; Description = 'Validate critical registry, service, and power-plan changes after execution' }
     )
 
     foreach ($task in @($catalog)) {
         $task | Add-Member -NotePropertyName RiskLevel -NotePropertyValue (Get-HunterTaskRiskLevel -TaskId ([string]$task.Id)) -Force
+        $task | Add-Member -NotePropertyName Profiles -NotePropertyValue @(Get-HunterTaskProfiles -TaskId ([string]$task.Id)) -Force
     }
 
     return $catalog

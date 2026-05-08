@@ -220,6 +220,98 @@ function Invoke-RetryFailedTasks {
     }
 }
 
+function Get-HunterActivePowerSchemeGuid {
+    try {
+        $activeSchemeOutput = [string]::Join(' ', @(powercfg /getactivescheme 2>$null))
+        $guidMatch = [regex]::Match($activeSchemeOutput, '[0-9a-fA-F-]{36}')
+        if ($guidMatch.Success) {
+            return $guidMatch.Value.ToLowerInvariant()
+        }
+    } catch {
+    }
+
+    return ''
+}
+
+function Invoke-ValidateAppliedConfiguration {
+    try {
+        Write-Log 'Running post-run validation checks...' 'INFO'
+        Reset-HunterValidationResults
+
+        $taskResults = if ($null -ne $script:TaskResults) { $script:TaskResults } else { @{} }
+        $gpuContexts = @(Get-GpuPciDeviceContexts)
+        $gpuDetectionIsReliable = ($gpuContexts.Count -gt 0)
+
+        if ($taskResults.ContainsKey('tweaks-graphics-scheduling') -and $gpuDetectionIsReliable) {
+            $expectedHwSchMode = if ($script:DisableHagsRequested) { 1 } else { 2 }
+            $graphicsValidationPassed = (
+                (Test-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'TdrLevel' -ExpectedValue 3) -and
+                (Test-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'TdrDelay' -ExpectedValue 10) -and
+                (Test-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'TdrDdiDelay' -ExpectedValue 10) -and
+                (Test-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode' -ExpectedValue $expectedHwSchMode)
+            )
+            Add-HunterValidationResult -Name 'Graphics scheduling policy' -Passed:$graphicsValidationPassed -Detail ("Expected TdrLevel=3 and HwSchMode={0}" -f $expectedHwSchMode) | Out-Null
+        } else {
+            Add-HunterValidationResult -Name 'Graphics scheduling policy' -Passed:$true -Detail 'Skipped because no PCI display devices were detected or the task did not run.' -Skipped | Out-Null
+        }
+
+        if ($taskResults.ContainsKey('tweaks-telemetry')) {
+            $telemetryValidationPassed = (
+                (Test-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection' -Name 'AllowTelemetry' -ExpectedValue 0) -and
+                (Test-ServiceStartTypeMatch -Name 'DiagTrack' -ExpectedStartType 'Disabled')
+            )
+            Add-HunterValidationResult -Name 'Telemetry suppression' -Passed:$telemetryValidationPassed -Detail 'Expected AllowTelemetry=0 and DiagTrack disabled.' | Out-Null
+        } else {
+            Add-HunterValidationResult -Name 'Telemetry suppression' -Passed:$true -Detail 'Skipped because the telemetry task did not run.' -Skipped | Out-Null
+        }
+
+        if ($taskResults.ContainsKey('tweaks-services')) {
+            $serviceProfilePassed = (
+                (Test-ServiceStartTypeMatch -Name 'WSearch' -ExpectedStartType 'Disabled') -and
+                (Test-ServiceStartTypeMatch -Name 'SysMain' -ExpectedStartType 'Disabled') -and
+                (Test-ServiceStartTypeMatch -Name 'DiagTrack' -ExpectedStartType 'Disabled')
+            )
+            Add-HunterValidationResult -Name 'Service profile baseline' -Passed:$serviceProfilePassed -Detail 'Expected WSearch, SysMain, and DiagTrack to remain disabled.' | Out-Null
+        } else {
+            Add-HunterValidationResult -Name 'Service profile baseline' -Passed:$true -Detail 'Skipped because the aggressive service-profile task did not run.' -Skipped | Out-Null
+        }
+
+        if ($taskResults.ContainsKey('core-ultimate-performance') -or $taskResults.ContainsKey('tweaks-power-tuning')) {
+            $activePowerSchemeGuid = Get-HunterActivePowerSchemeGuid
+            $powerPlanPassed = ($activePowerSchemeGuid -in @(
+                '88888888-8888-8888-8888-888888888888',
+                'e9a42b02-d5df-448d-aa00-03f14749eb61',
+                '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
+            ))
+            Add-HunterValidationResult -Name 'Power plan activation' -Passed:$powerPlanPassed -Detail ("Active scheme GUID: {0}" -f $(if ([string]::IsNullOrWhiteSpace($activePowerSchemeGuid)) { 'unknown' } else { $activePowerSchemeGuid })) | Out-Null
+        } else {
+            Add-HunterValidationResult -Name 'Power plan activation' -Passed:$true -Detail 'Skipped because no power-plan task ran.' -Skipped | Out-Null
+        }
+
+        if ($taskResults.ContainsKey('tweaks-input-maintenance') -and $script:ForceTextInputServiceRedirectRequested) {
+            $textInputRedirectPassed = Test-RegistryValue `
+                -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\TextInputManagementService\Parameters' `
+                -Name 'ServiceDll' `
+                -ExpectedValue '%SystemRoot%\System32\MSCTF.DLL'
+            Add-HunterValidationResult -Name 'Text input ServiceDll redirect' -Passed:$textInputRedirectPassed -Detail 'Expected ServiceDll to point at MSCTF.DLL when the opt-in redirect is requested.' | Out-Null
+        } else {
+            Add-HunterValidationResult -Name 'Text input ServiceDll redirect' -Passed:$true -Detail 'Skipped because the advanced redirect is now opt-in.' -Skipped | Out-Null
+        }
+
+        $failedValidationCount = @($script:ValidationResults | Where-Object { $_.Status -eq 'Failed' }).Count
+        if ($failedValidationCount -gt 0) {
+            Write-Log "Post-run validation completed with $failedValidationCount failing check(s)." 'WARN'
+            return (New-TaskWarningResult -Reason "$failedValidationCount post-run validation check(s) failed")
+        }
+
+        Write-Log 'Post-run validation checks completed successfully.' 'SUCCESS'
+        return $true
+    } catch {
+        Write-Log "Error validating applied configuration: $($_.Exception.Message)" 'ERROR'
+        return $false
+    }
+}
+
 
 function Invoke-ExportDesktopOperationLog {
     <#
@@ -358,6 +450,26 @@ function Invoke-ExportDesktopOperationLog {
                 '---- INFRASTRUCTURE ISSUES ----'
             )
             $reportContent += @($script:RunInfrastructureIssues | ForEach-Object { "  [!] $_" })
+            $reportContent += @(
+                ""
+            )
+        }
+
+        if (@($script:ValidationResults).Count -gt 0) {
+            $reportContent += @(
+                '---- VALIDATION CHECKS ----'
+            )
+            foreach ($validationResult in @($script:ValidationResults)) {
+                $statusLabel = switch ([string]$validationResult.Status) {
+                    'Passed' { '[PASS]' }
+                    'Failed' { '[FAIL]' }
+                    default { '[SKIP]' }
+                }
+                $reportContent += "  ${statusLabel} $($validationResult.Name)"
+                if (-not [string]::IsNullOrWhiteSpace([string]$validationResult.Detail)) {
+                    $reportContent += "    Detail: $($validationResult.Detail)"
+                }
+            }
             $reportContent += @(
                 ""
             )

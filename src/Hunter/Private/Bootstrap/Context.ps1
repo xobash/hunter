@@ -10,6 +10,7 @@ function New-HunterContext {
             FailedTasks    = @()
             TaskResults    = @{}
             TaskList       = @()
+            ValidationResults = @()
         }
         PackageState = [ordered]@{
             ParallelInstallTargets = @()
@@ -42,6 +43,8 @@ function New-HunterContext {
             TaskbarReconcilePending    = $false
             ExplorerRestartPending     = $false
             StartSurfaceRestartPending = $false
+            DryRunMode                 = $false
+            SelectedProfile            = 'Aggressive'
         }
         Caches       = [ordered]@{
             AppShortcutSetCache            = @{}
@@ -50,6 +53,8 @@ function New-HunterContext {
             WindowsBuildContext            = $null
             WindowsEditionContext          = $null
             AppRemovalCatalog              = $null
+            StorageMediaContext            = $null
+            PowerPlatformContext           = $null
         }
     }
 }
@@ -97,6 +102,8 @@ function Sync-HunterScriptStateFromContext {
     if ($null -ne $Context.Flags) {
         if ($Context.Flags.ContainsKey('IsAutomationRun')) { $script:IsAutomationRun = [bool]$Context.Flags.IsAutomationRun }
         if ($Context.Flags.ContainsKey('StrictMode')) { $script:StrictMode = [bool]$Context.Flags.StrictMode }
+        if ($Context.Flags.ContainsKey('DryRunMode')) { $script:DryRunMode = [bool]$Context.Flags.DryRunMode }
+        if ($Context.Flags.ContainsKey('SelectedProfile')) { $script:SelectedProfile = [string]$Context.Flags.SelectedProfile }
         if ($Context.Flags.ContainsKey('DisableIPv6Requested')) { $script:DisableIPv6Requested = [bool]$Context.Flags.DisableIPv6Requested }
         if ($Context.Flags.ContainsKey('DisableTeredoRequested')) { $script:DisableTeredoRequested = [bool]$Context.Flags.DisableTeredoRequested }
         if ($Context.Flags.ContainsKey('DisableCpuMitigationsRequested')) { $script:DisableCpuMitigationsRequested = [bool]$Context.Flags.DisableCpuMitigationsRequested }
@@ -104,6 +111,7 @@ function Sync-HunterScriptStateFromContext {
         if ($Context.Flags.ContainsKey('ForceStorageOptimizationRequested')) { $script:ForceStorageOptimizationRequested = [bool]$Context.Flags.ForceStorageOptimizationRequested }
         if ($Context.Flags.ContainsKey('DisableAudioEnhancementsRequested')) { $script:DisableAudioEnhancementsRequested = [bool]$Context.Flags.DisableAudioEnhancementsRequested }
         if ($Context.Flags.ContainsKey('DisableSystemSoundsRequested')) { $script:DisableSystemSoundsRequested = [bool]$Context.Flags.DisableSystemSoundsRequested }
+        if ($Context.Flags.ContainsKey('ForceTextInputServiceRedirectRequested')) { $script:ForceTextInputServiceRedirectRequested = [bool]$Context.Flags.ForceTextInputServiceRedirectRequested }
         if ($Context.Flags.ContainsKey('PagefileDriveOverride')) { $script:PagefileDriveOverride = [string]$Context.Flags.PagefileDriveOverride }
         if ($Context.Flags.ContainsKey('PackagePipelineBlocked')) { $script:PackagePipelineBlocked = [bool]$Context.Flags.PackagePipelineBlocked }
         if ($Context.Flags.ContainsKey('PackagePipelineBlockReason')) { $script:PackagePipelineBlockReason = [string]$Context.Flags.PackagePipelineBlockReason }
@@ -119,6 +127,7 @@ function Sync-HunterScriptStateFromContext {
     $script:FailedTasks = @($Context.TaskState.FailedTasks)
     $script:TaskResults = @{} + $Context.TaskState.TaskResults
     $script:TaskList = @($Context.TaskState.TaskList)
+    $script:ValidationResults = @($Context.TaskState.ValidationResults)
 
     $script:ParallelInstallTargets = @($Context.PackageState.ParallelInstallTargets)
     $script:ParallelInstallJobs = @($Context.PackageState.ParallelInstallJobs)
@@ -144,6 +153,8 @@ function Sync-HunterScriptStateFromContext {
     $script:PagefileDriveOverride = [string]$Context.Runtime.PagefileDriveOverride
     $script:IsAutomationRun = [bool]$Context.Runtime.IsAutomationRun
     $script:StrictMode = [bool]$Context.Runtime.StrictMode
+    $script:DryRunMode = [bool]$Context.Runtime.DryRunMode
+    $script:SelectedProfile = [string]$Context.Runtime.SelectedProfile
     $script:PackagePipelineBlocked = [bool]$Context.Runtime.PackagePipelineBlocked
     $script:PackagePipelineBlockReason = [string]$Context.Runtime.PackagePipelineBlockReason
     $script:TaskbarReconcilePending = [bool]$Context.Runtime.TaskbarReconcilePending
@@ -156,6 +167,8 @@ function Sync-HunterScriptStateFromContext {
     $script:WindowsBuildContext = $Context.Caches.WindowsBuildContext
     $script:WindowsEditionContext = $Context.Caches.WindowsEditionContext
     $script:AppRemovalCatalog = $Context.Caches.AppRemovalCatalog
+    $script:StorageMediaContext = $Context.Caches.StorageMediaContext
+    $script:PowerPlatformContext = $Context.Caches.PowerPlatformContext
 }
 
 function Sync-HunterContextFromScriptState {
@@ -185,6 +198,8 @@ function Sync-HunterContextFromScriptState {
     $Context.Flags = @{
         IsAutomationRun            = $script:IsAutomationRun
         StrictMode                 = $script:StrictMode
+        DryRunMode                 = $script:DryRunMode
+        SelectedProfile            = $script:SelectedProfile
         DisableIPv6Requested       = $script:DisableIPv6Requested
         DisableTeredoRequested     = $script:DisableTeredoRequested
         DisableCpuMitigationsRequested = $script:DisableCpuMitigationsRequested
@@ -192,6 +207,7 @@ function Sync-HunterContextFromScriptState {
         ForceStorageOptimizationRequested = $script:ForceStorageOptimizationRequested
         DisableAudioEnhancementsRequested = $script:DisableAudioEnhancementsRequested
         DisableSystemSoundsRequested = $script:DisableSystemSoundsRequested
+        ForceTextInputServiceRedirectRequested = $script:ForceTextInputServiceRedirectRequested
         PagefileDriveOverride      = $script:PagefileDriveOverride
         PackagePipelineBlocked     = $script:PackagePipelineBlocked
         PackagePipelineBlockReason = $script:PackagePipelineBlockReason
@@ -207,6 +223,7 @@ function Sync-HunterContextFromScriptState {
     $Context.TaskState.FailedTasks = @($script:FailedTasks)
     $Context.TaskState.TaskResults = @{} + $script:TaskResults
     $Context.TaskState.TaskList = @($script:TaskList)
+    $Context.TaskState.ValidationResults = @($script:ValidationResults)
 
     $Context.PackageState.ParallelInstallTargets = @($script:ParallelInstallTargets)
     $Context.PackageState.ParallelInstallJobs = @($script:ParallelInstallJobs)
@@ -232,6 +249,8 @@ function Sync-HunterContextFromScriptState {
     $Context.Runtime.PagefileDriveOverride = [string]$script:PagefileDriveOverride
     $Context.Runtime.IsAutomationRun = [bool]$script:IsAutomationRun
     $Context.Runtime.StrictMode = [bool]$script:StrictMode
+    $Context.Runtime.DryRunMode = [bool]$script:DryRunMode
+    $Context.Runtime.SelectedProfile = [string]$script:SelectedProfile
     $Context.Runtime.PackagePipelineBlocked = [bool]$script:PackagePipelineBlocked
     $Context.Runtime.PackagePipelineBlockReason = [string]$script:PackagePipelineBlockReason
     $Context.Runtime.TaskbarReconcilePending = [bool]$script:TaskbarReconcilePending
@@ -244,4 +263,6 @@ function Sync-HunterContextFromScriptState {
     $Context.Caches.WindowsBuildContext = $script:WindowsBuildContext
     $Context.Caches.WindowsEditionContext = $script:WindowsEditionContext
     $Context.Caches.AppRemovalCatalog = $script:AppRemovalCatalog
+    $Context.Caches.StorageMediaContext = $script:StorageMediaContext
+    $Context.Caches.PowerPlatformContext = $script:PowerPlatformContext
 }

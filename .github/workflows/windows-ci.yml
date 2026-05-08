@@ -1,0 +1,51 @@
+name: Windows CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - stable
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Pester
+        shell: powershell
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Verify clean diffs
+        shell: bash
+        run: git diff --check
+
+      - name: Run repository audits
+        shell: powershell
+        run: |
+          python scripts/verification/audit_bootstrap_hashes.py
+          python scripts/verification/audit_task_issue_compatibility.py
+
+      - name: Run smoke tests
+        shell: powershell
+        run: Invoke-Pester .\tests\Smoke -CI -Output Detailed
+
+      - name: Exercise dry-run profiles on Windows
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\hunter.ps1 -WhatIf
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\hunter.ps1 -WhatIf -Profile Minimal
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\hunter.ps1 -WhatIf -Profile Balanced
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\hunter.ps1 -WhatIf -Profile VMReset

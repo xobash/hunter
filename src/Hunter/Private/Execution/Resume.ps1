@@ -62,6 +62,9 @@ function Register-ResumeTask {
         }
 
         $resumeActionArguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -Mode Resume"
+        if (-not [string]::IsNullOrWhiteSpace($script:SelectedProfile)) {
+            $resumeActionArguments += " -Profile `"$($script:SelectedProfile)`""
+        }
         if (-not [string]::IsNullOrWhiteSpace($resumeCustomAppsListPath)) {
             $resumeActionArguments += " -CustomAppsListPath `"$resumeCustomAppsListPath`""
         } elseif (-not [string]::IsNullOrWhiteSpace($script:CustomAppsListPathOverride)) {
@@ -91,6 +94,9 @@ function Register-ResumeTask {
         }
         if ($script:DisableSystemSoundsRequested) {
             $resumeActionArguments += ' -DisableSystemSounds'
+        }
+        if ($script:ForceTextInputServiceRedirectRequested) {
+            $resumeActionArguments += ' -ForceTextInputServiceRedirect'
         }
         if (-not [string]::IsNullOrWhiteSpace($script:PagefileDriveOverride)) {
             $resumeActionArguments += " -PagefileDrive `"$($script:PagefileDriveOverride)`""
