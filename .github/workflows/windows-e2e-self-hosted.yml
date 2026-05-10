@@ -21,17 +21,29 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Pester
+      - name: Install Pester and PSScriptAnalyzer
         shell: powershell
         run: |
           Set-PSRepository PSGallery -InstallationPolicy Trusted
           Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -SkipPublisherCheck
 
       - name: Run repository audits
         shell: powershell
         run: |
           python scripts/verification/audit_bootstrap_hashes.py
           python scripts/verification/audit_task_issue_compatibility.py
+
+      - name: Run PSScriptAnalyzer
+        shell: powershell
+        run: |
+          $issues = @(
+            Invoke-ScriptAnalyzer -Path .\hunter.ps1, .\src -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
+          )
+          if ($issues.Count -gt 0) {
+            $issues | Format-Table RuleName, Severity, ScriptName, Line, Message -AutoSize
+            throw "PSScriptAnalyzer reported $($issues.Count) issue(s)."
+          }
 
       - name: Run smoke tests
         shell: powershell

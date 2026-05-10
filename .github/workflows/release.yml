@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Pester and PSScriptAnalyzer
+        shell: powershell
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Verify tag matches HunterReleaseVersion
+        shell: powershell
+        run: |
+          $hunterSource = Get-Content -Path .\hunter.ps1 -Raw -ErrorAction Stop
+          $versionMatch = [regex]::Match($hunterSource, "\$script:HunterReleaseVersion = '([^']+)'")
+          if (-not $versionMatch.Success) {
+            throw 'HunterReleaseVersion was not found in hunter.ps1.'
+          }
+
+          $expectedVersion = $env:GITHUB_REF_NAME.TrimStart('v')
+          $actualVersion = $versionMatch.Groups[1].Value
+          if ($actualVersion -ne $expectedVersion) {
+            throw "Tag version $expectedVersion does not match HunterReleaseVersion $actualVersion."
+          }
+
+      - name: Run repository audits
+        shell: powershell
+        run: |
+          python scripts/verification/audit_bootstrap_hashes.py
+          python scripts/verification/audit_task_issue_compatibility.py
+
+      - name: Run PSScriptAnalyzer
+        shell: powershell
+        run: |
+          $issues = @(
+            Invoke-ScriptAnalyzer -Path .\hunter.ps1, .\src -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
+          )
+          if ($issues.Count -gt 0) {
+            $issues | Format-Table RuleName, Severity, ScriptName, Line, Message -AutoSize
+            throw "PSScriptAnalyzer reported $($issues.Count) issue(s)."
+          }
+
+      - name: Run smoke tests
+        shell: powershell
+        run: Invoke-Pester .\tests\Smoke -CI -Output Detailed
+
+      - name: Exercise dry-run profiles on Windows
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\hunter.ps1 -WhatIf
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\hunter.ps1 -WhatIf -Profile Minimal
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\hunter.ps1 -WhatIf -Profile Balanced
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\hunter.ps1 -WhatIf -Profile VMReset
+
+      - name: Build release bundle
+        shell: powershell
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $distPath = Join-Path $PWD 'dist'
+          New-Item -ItemType Directory -Path $distPath -Force | Out-Null
+
+          $archivePath = Join-Path $distPath ("hunter-{0}.zip" -f $version)
+          Compress-Archive `
+            -Path @(
+              'hunter.ps1',
+              'src',
+              'docs',
+              'releases',
+              'README.md',
+              'LICENSE',
+              'ARCHITECTURE.md',
+              'CONTRIBUTING.md',
+              'CHANGELOG.md',
+              'PSScriptAnalyzerSettings.psd1'
+            ) `
+            -DestinationPath $archivePath `
+            -Force
+
+          Copy-Item -Path .\hunter.ps1 -Destination (Join-Path $distPath 'hunter.ps1') -Force
+          Copy-Item -Path .\releases\channels.json -Destination (Join-Path $distPath 'channels.json') -Force
+
+          $checksumPath = Join-Path $distPath 'SHA256SUMS.txt'
+          $checksumLines = @(
+            Get-ChildItem -Path $distPath -File | Sort-Object Name | ForEach-Object {
+              $hash = (Get-FileHash -Path $_.FullName -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+              "{0} *{1}" -f $hash, $_.Name
+            }
+          )
+          Set-Content -Path $checksumPath -Value $checksumLines -Encoding UTF8
+
+      - name: Publish GitHub release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME `
+            .\dist\hunter.ps1 `
+            .\dist\channels.json `
+            .\dist\SHA256SUMS.txt `
+            .\dist\hunter-$($env:GITHUB_REF_NAME.TrimStart('v')).zip `
+            --title "Hunter $($env:GITHUB_REF_NAME)" `
+            --generate-notes

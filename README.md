@@ -66,7 +66,7 @@ powershell -ExecutionPolicy Bypass -File .\hunter.ps1
 - Builds a fixed task catalog and executes it with checkpoint and resume support.
 - Logs a pre-run execution plan with per-task risk labels before mutation begins.
 - Supports no-mutation `-WhatIf` previews for every execution profile.
-- Applies Windows build-aware UI, privacy, Explorer, cloud, app, and hardware changes.
+- Applies Windows build-aware UI, privacy, Explorer, cloud, app, and hardware changes, including Recall suppression on supported Windows 11 24H2 builds.
 - Removes supported apps from the catalog in `src/Hunter/Config/Apps.json`.
 - Runs package and external-tool steps where configured.
 - Re-checks critical settings after execution and records validation results in the final report.
@@ -228,6 +228,9 @@ The wrapper logs its release channel and version at startup. Bootstrap assets ar
 
 Reference docs:
 
+- `ARCHITECTURE.md`
+- `CONTRIBUTING.md`
+- `CHANGELOG.md`
 - `docs/task-catalog.md`
 
 Key files:
