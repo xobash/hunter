@@ -4,6 +4,12 @@ $ErrorActionPreference = 'Stop'
 
 try {
 
+# Suppress Invoke-WebRequest progress bars BEFORE any downloads occur.
+# PowerShell 5.1 renders a UI progress bar that blocks the pipeline and slows
+# downloads up to 10x. Must be set at script scope before the bootstrap phase.
+# Ref: https://github.com/PowerShell/PowerShell/issues/2138
+$ProgressPreference = 'SilentlyContinue'
+
 # Force TLS 1.2+ for all .NET HTTP requests. Windows 10 ships with .NET 4.x
 # which defaults to TLS 1.0/1.1 - rejected by most CDNs and GitHub.
 # Ref: https://learn.microsoft.com/en-us/dotnet/framework/network-programming/tls
@@ -16,11 +22,11 @@ try {
 $script:HunterSourceRoot = $null
 $script:HunterReleaseChannel = 'preview'
 $script:HunterReleaseVersion = '2.0.3-preview.2'
-$script:HunterBootstrapRevision = '16efb5e6a874a855837ea8c311be84774653691a'
+$script:HunterBootstrapRevision = '9e1590a50b3f0fd603ea9717167e8e1c36a6d44c'
 $script:HunterRemoteRevision = $script:HunterBootstrapRevision
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = '52d6f19037ad15370ed4873be68b55df68960c547de600ef87b3ce433818f44c'
+$script:BootstrapLoaderSha256 = 'edbe34570ca0eb37507478c8f5e66a8607e7af1dc04e885bed3ff76a75d13f5a'
 
 $bootstrapLoaderPath = $null
 $canUseLocalHunterPrivateLayers = $false
@@ -302,9 +308,7 @@ function Invoke-Main {
         # INITIALIZATION
         # --------------------------------------------------------------------
 
-        # Suppress Invoke-WebRequest progress bars - PS5 renders a UI progress bar
-        # that slows downloads up to 10x. Ref: https://github.com/PowerShell/PowerShell/issues/2138
-        $ProgressPreference = 'SilentlyContinue'
+        # $ProgressPreference is set at script scope before bootstrap (line 8).
 
         # Ensure directories exist
         Initialize-HunterDirectory $script:HunterRoot
