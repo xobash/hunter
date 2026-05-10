@@ -31,6 +31,7 @@ function Get-HunterTaskRiskLevel {
         'apps-inking-typing',
         'apps-delivery-opt',
         'apps-activity-history',
+        'apps-recall',
         'tweaks-telemetry',
         'tweaks-location',
         'tweaks-wpbt',
@@ -101,6 +102,7 @@ function Get-HunterTaskProfiles {
         'apps-inking-typing',
         'apps-delivery-opt',
         'apps-activity-history',
+        'apps-recall',
         'tweaks-telemetry',
         'tweaks-location',
         'tweaks-wpbt',
@@ -200,6 +202,7 @@ function Get-HunterTaskCatalog {
         [pscustomobject]@{ Id = 'apps-inking-typing'; Phase = '6'; Handler = { Invoke-DisableInkingTyping }; Description = 'Disable Inking and Typing data collection' }
         [pscustomobject]@{ Id = 'apps-delivery-opt'; Phase = '6'; Handler = { Invoke-DisableDeliveryOptimization }; Description = 'Disable Delivery Optimization' }
         [pscustomobject]@{ Id = 'apps-activity-history'; Phase = '6'; Handler = { Invoke-DisableActivityHistory }; Description = 'Disable activity history plus clipboard/cloud clipboard tracking' }
+        [pscustomobject]@{ Id = 'apps-recall'; Phase = '6'; Handler = { Invoke-DisableRecall }; Description = 'Disable Windows Recall availability and Recall snapshot saving on supported 24H2 builds' }
         [pscustomobject]@{ Id = 'tweaks-services'; Phase = '7'; Handler = { Invoke-SetServiceProfileManual }; Description = 'Apply Hunter aggressive service startup profile' }
         [pscustomobject]@{ Id = 'tweaks-virtualization-security'; Phase = '7'; Handler = { Invoke-DisableVirtualizationSecurityOverhead }; Description = 'Disable HVCI, Hyper-V side features, Sandbox, and Application Guard' }
         [pscustomobject]@{ Id = 'tweaks-telemetry'; Phase = '7'; Handler = { Invoke-DisableTelemetry }; Description = 'Disable telemetry plus Hunter privacy/web-content policies' }

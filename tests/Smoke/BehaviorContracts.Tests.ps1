@@ -18,6 +18,7 @@ Describe 'Behavior contracts' {
         $interactionSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/System/Interaction.ps1') -Raw -ErrorAction Stop
         $nativeSystemSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Infrastructure/NativeSystem.ps1') -Raw -ErrorAction Stop
         $pathPolicySource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Common/PathPolicy.ps1') -Raw -ErrorAction Stop
+        $privacySource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Privacy.ps1') -Raw -ErrorAction Stop
         $preflightSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Preflight.ps1') -Raw -ErrorAction Stop
         $registryOpsSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Registry/Operations.ps1') -Raw -ErrorAction Stop
         $uiSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/UI.ps1') -Raw -ErrorAction Stop
@@ -142,6 +143,13 @@ Describe 'Behavior contracts' {
         $featuresSource | Should -Match 'VerboseStatus'
         $featuresSource | Should -Match 'InitialKeyboardIndicators'
         $registryOpsSource | Should -Match 'HKEY_USERS'
+    }
+
+    It 'adds Windows Recall suppression for supported 24H2 builds' {
+        $privacySource | Should -Match 'Test-WindowsBuildInRange -MinBuild 26100'
+        $privacySource | Should -Match "AllowRecallEnablement' -Value 0"
+        $privacySource | Should -Match "DisableAIDataAnalysis' -Value 1"
+        $privacySource | Should -Match "Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Recall'"
     }
 
     It 'requires explicit user consent for standard user creation and autologin' {

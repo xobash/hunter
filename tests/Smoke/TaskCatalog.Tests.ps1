@@ -51,6 +51,7 @@ Describe 'Task catalog compatibility' {
             'apps-inking-typing',
             'apps-delivery-opt',
             'apps-activity-history',
+            'apps-recall',
             'tweaks-services',
             'tweaks-virtualization-security',
             'tweaks-telemetry',
@@ -98,7 +99,7 @@ Describe 'Task catalog compatibility' {
             '3', '3', '3', '3', '3', '3', '3', '3', '3', '3',
             '4', '4', '4', '4', '4', '4', '4',
             '5', '5', '5', '5', '5', '5',
-            '6', '6', '6', '6', '6',
+            '6', '6', '6', '6', '6', '6',
             '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7',
             '8', '8', '8', '8', '8',
             '9', '9', '9', '9', '9', '9', '9',
@@ -107,7 +108,7 @@ Describe 'Task catalog compatibility' {
     }
 
     It 'defines the current total task count' {
-        $taskCatalog.Count | Should -Be 79
+        $taskCatalog.Count | Should -Be 80
     }
 
     It 'preserves the exact task ID order' {

@@ -166,6 +166,75 @@ function Invoke-DisableActivityHistory {
     }
 }
 
+function Invoke-DisableRecall {
+    <#
+    .SYNOPSIS
+    Disables Windows Recall availability and snapshot capture on supported Windows 11 24H2 builds.
+    .DESCRIPTION
+    Applies the official Windows AI policies that remove Recall availability and turn off
+    Recall snapshot saving, then best-effort disables the Recall optional feature when present.
+    #>
+    param()
+
+    try {
+        $buildContext = Get-WindowsBuildContext
+        if (-not (Test-WindowsBuildInRange -MinBuild 26100)) {
+            Write-Log "Recall disablement is not applicable on build $($buildContext.CurrentBuild). Skipping." 'INFO'
+            return (New-TaskSkipResult -Reason 'Recall only applies to supported Windows 11 24H2 builds')
+        }
+
+        Write-Log -Message "Disabling Windows Recall..." -Level 'INFO'
+
+        $windowsAiPolicyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'
+        $windowsAiUserPolicyPath = 'HKCU:\Software\Policies\Microsoft\Windows\WindowsAI'
+        $recallFeatureDisabledOrMissing = $false
+
+        try {
+            $recallFeature = Get-DismOptionalFeatureInfo -FeatureName 'Recall'
+            $recallFeatureDisabledOrMissing = (
+                $null -eq $recallFeature -or
+                -not [bool]$recallFeature.Present -or
+                [string]$recallFeature.State -notin @('Enabled', 'Enable Pending')
+            )
+        } catch {
+            $recallFeatureDisabledOrMissing = $false
+        }
+
+        if ((Test-RegistryValue -Path $windowsAiPolicyPath -Name 'AllowRecallEnablement' -ExpectedValue 0) -and
+            (Test-RegistryValue -Path $windowsAiPolicyPath -Name 'DisableAIDataAnalysis' -ExpectedValue 1) -and
+            (Test-RegistryValue -Path $windowsAiUserPolicyPath -Name 'DisableAIDataAnalysis' -ExpectedValue 1) -and
+            $recallFeatureDisabledOrMissing) {
+            Write-Log -Message "Windows Recall already disabled. Skipping." -Level 'INFO'
+            return $true
+        }
+
+        Set-RegistryValue -Path $windowsAiPolicyPath -Name 'AllowRecallEnablement' -Value 0 -Type 'DWord'
+        Set-RegistryValue -Path $windowsAiPolicyPath -Name 'DisableAIDataAnalysis' -Value 1 -Type 'DWord'
+        Set-DwordBatchForAllUsers -Settings @(
+            @{ SubPath = 'Software\Policies\Microsoft\Windows\WindowsAI'; Name = 'DisableAIDataAnalysis'; Value = 1 }
+        )
+
+        $optionalFeaturePassRan = [bool](Invoke-WithOptionalFeatureServicingPrerequisites -ScriptBlock {
+            Disable-WindowsOptionalFeatureIfPresent -DisplayName 'Recall' -CandidateNames @('Recall')
+        })
+
+        if ($optionalFeaturePassRan) {
+            Write-Log 'Recall optional feature disabled or already absent.' 'INFO'
+            $optionalFeatureResult = $true
+        } else {
+            Write-Log 'Recall policy applied, but optional feature disablement completed with warnings or skips.' 'WARN'
+            $optionalFeatureResult = New-TaskWarningResult -Reason 'Recall policy applied, but optional feature disablement completed with warnings or skips'
+        }
+
+        Write-Log -Message 'Windows Recall disabled. Restart required for policy and optional-feature changes to fully apply.' -Level 'WARN'
+        return (Join-TaskResults -TaskResults @($optionalFeatureResult) -WarningReason 'Recall disablement completed with warnings')
+    }
+    catch {
+        Write-Log -Message "Error in Invoke-DisableRecall: $_" -Level 'ERROR'
+        return $false
+    }
+}
+
 #endregion PHASE 6
 
 #region PHASE 7 - TWEAKS
@@ -350,4 +419,3 @@ function Invoke-DisableLocationTracking {
         return $false
     }
 }
-

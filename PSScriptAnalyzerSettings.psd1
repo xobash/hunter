@@ -1,0 +1,7 @@
+@{
+    IncludeRules = @(
+        'PSAvoidUsingCmdletAliases',
+        'PSAvoidUsingInvokeExpression',
+        'PSAvoidUsingWMICmdlet'
+    )
+}

@@ -57,6 +57,7 @@ Risk labels:
 | 6 | `apps-inking-typing` | Moderate | Minimal, Balanced, Aggressive, VMReset | Disable Inking and Typing data collection |
 | 6 | `apps-delivery-opt` | Moderate | Minimal, Balanced, Aggressive, VMReset | Disable Delivery Optimization |
 | 6 | `apps-activity-history` | Moderate | Minimal, Balanced, Aggressive, VMReset | Disable activity history plus clipboard/cloud clipboard tracking |
+| 6 | `apps-recall` | Moderate | Minimal, Balanced, Aggressive, VMReset | Disable Windows Recall availability and Recall snapshot saving on supported 24H2 builds |
 | 7 | `tweaks-services` | Aggressive | Aggressive, VMReset | Apply Hunter aggressive service startup profile |
 | 7 | `tweaks-virtualization-security` | Aggressive | Aggressive, VMReset | Disable HVCI, Hyper-V side features, Sandbox, and Application Guard |
 | 7 | `tweaks-telemetry` | Moderate | Minimal, Balanced, Aggressive, VMReset | Disable telemetry plus Hunter privacy/web-content policies |
