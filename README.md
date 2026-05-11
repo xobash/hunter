@@ -165,6 +165,7 @@ powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -RunTcpOptimizer -RunOOSU
 | `HUNTER_DISABLE_AUDIO_ENHANCEMENTS=1` | Opt in to disabling Windows audio enhancements. |
 | `HUNTER_DISABLE_SYSTEM_SOUNDS=1` | Opt in to Hunter's silent system sound-scheme change. |
 | `HUNTER_FORCE_TEXT_INPUT_SERVICE_REDIRECT=1` | Opt in to the advanced text-input service redirect. |
+| `HUNTER_TASK_MAX_CONCURRENCY=<n>` | Override Hunter's task runspace-pool ceiling when you want more or less parallelism. |
 | `HUNTER_LOCAL_USER_PASSWORD=<value>` | Override the managed local-user password if that path is used. |
 
 ### Profiles

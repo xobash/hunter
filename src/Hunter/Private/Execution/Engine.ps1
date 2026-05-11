@@ -219,8 +219,42 @@ function Test-HunterTaskIncludedInProfile {
 #=============================================================================
 
 # Phases whose tasks are independent and safe to run concurrently.
-# Phase 3 = Start/UI tweaks, Phase 4 = Explorer tweaks, Phase 7 = system tweaks.
-$script:ParallelPhases = @('3', '4', '7')
+# Phase 3 = Start/UI tweaks, Phase 4 = Explorer tweaks,
+# Phase 6 = privacy/app feature policy tasks, Phase 7 = system tweaks.
+$script:ParallelPhases = @('3', '4', '6', '7')
+
+function Get-HunterTaskRunspaceMaxConcurrency {
+    <#
+    .SYNOPSIS
+    Resolves the runspace-pool ceiling for task execution.
+
+    .DESCRIPTION
+    Hunter defaults to a slightly higher concurrency ceiling than a strict
+    CPU-count cap because many task handlers spend most of their wall-clock time
+    waiting on registry, AppX, DISM, or native-process I/O rather than CPU work.
+    Set HUNTER_TASK_MAX_CONCURRENCY to override the default for a specific run.
+    #>
+
+    $defaultConcurrency = [Math]::Min([Math]::Max([Environment]::ProcessorCount, 4), 12)
+    $configuredValue = [string]$env:HUNTER_TASK_MAX_CONCURRENCY
+
+    if ([string]::IsNullOrWhiteSpace($configuredValue)) {
+        return $defaultConcurrency
+    }
+
+    $parsedConcurrency = 0
+    if (-not [int]::TryParse($configuredValue, [ref]$parsedConcurrency)) {
+        Write-Log "Ignoring invalid HUNTER_TASK_MAX_CONCURRENCY value '$configuredValue'; using default concurrency of $defaultConcurrency." 'WARN'
+        return $defaultConcurrency
+    }
+
+    if ($parsedConcurrency -lt 1) {
+        Write-Log "Ignoring HUNTER_TASK_MAX_CONCURRENCY value '$configuredValue' because it must be at least 1; using default concurrency of $defaultConcurrency." 'WARN'
+        return $defaultConcurrency
+    }
+
+    return [Math]::Min($parsedConcurrency, 32)
+}
 
 function Get-HunterScriptVariableSnapshot {
     <#
@@ -255,7 +289,7 @@ function New-HunterRunspacePool {
     param([int]$MaxConcurrency = 0)
 
     if ($MaxConcurrency -le 0) {
-        $MaxConcurrency = [Math]::Min([Environment]::ProcessorCount, 8)
+        $MaxConcurrency = Get-HunterTaskRunspaceMaxConcurrency
     }
 
     $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
@@ -572,7 +606,7 @@ function Invoke-TaskExecution {
 
     .DESCRIPTION
         Groups tasks by phase number.  Phases listed in $script:ParallelPhases
-        (3, 4, 7) run their tasks concurrently via a RunspacePool.  All other
+        (3, 4, 6, 7) run their tasks concurrently via a RunspacePool.  All other
         phases execute sequentially.  The Default-user registry hive is kept
         loaded for the duration of each phase so that per-task load/unload
         overhead is eliminated.  Checkpoints are saved once per phase rather

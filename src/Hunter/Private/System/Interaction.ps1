@@ -29,6 +29,60 @@ function Show-YesNoDialog {
     }
 }
 
+function Test-HunterProgressWindowReady {
+    if ($null -eq $script:UiSync) {
+        return $false
+    }
+
+    try {
+        return [bool]$script:UiSync.Ready
+    } catch {
+        return $false
+    }
+}
+
+function Initialize-HunterInteractivePreferences {
+    param(
+        [object[]]$Tasks,
+        [object]$Context = $null
+    )
+
+    if ($null -ne $Context) {
+        Set-HunterContext -Context $Context
+    } else {
+        $Context = Get-HunterContext
+    }
+
+    if ($script:IsAutomationRun -or $script:DryRunMode) {
+        return
+    }
+
+    $taskList = @($Tasks)
+    if ($taskList.Count -eq 0) {
+        return
+    }
+
+    $requestedSkipTaskIds = @($script:SkipTaskIds | Select-Object -Unique)
+    $pendingTaskIds = @(
+        $taskList |
+            Where-Object {
+                $taskId = [string]$_.TaskId
+                -not (Test-TaskCompleted -TaskId $taskId -Context $Context) -and $taskId -notin $requestedSkipTaskIds
+            } |
+            ForEach-Object { [string]$_.TaskId }
+    )
+
+    if ($pendingTaskIds -contains 'core-local-user-v2') {
+        Write-Log 'Capturing standard-user setup consent before the progress overlay starts.' 'INFO'
+        Resolve-CreateLocalUserPreference | Out-Null
+    }
+
+    if (($pendingTaskIds -contains 'core-autologin-v2') -and -not $script:IsHyperVGuest -and [bool]$script:CreateLocalUser) {
+        Write-Log 'Capturing autologin consent before the progress overlay starts.' 'INFO'
+        Resolve-ConfigureAutologinPreference | Out-Null
+    }
+}
+
 function Resolve-SkipAppDownloadsPreference {
     if ($null -ne $script:SkipAppDownloads) {
         return [bool]$script:SkipAppDownloads
@@ -64,6 +118,12 @@ function Resolve-CreateLocalUserPreference {
         return $false
     }
 
+    if (Test-HunterProgressWindowReady) {
+        $script:CreateLocalUser = $false
+        Add-RunInfrastructureIssue -Message 'Standard user consent was requested after the progress overlay started. Defaulting to No to avoid a blocked run.' -Level 'WARN'
+        return $false
+    }
+
     $script:CreateLocalUser = Show-YesNoDialog `
         -Title 'Hunter Standard User' `
         -Message "Create the standard local 'user' account?`n`nChoose Yes to create (or normalize) the standard local user account that Hunter manages, or No to skip this step. Skipping this account also skips autologin." `
@@ -89,8 +149,9 @@ function Resolve-ConfigureAutologinPreference {
         return $false
     }
 
-    if (-not (Resolve-CreateLocalUserPreference)) {
+    if (Test-HunterProgressWindowReady) {
         $script:ConfigureAutologin = $false
+        Add-RunInfrastructureIssue -Message 'Autologin consent was requested after the progress overlay started. Defaulting to No to avoid a blocked run.' -Level 'WARN'
         return $false
     }
 

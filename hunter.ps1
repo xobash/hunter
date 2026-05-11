@@ -443,6 +443,9 @@ function Invoke-Main {
             return $true
         }
 
+        Initialize-HunterInteractivePreferences -Tasks $tasks -Context $context
+        Sync-HunterContextFromScriptState -Context $context
+
         Initialize-HunterRollbackState -Mode $Mode
         Save-HunterRunConfiguration -Mode $Mode -SkipTaskIds $script:SkipTaskIds -CustomAppsListPath $(Get-HunterEffectiveCustomAppsListPath) -PagefileDrive ([string]$script:PagefileDriveOverride)
 

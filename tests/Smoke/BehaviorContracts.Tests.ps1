@@ -12,6 +12,7 @@ Describe 'Behavior contracts' {
         $cleanupSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Cleanup.ps1') -Raw -ErrorAction Stop
         $copilotSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/OneDriveCopilot.ps1') -Raw -ErrorAction Stop
         $detectionSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/System/Detection.ps1') -Raw -ErrorAction Stop
+        $engineSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Execution/Engine.ps1') -Raw -ErrorAction Stop
         $edgeSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Edge.ps1') -Raw -ErrorAction Stop
         $explorerSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Explorer.ps1') -Raw -ErrorAction Stop
         $featuresSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Features.ps1') -Raw -ErrorAction Stop
@@ -176,17 +177,23 @@ Describe 'Behavior contracts' {
     It 'requires explicit user consent for standard user creation and autologin' {
         $configSource | Should -Match '\$script:ConfigureAutologin = \$null'
         $interactionSource | Should -Match 'function Resolve-CreateLocalUserPreference'
+        $interactionSource | Should -Match 'function Initialize-HunterInteractivePreferences'
+        $interactionSource | Should -Match 'Capturing standard-user setup consent before the progress overlay starts'
+        $interactionSource | Should -Match 'Standard user consent was requested after the progress overlay started'
         $interactionSource | Should -Match "-Title 'Hunter Standard User'"
         $interactionSource | Should -Match 'Skipping this account also skips autologin'
         $interactionSource | Should -Match 'Skipping standard user creation in automation-safe mode because Hunter requires explicit user consent for this step'
         $interactionSource | Should -Not -Match '\$script:CreateLocalUser = \$true'
         $interactionSource | Should -Match 'function Resolve-ConfigureAutologinPreference'
+        $interactionSource | Should -Match 'Autologin consent was requested after the progress overlay started'
         $interactionSource | Should -Match "-Title 'Hunter Autologin'"
         $interactionSource | Should -Match 'Configure automatic sign-in'
         $interactionSource | Should -Match 'Skipping autologin in automation-safe mode because Hunter requires explicit user consent for this step'
         $interactionSource | Should -Not -Match '\$script:ConfigureAutologin = \$true'
         $userSetupSource | Should -Match 'Resolve-ConfigureAutologinPreference'
         $userSetupSource | Should -Match 'Autologin declined by user'
+        $hunterSource | Should -Match 'Initialize-HunterInteractivePreferences -Tasks \$tasks -Context \$context'
+        $hunterSource.IndexOf('Initialize-HunterInteractivePreferences -Tasks $tasks -Context $context') | Should -BeLessThan $hunterSource.IndexOf('Start-ProgressWindow')
     }
 
     It 'creates restore points automatically in interactive runs and logs a full execution plan with profile-aware risk levels' {
@@ -221,5 +228,11 @@ Describe 'Behavior contracts' {
         $cleanupSource | Should -Match 'function Invoke-ValidateAppliedConfiguration'
         $cleanupSource | Should -Match '\[VERIFY\] PASS'
         $cleanupSource | Should -Match 'VALIDATION CHECKS'
+    }
+
+    It 'keeps privacy and tweak phases parallelized and exposes a task concurrency override' {
+        $engineSource | Should -Match "\$script:ParallelPhases = @\('3', '4', '6', '7'\)"
+        $engineSource | Should -Match 'function Get-HunterTaskRunspaceMaxConcurrency'
+        $engineSource | Should -Match 'HUNTER_TASK_MAX_CONCURRENCY'
     }
 }
