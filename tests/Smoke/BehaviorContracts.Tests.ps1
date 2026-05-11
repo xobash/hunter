@@ -21,6 +21,7 @@ Describe 'Behavior contracts' {
         $hunterSource = Get-Content -Path (Join-Path $repoRoot 'hunter.ps1') -Raw -ErrorAction Stop
         $interactionSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/System/Interaction.ps1') -Raw -ErrorAction Stop
         $nativeSystemSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Infrastructure/NativeSystem.ps1') -Raw -ErrorAction Stop
+        $packageHelpersSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Packages/Helpers.ps1') -Raw -ErrorAction Stop
         $pathPolicySource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Common/PathPolicy.ps1') -Raw -ErrorAction Stop
         $privacySource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Privacy.ps1') -Raw -ErrorAction Stop
         $preflightSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Preflight.ps1') -Raw -ErrorAction Stop
@@ -218,6 +219,8 @@ Describe 'Behavior contracts' {
         $copilotSource | Should -Match 'Invoke-NativeCommandWithTimeout'
         $edgeSource | Should -Match 'Invoke-NativeCommandWithTimeout'
         $edgeSource | Should -Match 'edgeUninstallTimeoutSeconds'
+        $packageHelpersSource | Should -Match "Invoke-WithNamedSemaphore -Name 'Global\\HunterWingetInstall'"
+        $packageHelpersSource | Should -Not -Match '(?m)^\s*\}\)\s*$'
     }
 
     It 'captures storage and power-platform context for hardware-aware guardrails and exposes a validation phase' {

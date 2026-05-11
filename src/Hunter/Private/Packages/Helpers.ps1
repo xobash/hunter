@@ -289,7 +289,7 @@ function global:Invoke-WingetWithMutex {
             -ArgumentList $Arguments `
             -TimeoutSeconds $ExecutionTimeoutSeconds `
             -Description $Description
-    })
+    }
 
     if ($ReturnResult) {
         return $result
