@@ -88,34 +88,21 @@ function Invoke-EnsureLocalStandardUser {
 
             $invokeNetUser = {
                 param([string[]]$Arguments)
-
-                $stdoutPath = Join-Path $script:HunterRoot 'net-user.stdout.log'
-                $stderrPath = Join-Path $script:HunterRoot 'net-user.stderr.log'
-
-                foreach ($path in @($stdoutPath, $stderrPath)) {
-                    if (Test-Path $path) {
-                        Remove-Item -Path $path -Force -ErrorAction SilentlyContinue
-                    }
-                }
-
-                $process = Start-Process `
-                    -FilePath 'net.exe' `
+                $netUserTimeoutSeconds = 45
+                $netUserPath = Get-NativeSystemExecutablePath -FileName 'net.exe'
+                $netUserResult = Invoke-NativeCommandWithTimeout `
+                    -FilePath $netUserPath `
                     -ArgumentList $Arguments `
-                    -NoNewWindow `
-                    -Wait `
-                    -PassThru `
-                    -RedirectStandardOutput $stdoutPath `
-                    -RedirectStandardError $stderrPath
+                    -TimeoutSeconds $netUserTimeoutSeconds `
+                    -Description 'net.exe local user management'
 
                 $outputLines = @()
-                foreach ($path in @($stdoutPath, $stderrPath)) {
-                    if (Test-Path $path) {
-                        $outputLines += @(Get-Content -Path $path -ErrorAction SilentlyContinue)
-                    }
+                if (-not [string]::IsNullOrWhiteSpace([string]$netUserResult.Output)) {
+                    $outputLines = @(([string]$netUserResult.Output -split "\r?\n"))
                 }
 
                 return [pscustomobject]@{
-                    ExitCode = $process.ExitCode
+                    ExitCode = [int]$netUserResult.ExitCode
                     Output   = @($outputLines)
                 }
             }

@@ -192,6 +192,8 @@ Describe 'Behavior contracts' {
         $interactionSource | Should -Not -Match '\$script:ConfigureAutologin = \$true'
         $userSetupSource | Should -Match 'Resolve-ConfigureAutologinPreference'
         $userSetupSource | Should -Match 'Autologin declined by user'
+        $userSetupSource | Should -Match "Get-NativeSystemExecutablePath -FileName 'net\.exe'"
+        $userSetupSource | Should -Match 'Invoke-NativeCommandWithTimeout'
         $hunterSource | Should -Match 'Initialize-HunterInteractivePreferences -Tasks \$tasks -Context \$context'
         $hunterSource.IndexOf('Initialize-HunterInteractivePreferences -Tasks $tasks -Context $context') | Should -BeLessThan $hunterSource.IndexOf('Start-ProgressWindow')
     }
