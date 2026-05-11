@@ -33,6 +33,7 @@ $ProgressPreference='SilentlyContinue'; irm https://raw.githubusercontent.com/xo
 ```
 
 The quick-start command sets `$ProgressPreference` first so Windows PowerShell does not render the legacy blue download progress header while it fetches `hunter.ps1`.
+On first remote bootstrap, Hunter stages its private scripts under `%TEMP%\HunterBootstrap` before the normal Hunter banner appears.
 
 Pinned release:
 

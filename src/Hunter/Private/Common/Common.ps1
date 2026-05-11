@@ -107,7 +107,7 @@ function Add-HunterValidationResult {
     $message = if ([string]::IsNullOrWhiteSpace($Detail)) {
         "$prefix $Name"
     } else {
-        "$prefix $Name: $Detail"
+        "${prefix} ${Name}: $Detail"
     }
     Write-Log $message $(if ($Skipped) { 'INFO' } elseif ($Passed) { 'SUCCESS' } else { 'WARN' })
 

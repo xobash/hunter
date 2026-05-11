@@ -8,6 +8,7 @@ Describe 'Behavior contracts' {
         . (Join-Path $repoRoot 'src/Hunter/Private/Common/PathPolicy.ps1')
         . (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Catalog.ps1')
         $appRemovalSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Apps/AppRemoval.ps1') -Raw -ErrorAction Stop
+        $commonSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Common/Common.ps1') -Raw -ErrorAction Stop
         $configSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Bootstrap/Config.ps1') -Raw -ErrorAction Stop
         $cleanupSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Cleanup.ps1') -Raw -ErrorAction Stop
         $copilotSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/OneDriveCopilot.ps1') -Raw -ErrorAction Stop
@@ -220,6 +221,7 @@ Describe 'Behavior contracts' {
     }
 
     It 'captures storage and power-platform context for hardware-aware guardrails and exposes a validation phase' {
+        $commonSource | Should -Match '\$\{prefix\} \$\{Name\}: \$Detail'
         $detectionSource | Should -Match 'function Get-HunterStorageMediaContext'
         $detectionSource | Should -Match 'Get-PhysicalDisk'
         $detectionSource | Should -Match 'Win32_DiskDrive'
