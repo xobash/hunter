@@ -178,9 +178,13 @@ Describe 'Behavior contracts' {
         $interactionSource | Should -Match 'function Resolve-CreateLocalUserPreference'
         $interactionSource | Should -Match "-Title 'Hunter Standard User'"
         $interactionSource | Should -Match 'Skipping this account also skips autologin'
+        $interactionSource | Should -Match 'Skipping standard user creation in automation-safe mode because Hunter requires explicit user consent for this step'
+        $interactionSource | Should -Not -Match '\$script:CreateLocalUser = \$true'
         $interactionSource | Should -Match 'function Resolve-ConfigureAutologinPreference'
         $interactionSource | Should -Match "-Title 'Hunter Autologin'"
         $interactionSource | Should -Match 'Configure automatic sign-in'
+        $interactionSource | Should -Match 'Skipping autologin in automation-safe mode because Hunter requires explicit user consent for this step'
+        $interactionSource | Should -Not -Match '\$script:ConfigureAutologin = \$true'
         $userSetupSource | Should -Match 'Resolve-ConfigureAutologinPreference'
         $userSetupSource | Should -Match 'Autologin declined by user'
     }

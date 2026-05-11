@@ -59,8 +59,9 @@ function Resolve-CreateLocalUserPreference {
     }
 
     if ($script:IsAutomationRun) {
-        $script:CreateLocalUser = $true
-        return $true
+        $script:CreateLocalUser = $false
+        Write-Log 'Skipping standard user creation in automation-safe mode because Hunter requires explicit user consent for this step.' 'INFO'
+        return $false
     }
 
     $script:CreateLocalUser = Show-YesNoDialog `
@@ -83,8 +84,9 @@ function Resolve-ConfigureAutologinPreference {
     }
 
     if ($script:IsAutomationRun) {
-        $script:ConfigureAutologin = $true
-        return $true
+        $script:ConfigureAutologin = $false
+        Write-Log 'Skipping autologin in automation-safe mode because Hunter requires explicit user consent for this step.' 'INFO'
+        return $false
     }
 
     if (-not (Resolve-CreateLocalUserPreference)) {
