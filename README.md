@@ -13,7 +13,7 @@
 Hunter is a PowerShell-based baseline script for personal Windows installs. It runs a fixed, multi-phase task catalog covering preflight checks, app removal, privacy and UI changes, performance tuning, package installs, cleanup, reporting, and rollback capture.
 
 > [!WARNING]
-> Hunter runs as administrator and changes system settings. Use the `stable` channel for real machines and `main` only when validating preview changes. It is not intended for managed enterprise devices, shared systems, or one-off single-setting tweaks.
+> Hunter runs as administrator and changes system settings. It is intended for personal machines and lab VMs, not managed enterprise devices, shared systems, or one-off single-setting tweaks.
 
 ## Safety
 
@@ -26,19 +26,13 @@ Hunter is a PowerShell-based baseline script for personal Windows installs. It r
 
 ## Quick Start
 
-Run from an elevated Windows PowerShell session:
-
-```powershell
-$ProgressPreference='SilentlyContinue'; irm https://raw.githubusercontent.com/xobash/hunter/stable/hunter.ps1 | iex
-```
-
-The quick-start command sets `$ProgressPreference` first so Windows PowerShell does not render the legacy blue download progress header while it fetches `hunter.ps1`.
-
-Preview channel:
+Run from an elevated 64-bit Windows PowerShell session. Do not use `Windows PowerShell (x86)`.
 
 ```powershell
 $ProgressPreference='SilentlyContinue'; irm https://raw.githubusercontent.com/xobash/hunter/main/hunter.ps1 | iex
 ```
+
+The quick-start command sets `$ProgressPreference` first so Windows PowerShell does not render the legacy blue download progress header while it fetches `hunter.ps1`.
 
 Pinned release:
 
@@ -59,7 +53,7 @@ powershell -ExecutionPolicy Bypass -File .\hunter.ps1
 | Requirement | Notes |
 | --- | --- |
 | Windows | Windows 10 or Windows 11 |
-| Shell | Elevated Windows PowerShell, `powershell.exe` |
+| Shell | Elevated 64-bit Windows PowerShell, `powershell.exe` |
 | Network | Internet access for bootstrap, package, and external-tool steps |
 | Packages | `winget` is used for supported package installs and WinGet-backed removals |
 
@@ -223,15 +217,15 @@ Desktop exports at the end of a run:
 - restore script copy
 - run-configuration copy
 
-## Release Channels
+## Bootstrap Source
 
-| Channel | Ref | Intended use |
-| --- | --- | --- |
-| `stable` | `stable` | Public one-liner |
-| `preview` | `main` | Pre-release validation |
-| versioned | `v<semver>` | Exact reproducible release |
+Hunter uses `main` as its single branch bootstrap source:
 
-The wrapper logs its release channel and version at startup. Bootstrap assets are pinned to immutable revisions for integrity and reproducibility.
+```powershell
+$ProgressPreference='SilentlyContinue'; irm https://raw.githubusercontent.com/xobash/hunter/main/hunter.ps1 | iex
+```
+
+If you create version tags, you can still use those as pinned snapshots. The wrapper logs its release channel and version at startup, and the bootstrap loader still verifies the private asset hashes it downloads.
 
 ## Development
 

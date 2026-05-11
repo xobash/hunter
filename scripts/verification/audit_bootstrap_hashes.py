@@ -64,20 +64,12 @@ def main() -> int:
     if not re.search(r"\$script:HunterReleaseVersion = '[^']+'", hunter_text):
         failures.append(f"{HUNTER_PATH}: HunterReleaseVersion assignment not found")
 
-    bootstrap_revision_match = re.search(r"\$script:HunterBootstrapRevision = '([0-9a-fA-F]{40})'", hunter_text)
+    bootstrap_revision_match = re.search(r"\$script:HunterBootstrapRevision = '([^']+)'", hunter_text)
     bootstrap_revision = None
     if not bootstrap_revision_match:
         failures.append(f"{HUNTER_PATH}: HunterBootstrapRevision assignment not found")
     else:
         bootstrap_revision = bootstrap_revision_match.group(1).lower()
-
-    if not re.search(
-        r"\$script:HunterRemoteRevision = \$script:HunterBootstrapRevision",
-        hunter_text,
-    ):
-        failures.append(
-            f"{HUNTER_PATH}: HunterRemoteRevision is not derived from HunterBootstrapRevision"
-        )
 
     if not re.search(
         r"\$script:HunterRemoteRoot = 'https://raw\.githubusercontent\.com/xobash/hunter/\{0\}' -f \$script:HunterBootstrapRevision",
@@ -98,7 +90,7 @@ def main() -> int:
                 f"loader hash mismatch: hunter.ps1 pins {pinned_loader_hash} but Loader.ps1 is {actual_loader_hash}"
             )
 
-        if bootstrap_revision:
+        if bootstrap_revision and re.fullmatch(r"[0-9a-fA-F]{40}", bootstrap_revision):
             revision_loader_bytes = git_show_bytes(
                 bootstrap_revision,
                 "src/Hunter/Private/Bootstrap/Loader.ps1",

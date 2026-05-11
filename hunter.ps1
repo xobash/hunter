@@ -20,13 +20,12 @@ $ProgressPreference = 'SilentlyContinue'
 # ==============================================================================
 
 $script:HunterSourceRoot = $null
-$script:HunterReleaseChannel = 'preview'
-$script:HunterReleaseVersion = '2.0.3-preview.2'
-$script:HunterBootstrapRevision = '9e1590a50b3f0fd603ea9717167e8e1c36a6d44c'
-$script:HunterRemoteRevision = $script:HunterBootstrapRevision
+$script:HunterReleaseChannel = 'main'
+$script:HunterReleaseVersion = '2.0.3-main'
+$script:HunterBootstrapRevision = 'main'
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = '0bb9c8a6ba32256363567ce64805167e0f0eb41850a23ca3538e607f94fc33bd'
+$script:BootstrapLoaderSha256 = 'bb4d5ef57c38c5059786e2176dc93458e8dfe8c19f4776ebd1f77a58f6cbc90e'
 
 $bootstrapLoaderPath = $null
 $canUseLocalHunterPrivateLayers = $false

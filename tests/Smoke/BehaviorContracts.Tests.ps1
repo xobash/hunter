@@ -211,7 +211,7 @@ Describe 'Behavior contracts' {
     }
 
     It 'publishes a no-progress bootstrap command and bounds cloud app removal waits' {
-        $readmeSource | Should -Match '\$ProgressPreference=''SilentlyContinue''; irm https://raw\.githubusercontent\.com/xobash/hunter/stable/hunter\.ps1 \| iex'
+        $readmeSource | Should -Match '\$ProgressPreference=''SilentlyContinue''; irm https://raw\.githubusercontent\.com/xobash/hunter/main/hunter\.ps1 \| iex'
         $appRemovalSource | Should -Match 'Starting WinGet uninstall'
         $appRemovalSource | Should -Match 'ExecutionTimeoutSeconds \$wingetUninstallTimeoutSeconds'
         $copilotSource | Should -Match 'Invoke-NativeCommandWithTimeout'

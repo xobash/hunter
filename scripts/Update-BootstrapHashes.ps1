@@ -67,18 +67,14 @@ Set-Content -Path $loaderFullPath -Value $loaderContent -Encoding UTF8 -Force
 
 $loaderSha256 = (Get-FileHash -Path $loaderFullPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
 $hunterScriptContent = Get-Content -Path $hunterScriptFullPath -Raw -ErrorAction Stop
-$bootstrapRevisionPattern = "(?m)(?<prefix>\$script:HunterBootstrapRevision\s*=\s*')[0-9A-Fa-f]*(?<suffix>')"
+$bootstrapRevisionPattern = "(?m)(?<prefix>\$script:HunterBootstrapRevision\s*=\s*')[^']*(?<suffix>')"
 $resolvedBootstrapRevision = $BootstrapRevision
 if ([string]::IsNullOrWhiteSpace($resolvedBootstrapRevision)) {
-    try {
-        $resolvedBootstrapRevision = (& git -C $repoRoot rev-parse HEAD 2>$null).Trim()
-    } catch {
-        $resolvedBootstrapRevision = ''
-    }
+    $resolvedBootstrapRevision = 'main'
 }
 
 if ([string]::IsNullOrWhiteSpace($resolvedBootstrapRevision)) {
-    throw 'Could not determine HunterBootstrapRevision. Pass -BootstrapRevision explicitly or run inside a git worktree.'
+    throw 'Could not determine HunterBootstrapRevision. Pass -BootstrapRevision explicitly if you do not want to use main.'
 }
 
 if (-not [regex]::IsMatch($hunterScriptContent, $bootstrapRevisionPattern)) {
@@ -134,7 +130,6 @@ $hunterScriptContent = [regex]::Replace(
 
 Set-Content -Path $hunterScriptFullPath -Value $hunterScriptContent -Encoding UTF8 -Force
 
-Write-Host ("{0} HunterRemoteRevision" -f $resolvedBootstrapRevision)
 Write-Host ("{0} {1}" -f $loaderSha256, $LoaderRelativePath)
 Write-Host ("{0} HunterBootstrapRevision" -f $resolvedBootstrapRevision)
 if (-not [string]::IsNullOrWhiteSpace($ReleaseChannel)) {
