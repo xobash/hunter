@@ -26,7 +26,7 @@ $script:HunterBootstrapRevision = '9e1590a50b3f0fd603ea9717167e8e1c36a6d44c'
 $script:HunterRemoteRevision = $script:HunterBootstrapRevision
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = 'edbe34570ca0eb37507478c8f5e66a8607e7af1dc04e885bed3ff76a75d13f5a'
+$script:BootstrapLoaderSha256 = '746dfc55b3b7006630e7566e4e63536f098781796cce567b91d2eadd273257e7'
 
 $bootstrapLoaderPath = $null
 $canUseLocalHunterPrivateLayers = $false
@@ -215,6 +215,15 @@ function Invoke-Main {
     .PARAMETER ForceTextInputServiceRedirect
         Opt in to the advanced TextInputManagementService ServiceDll redirect.
 
+    .PARAMETER RunTcpOptimizer
+        Opt in to downloading and launching the third-party TCP Optimizer
+        executable for manual verification after Hunter applies its native
+        TCP/network settings.
+
+    .PARAMETER RunOOSU
+        Opt in to downloading and executing the third-party O&O ShutUp10
+        utility and preset import workflow.
+
     .PARAMETER PagefileDrive
         Optional fixed-drive letter (for example `D:`) to host `pagefile.sys`
         instead of the system drive.
@@ -253,6 +262,10 @@ function Invoke-Main {
 
         [switch]$ForceTextInputServiceRedirect,
 
+        [switch]$RunTcpOptimizer,
+
+        [switch]$RunOOSU,
+
         [string]$PagefileDrive = ''
     )
 
@@ -280,6 +293,8 @@ function Invoke-Main {
     $script:DisableAudioEnhancementsRequested = [bool]$DisableAudioEnhancements -or $env:HUNTER_DISABLE_AUDIO_ENHANCEMENTS -eq '1'
     $script:DisableSystemSoundsRequested = [bool]$DisableSystemSounds -or $env:HUNTER_DISABLE_SYSTEM_SOUNDS -eq '1'
     $script:ForceTextInputServiceRedirectRequested = [bool]$ForceTextInputServiceRedirect -or $env:HUNTER_FORCE_TEXT_INPUT_SERVICE_REDIRECT -eq '1'
+    $script:RunTcpOptimizerRequested = [bool]$RunTcpOptimizer -or $env:HUNTER_RUN_TCP_OPTIMIZER -eq '1'
+    $script:RunOOSURequested = [bool]$RunOOSU -or $env:HUNTER_RUN_OOSU -eq '1'
     $script:PagefileDriveOverride = if ([string]::IsNullOrWhiteSpace($PagefileDrive)) { $null } else { $PagefileDrive.Trim() }
     $script:RunInfrastructureIssues = @()
     $script:ProgressUiIssueLogged = $false
@@ -409,6 +424,12 @@ function Invoke-Main {
         }
         if ($script:ForceTextInputServiceRedirectRequested) {
             Write-Log 'Advanced text-input service redirect was requested explicitly.' 'WARN'
+        }
+        if ($script:RunTcpOptimizerRequested) {
+            Write-Log 'Third-party TCP Optimizer execution was requested explicitly.' 'WARN'
+        }
+        if ($script:RunOOSURequested) {
+            Write-Log 'Third-party O&O ShutUp10 execution was requested explicitly.' 'WARN'
         }
         if (-not [string]::IsNullOrWhiteSpace($script:PagefileDriveOverride)) {
             Write-Log "Pagefile target override: $($script:PagefileDriveOverride)" 'INFO'
@@ -563,6 +584,8 @@ $scriptForceStorageOptimization = $false
 $scriptDisableAudioEnhancements = $false
 $scriptDisableSystemSounds = $false
 $scriptForceTextInputServiceRedirect = $false
+$scriptRunTcpOptimizer = $false
+$scriptRunOOSU = $false
 $scriptPagefileDrive = $null
 for ($i = 0; $i -lt $args.Count; $i++) {
     if ($args[$i] -eq '-Mode' -and ($i + 1) -lt $args.Count) {
@@ -617,6 +640,12 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     elseif ($args[$i] -eq '-ForceTextInputServiceRedirect') {
         $scriptForceTextInputServiceRedirect = $true
     }
+    elseif ($args[$i] -eq '-RunTcpOptimizer') {
+        $scriptRunTcpOptimizer = $true
+    }
+    elseif ($args[$i] -eq '-RunOOSU') {
+        $scriptRunOOSU = $true
+    }
     elseif ($args[$i] -eq '-PagefileDrive' -and ($i + 1) -lt $args.Count) {
         $scriptPagefileDrive = $args[$i + 1]
     }
@@ -628,7 +657,7 @@ if (-not [string]::IsNullOrWhiteSpace($scriptLogPath)) {
 }
 
 # Invoke main orchestrator
-Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -WhatIf:$scriptWhatIf -Profile $scriptProfile -AutomationSafe:$scriptAutomationSafe -SkipTask $scriptSkipTasks -CustomAppsListPath $scriptCustomAppsListPath -DisableIPv6:$scriptDisableIPv6 -DisableTeredo:$scriptDisableTeredo -DisableCpuMitigations:$scriptDisableCpuMitigations -DisableHags:$scriptDisableHags -ForceStorageOptimization:$scriptForceStorageOptimization -DisableAudioEnhancements:$scriptDisableAudioEnhancements -DisableSystemSounds:$scriptDisableSystemSounds -ForceTextInputServiceRedirect:$scriptForceTextInputServiceRedirect -PagefileDrive $scriptPagefileDrive
+Invoke-Main -Mode $scriptMode -Strict:$scriptStrict -WhatIf:$scriptWhatIf -Profile $scriptProfile -AutomationSafe:$scriptAutomationSafe -SkipTask $scriptSkipTasks -CustomAppsListPath $scriptCustomAppsListPath -DisableIPv6:$scriptDisableIPv6 -DisableTeredo:$scriptDisableTeredo -DisableCpuMitigations:$scriptDisableCpuMitigations -DisableHags:$scriptDisableHags -ForceStorageOptimization:$scriptForceStorageOptimization -DisableAudioEnhancements:$scriptDisableAudioEnhancements -DisableSystemSounds:$scriptDisableSystemSounds -ForceTextInputServiceRedirect:$scriptForceTextInputServiceRedirect -RunTcpOptimizer:$scriptRunTcpOptimizer -RunOOSU:$scriptRunOOSU -PagefileDrive $scriptPagefileDrive
 } catch {
     $crashLogPath = Join-Path ([System.IO.Path]::GetTempPath()) 'hunter-crash.txt'
     $crashTimestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'

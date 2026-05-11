@@ -7,10 +7,12 @@ Describe 'Behavior contracts' {
         . (Join-Path $repoRoot 'src/Hunter/Private/System/Detection.ps1')
         . (Join-Path $repoRoot 'src/Hunter/Private/Common/PathPolicy.ps1')
         . (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Catalog.ps1')
+        $appRemovalSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Apps/AppRemoval.ps1') -Raw -ErrorAction Stop
         $configSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Bootstrap/Config.ps1') -Raw -ErrorAction Stop
         $cleanupSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Cleanup.ps1') -Raw -ErrorAction Stop
         $copilotSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/OneDriveCopilot.ps1') -Raw -ErrorAction Stop
         $detectionSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/System/Detection.ps1') -Raw -ErrorAction Stop
+        $edgeSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Edge.ps1') -Raw -ErrorAction Stop
         $explorerSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Explorer.ps1') -Raw -ErrorAction Stop
         $featuresSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Features.ps1') -Raw -ErrorAction Stop
         $hardwareSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Hardware.ps1') -Raw -ErrorAction Stop
@@ -20,6 +22,7 @@ Describe 'Behavior contracts' {
         $pathPolicySource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Common/PathPolicy.ps1') -Raw -ErrorAction Stop
         $privacySource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/Privacy.ps1') -Raw -ErrorAction Stop
         $preflightSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Preflight.ps1') -Raw -ErrorAction Stop
+        $readmeSource = Get-Content -Path (Join-Path $repoRoot 'README.md') -Raw -ErrorAction Stop
         $registryOpsSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Registry/Operations.ps1') -Raw -ErrorAction Stop
         $uiSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/UI.ps1') -Raw -ErrorAction Stop
         $userSetupSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Core/UserSetup.ps1') -Raw -ErrorAction Stop
@@ -120,6 +123,24 @@ Describe 'Behavior contracts' {
         $pathPolicySource | Should -Match "Join-Path \\$script:DownloadDir 'ooshutup10_winutil_settings\.cfg'"
     }
 
+    It 'skips third-party external tool execution by default unless explicitly requested' {
+        $interactionSource | Should -Match 'HUNTER_RUN_TCP_OPTIMIZER=1'
+        $interactionSource | Should -Match 'HUNTER_RUN_OOSU=1'
+        $hardwareSource | Should -Match 'Resolve-RunTcpOptimizerPreference'
+        $hardwareSource | Should -Match 'Resolve-RunOOSUPreference'
+        $hardwareSource | Should -Match 'third-party verification utility was skipped by default'
+        $hunterSource | Should -Match '\.PARAMETER RunTcpOptimizer'
+        $hunterSource | Should -Match '\.PARAMETER RunOOSU'
+        $hunterSource | Should -Match '\[switch\]\$RunTcpOptimizer'
+        $hunterSource | Should -Match '\[switch\]\$RunOOSU'
+    }
+
+    It 'sets the TCP Optimizer WinINet connection caps to 10 for current and default users' {
+        $hardwareSource | Should -Match "MaxConnectionsPer1_0Server'; Value = 10"
+        $hardwareSource | Should -Match "MaxConnectionsPerServer'; Value = 10"
+        $hardwareSource | Should -Match 'Set-DwordBatchForAllUsers'
+    }
+
     It 'suppresses the text input service and preserves REG_EXPAND_SZ verification for the advanced redirect' {
         $hardwareSource | Should -Match 'InputServiceEnabled'
         $hardwareSource | Should -Match 'InputServiceEnabledForCCI'
@@ -174,6 +195,15 @@ Describe 'Behavior contracts' {
         $hunterSource | Should -Match 'Profile:\s+\$\(\$script:SelectedProfile\)'
         $hunterSource | Should -Match "'Aggressive', 'Moderate', 'Safe'"
         $hunterSource | Should -Match '\[\{0\}\] \{1\} - \{2\}'
+    }
+
+    It 'publishes a no-progress bootstrap command and bounds cloud app removal waits' {
+        $readmeSource | Should -Match '\$ProgressPreference=''SilentlyContinue''; irm https://raw\.githubusercontent\.com/xobash/hunter/stable/hunter\.ps1 \| iex'
+        $appRemovalSource | Should -Match 'Starting WinGet uninstall'
+        $appRemovalSource | Should -Match 'ExecutionTimeoutSeconds \$wingetUninstallTimeoutSeconds'
+        $copilotSource | Should -Match 'Invoke-NativeCommandWithTimeout'
+        $edgeSource | Should -Match 'Invoke-NativeCommandWithTimeout'
+        $edgeSource | Should -Match 'edgeUninstallTimeoutSeconds'
     }
 
     It 'captures storage and power-platform context for hardware-aware guardrails and exposes a validation phase' {

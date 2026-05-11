@@ -21,6 +21,8 @@ function Invoke-RemoveOneDrive {
         $oneDriveProgramFiles = Join-Path $programFilesRoot 'Microsoft OneDrive'
         $oneDriveUserFolder = $env:OneDrive
         $oneDriveGuid = '{018D5C66-4533-4307-9B53-224DE2ED1FE6}'
+        $oneDriveShutdownTimeoutSeconds = 30
+        $oneDriveUninstallTimeoutSeconds = 180
 
         $getOneDriveMarkers = {
             $markers = New-Object 'System.Collections.Generic.List[string]'
@@ -68,9 +70,18 @@ function Invoke-RemoveOneDrive {
 
         foreach ($oneDriveExecutablePath in $oneDriveExecutablePaths) {
             try {
-                Write-Log -Message "Shutting down OneDrive..." -Level 'INFO'
-                Start-ProcessChecked -FilePath $oneDriveExecutablePath -ArgumentList @('/shutdown') -WindowStyle Hidden | Out-Null
-                break
+                Write-Log -Message "Shutting down OneDrive (timeout: ${oneDriveShutdownTimeoutSeconds}s)..." -Level 'INFO'
+                $shutdownResult = Invoke-NativeCommandWithTimeout `
+                    -FilePath $oneDriveExecutablePath `
+                    -ArgumentList @('/shutdown') `
+                    -TimeoutSeconds $oneDriveShutdownTimeoutSeconds `
+                    -Description "OneDrive shutdown via $oneDriveExecutablePath"
+                if ([int]$shutdownResult.ExitCode -eq 0) {
+                    Write-Log -Message 'OneDrive shutdown command completed.' -Level 'INFO'
+                    break
+                }
+
+                Write-Log -Message "OneDrive shutdown command for $oneDriveExecutablePath exited with code $($shutdownResult.ExitCode)." -Level 'WARN'
             } catch {
                 Write-Log -Message "OneDrive shutdown attempt failed for $oneDriveExecutablePath : $_" -Level 'WARN'
             }
@@ -88,17 +99,17 @@ function Invoke-RemoveOneDrive {
                 }
             }
 
-            Write-Log -Message "Uninstalling OneDrive..." -Level 'INFO'
+            Write-Log -Message "Uninstalling OneDrive (timeout: ${oneDriveUninstallTimeoutSeconds}s)..." -Level 'INFO'
             $uninstallIssue = $null
             if (Test-Path $oneDriveSetup64) {
                 try {
-                    $uninstallProcess = Start-Process -FilePath $oneDriveSetup64 -ArgumentList @('/uninstall') -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
-                    if ($null -eq $uninstallProcess) {
-                        throw "Failed to start process $oneDriveSetup64"
-                    }
-
-                    if ([int]$uninstallProcess.ExitCode -ne 0) {
-                        $uninstallIssue = "$oneDriveSetup64 exited with code $($uninstallProcess.ExitCode)"
+                    $uninstallResult = Invoke-NativeCommandWithTimeout `
+                        -FilePath $oneDriveSetup64 `
+                        -ArgumentList @('/uninstall') `
+                        -TimeoutSeconds $oneDriveUninstallTimeoutSeconds `
+                        -Description 'OneDrive uninstaller'
+                    if ([int]$uninstallResult.ExitCode -ne 0) {
+                        $uninstallIssue = "$oneDriveSetup64 exited with code $($uninstallResult.ExitCode)"
                         Write-Log -Message "OneDrive uninstaller reported a non-zero exit code: $uninstallIssue" -Level 'WARN'
                     }
                 } catch {
@@ -107,13 +118,13 @@ function Invoke-RemoveOneDrive {
                 }
             } elseif (Test-Path $oneDriveSetup32) {
                 try {
-                    $uninstallProcess = Start-Process -FilePath $oneDriveSetup32 -ArgumentList @('/uninstall') -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
-                    if ($null -eq $uninstallProcess) {
-                        throw "Failed to start process $oneDriveSetup32"
-                    }
-
-                    if ([int]$uninstallProcess.ExitCode -ne 0) {
-                        $uninstallIssue = "$oneDriveSetup32 exited with code $($uninstallProcess.ExitCode)"
+                    $uninstallResult = Invoke-NativeCommandWithTimeout `
+                        -FilePath $oneDriveSetup32 `
+                        -ArgumentList @('/uninstall') `
+                        -TimeoutSeconds $oneDriveUninstallTimeoutSeconds `
+                        -Description 'OneDrive uninstaller'
+                    if ([int]$uninstallResult.ExitCode -ne 0) {
+                        $uninstallIssue = "$oneDriveSetup32 exited with code $($uninstallResult.ExitCode)"
                         Write-Log -Message "OneDrive uninstaller reported a non-zero exit code: $uninstallIssue" -Level 'WARN'
                     }
                 } catch {

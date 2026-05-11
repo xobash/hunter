@@ -10,6 +10,7 @@ function Invoke-RemoveEdgeKeepWebView2 {
     try {
         Write-Log -Message 'Edge removal is best-effort. Microsoft frequently blocks or partially resists removal depending on build, WebView2 state, and installer policy.' -Level 'WARN'
         Write-Log -Message "Unlocking the official Edge uninstaller and removing Microsoft Edge..." -Level 'INFO'
+        $edgeUninstallTimeoutSeconds = 300
         $appRemovalResult = Invoke-ApplyAppRemovalStrategies -Entries @(Resolve-HunterAppCatalogEntries -Selections @('edge'))
         if (Test-TaskHandlerReturnedFailure -TaskResult $appRemovalResult) {
             return $false
@@ -40,11 +41,12 @@ function Invoke-RemoveEdgeKeepWebView2 {
         }
 
         New-Item 'C:\Windows\SystemApps\Microsoft.MicrosoftEdge_8wekyb3d8bbwe\MicrosoftEdge.exe' -Force | Out-Null
-        $edgeUninstall = Start-ProcessChecked `
+        Write-Log -Message "Running Edge uninstaller (timeout: ${edgeUninstallTimeoutSeconds}s)..." -Level 'INFO'
+        $edgeUninstall = Invoke-NativeCommandWithTimeout `
             -FilePath $setupPath `
             -ArgumentList @('--uninstall', '--system-level', '--force-uninstall', '--delete-profile') `
-            -SuccessExitCodes @(0, 19) `
-            -WindowStyle Hidden
+            -TimeoutSeconds $edgeUninstallTimeoutSeconds `
+            -Description 'Edge uninstaller'
 
         $edgeStillInstalled = @($edgeExecutablePaths | Where-Object { Test-Path $_ }).Count -gt 0
         if ([int]$edgeUninstall.ExitCode -eq 19) {
@@ -63,6 +65,10 @@ function Invoke-RemoveEdgeKeepWebView2 {
 
             Write-Log -Message "$warningMessage Edge binaries are no longer present." -Level 'SUCCESS'
             return (Join-TaskResults -TaskResults @($appRemovalResult) -WarningReason 'Edge removal completed with warnings')
+        }
+
+        if ([int]$edgeUninstall.ExitCode -ne 0) {
+            throw "$setupPath exited with code $($edgeUninstall.ExitCode)"
         }
 
         Write-Log -Message "Edge removal complete." -Level 'INFO'

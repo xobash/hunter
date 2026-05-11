@@ -1,3 +1,63 @@
+# ── Default-user hive session management ────────────────────────────
+# When a hive session is open, Invoke-WithUserHive skips reg load/unload
+# for the session hive.  The caller (Invoke-TaskExecution) opens one
+# session per phase so that dozens of per-task load/unload cycles
+# collapse into a single pair.
+$script:DefaultUserHiveSessionActive   = $false
+$script:DefaultUserHiveSessionHiveName = $null
+
+function Open-DefaultUserHiveSession {
+    <#
+    .SYNOPSIS
+    Pre-loads the Default user registry hive for the duration of a phase.
+    While the session is open, Invoke-WithUserHive skips individual
+    load/unload cycles for the matching hive name.
+    #>
+    if ($script:DefaultUserHiveSessionActive) {
+        return $true   # already open
+    }
+
+    $defaultHive = Get-HunterDefaultUserHivePath
+    if (-not $defaultHive -or -not (Test-Path $defaultHive)) {
+        Write-Log 'Default user hive not found; session not opened.' 'WARN'
+        return $false
+    }
+
+    $hiveName = 'HKU\HunterDefault'
+    if (-not (Invoke-RegHiveCommandWithRetry -Action Load -HiveName $hiveName -HivePath $defaultHive)) {
+        Write-Log 'Failed to open default-user hive session.' 'ERROR'
+        return $false
+    }
+
+    $script:DefaultUserHiveSessionActive   = $true
+    $script:DefaultUserHiveSessionHiveName = $hiveName
+    Write-Log 'Default-user hive session opened (hive will stay loaded for phase).' 'INFO'
+    return $true
+}
+
+function Close-DefaultUserHiveSession {
+    <#
+    .SYNOPSIS
+    Unloads the Default user hive opened by Open-DefaultUserHiveSession.
+    Safe to call when no session is active (no-op).
+    #>
+    if (-not $script:DefaultUserHiveSessionActive) {
+        return
+    }
+
+    $hiveName = $script:DefaultUserHiveSessionHiveName
+    $script:DefaultUserHiveSessionActive   = $false
+    $script:DefaultUserHiveSessionHiveName = $null
+
+    [GC]::Collect()
+    if ($null -ne $hiveName) {
+        if (-not (Invoke-RegHiveCommandWithRetry -Action Unload -HiveName $hiveName)) {
+            Write-Log "Failed to unload default-user hive '$hiveName' when closing session." 'WARN'
+        }
+    }
+    Write-Log 'Default-user hive session closed.' 'INFO'
+}
+
 function Get-HunterDefaultUserHivePath {
     $profileListDefault = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -Name Default -ErrorAction SilentlyContinue).Default
     if ($profileListDefault) {
@@ -23,6 +83,12 @@ function Invoke-WithUserHive {
 
     if ([string]::IsNullOrWhiteSpace($HiveName) -or [string]::IsNullOrWhiteSpace($HivePath)) {
         throw 'A hive name and hive path are required for Invoke-WithUserHive.'
+    }
+
+    # Fast path: when a hive session is active and this is the session hive,
+    # the hive is already loaded — skip the load/unload ceremony entirely.
+    if ($script:DefaultUserHiveSessionActive -and $HiveName -eq $script:DefaultUserHiveSessionHiveName) {
+        return (& $Action (Resolve-RegistryHivePath -HiveName $HiveName))
     }
 
     if (-not (Invoke-RegHiveCommandWithRetry -Action Load -HiveName $HiveName -HivePath $HivePath)) {

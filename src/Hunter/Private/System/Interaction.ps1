@@ -145,3 +145,23 @@ function Resolve-ForceTextInputServiceRedirectPreference {
     Write-Log 'Skipping the advanced TextInputManagementService ServiceDll redirect by default. Pass -ForceTextInputServiceRedirect or set HUNTER_FORCE_TEXT_INPUT_SERVICE_REDIRECT=1 to opt in.' 'INFO'
     return $false
 }
+
+function Resolve-RunTcpOptimizerPreference {
+    if ([bool]$script:RunTcpOptimizerRequested -or $env:HUNTER_RUN_TCP_OPTIMIZER -eq '1') {
+        $script:RunTcpOptimizerRequested = $true
+        return $true
+    }
+
+    Write-Log 'Skipping TCP Optimizer download and launch by default to avoid Defender/SmartScreen prompts. Pass -RunTcpOptimizer or set HUNTER_RUN_TCP_OPTIMIZER=1 to opt in.' 'INFO'
+    return $false
+}
+
+function Resolve-RunOOSUPreference {
+    if ([bool]$script:RunOOSURequested -or $env:HUNTER_RUN_OOSU -eq '1') {
+        $script:RunOOSURequested = $true
+        return $true
+    }
+
+    Write-Log 'Skipping O&O ShutUp10 download and execution by default to avoid Defender/SmartScreen prompts. Pass -RunOOSU or set HUNTER_RUN_OOSU=1 to opt in.' 'INFO'
+    return $false
+}

@@ -2192,6 +2192,12 @@ function Invoke-ApplyTcpOptimizerTutorialProfile {
         # IRPStackSize / first two boxes: 10
         Set-RegistryValue -Path $lanmanParams -Name 'IRPStackSize' -Value 10 -Type DWord
         Set-RegistryValue -Path $lanmanParams -Name 'SizReqBuf' -Value 10 -Type DWord
+        $internetSettingsSubPath = 'Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+        # MaxConnectionsPer1_0Server / MaxConnectionsPerServer: 10
+        Set-DwordBatchForAllUsers -Settings @(
+            @{ SubPath = $internetSettingsSubPath; Name = 'MaxConnectionsPer1_0Server'; Value = 10 }
+            @{ SubPath = $internetSettingsSubPath; Name = 'MaxConnectionsPerServer'; Value = 10 }
+        )
 
         # -- Priorities --
         $priorityCtrl = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\ServiceProvider'
@@ -2268,6 +2274,11 @@ function Invoke-ApplyTcpOptimizerTutorialProfile {
 
         Write-Log 'TCP optimization settings applied via registry and netsh' 'SUCCESS'
 
+        if (-not (Resolve-RunTcpOptimizerPreference)) {
+            Write-Log 'TCP Optimizer-aligned native settings were applied; third-party verification utility was skipped by default.' 'INFO'
+            return $true
+        }
+
         # Download and open TCP Optimizer for user verification
         $tcpOptimizerPath = Get-TcpOptimizerDownloadPath
         if (-not (Test-Path $tcpOptimizerPath)) {
@@ -2305,6 +2316,10 @@ function Invoke-ApplyOOSUSilentRecommendedPlusSomewhat {
     #>
 
     try {
+        if (-not (Resolve-RunOOSUPreference)) {
+            return (New-TaskSkipResult -Reason 'O&O ShutUp10 execution is disabled by default')
+        }
+
         Invoke-CollectCompletedExternalAssetPrefetchJobs
         Write-Log "Preparing O&O ShutUp10..." 'INFO'
         Register-HunterManualRestoreNote `

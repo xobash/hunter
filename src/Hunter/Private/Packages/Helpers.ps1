@@ -13,6 +13,68 @@ function global:Write-InstallerHelperWarning {
     }
 }
 
+function global:Invoke-ProcessWithTimeout {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [int]$TimeoutSeconds = 0,
+        [string]$Description = $FilePath
+    )
+
+    $commandId = [guid]::NewGuid().ToString('N')
+    $stdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) "Hunter-$commandId.out"
+    $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) "Hunter-$commandId.err"
+    $process = $null
+
+    try {
+        $process = Start-Process `
+            -FilePath $FilePath `
+            -ArgumentList $ArgumentList `
+            -PassThru `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -ErrorAction Stop
+
+        $timeoutMilliseconds = [Math]::Max($TimeoutSeconds, 0) * 1000
+        if ($timeoutMilliseconds -gt 0) {
+            if (-not $process.WaitForExit($timeoutMilliseconds)) {
+                try {
+                    $process.Kill()
+                } catch {
+                }
+
+                throw "$Description timed out after $TimeoutSeconds seconds."
+            }
+        } else {
+            $process.WaitForExit()
+        }
+
+        $process.WaitForExit()
+
+        $outputText = ''
+        foreach ($outputPath in @($stdoutPath, $stderrPath)) {
+            if (Test-Path $outputPath) {
+                $content = Get-Content -Path $outputPath -Raw -ErrorAction SilentlyContinue
+                if (-not [string]::IsNullOrWhiteSpace([string]$content)) {
+                    if (-not [string]::IsNullOrWhiteSpace($outputText)) {
+                        $outputText += "`n"
+                    }
+
+                    $outputText += [string]$content
+                }
+            }
+        }
+
+        return [pscustomobject]@{
+            ExitCode = [int]$process.ExitCode
+            Output   = $outputText.Trim()
+        }
+    } finally {
+        Remove-Item -Path $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function global:Invoke-WithNamedSemaphore {
     param(
         [string]$Name,
@@ -214,13 +276,26 @@ function global:Confirm-InstallerSignature {
 function global:Invoke-WingetWithMutex {
     param(
         [string[]]$Arguments,
-        [int]$WaitTimeoutSeconds = 1800
+        [int]$WaitTimeoutSeconds = 1800,
+        [int]$ExecutionTimeoutSeconds = 0,
+        [string]$Description = 'winget operation',
+        [switch]$ReturnResult
     )
 
-    return (Invoke-WithNamedSemaphore -Name 'Global\HunterWingetInstall' -MaxConcurrency 3 -WaitTimeoutSeconds $WaitTimeoutSeconds -Action {
-        & winget @Arguments *> $null
-        return $LASTEXITCODE
+    $wingetCommand = Get-Command winget -ErrorAction Stop
+    $result = Invoke-WithNamedSemaphore -Name 'Global\HunterWingetInstall' -MaxConcurrency 3 -WaitTimeoutSeconds $WaitTimeoutSeconds -Action {
+        Invoke-ProcessWithTimeout `
+            -FilePath $wingetCommand.Source `
+            -ArgumentList $Arguments `
+            -TimeoutSeconds $ExecutionTimeoutSeconds `
+            -Description $Description
     })
+
+    if ($ReturnResult) {
+        return $result
+    }
+
+    return [int]$result.ExitCode
 }
 
 function global:Invoke-DirectInstallerWithMutex {

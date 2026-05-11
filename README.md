@@ -29,19 +29,21 @@ Hunter is a PowerShell-based baseline script for personal Windows installs. It r
 Run from an elevated Windows PowerShell session:
 
 ```powershell
-irm https://raw.githubusercontent.com/xobash/hunter/stable/hunter.ps1 | iex
+$ProgressPreference='SilentlyContinue'; irm https://raw.githubusercontent.com/xobash/hunter/stable/hunter.ps1 | iex
 ```
+
+The quick-start command sets `$ProgressPreference` first so Windows PowerShell does not render the legacy blue download progress header while it fetches `hunter.ps1`.
 
 Preview channel:
 
 ```powershell
-irm https://raw.githubusercontent.com/xobash/hunter/main/hunter.ps1 | iex
+$ProgressPreference='SilentlyContinue'; irm https://raw.githubusercontent.com/xobash/hunter/main/hunter.ps1 | iex
 ```
 
 Pinned release:
 
 ```powershell
-irm https://raw.githubusercontent.com/xobash/hunter/v2.0.3/hunter.ps1 | iex
+$ProgressPreference='SilentlyContinue'; irm https://raw.githubusercontent.com/xobash/hunter/v2.0.3/hunter.ps1 | iex
 ```
 
 Local checkout:
@@ -116,6 +118,12 @@ Opt into the aggressive storage and audio tweaks that are now disabled by defaul
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -ForceStorageOptimization -DisableAudioEnhancements -DisableSystemSounds -ForceTextInputServiceRedirect
+```
+
+Opt into third-party external-tool execution when you explicitly want TCP Optimizer or O&O ShutUp10 to run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -RunTcpOptimizer -RunOOSU
 ```
 
 ## Configuration

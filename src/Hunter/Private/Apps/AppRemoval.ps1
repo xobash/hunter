@@ -10,20 +10,31 @@ function Invoke-WingetUninstallBestEffort {
     }
 
     try {
-        $exitCode = Invoke-WingetWithMutex -Arguments @(
+        $wingetUninstallTimeoutSeconds = 240
+        Write-Log "Starting WinGet uninstall for ${FriendlyName} via id '$WingetId' (timeout: ${wingetUninstallTimeoutSeconds}s)." 'INFO'
+        $wingetResult = Invoke-WingetWithMutex -Arguments @(
             'uninstall',
             '--id', $WingetId,
             '-e',
             '--accept-source-agreements',
             '--disable-interactivity'
-        )
+        ) `
+            -ExecutionTimeoutSeconds $wingetUninstallTimeoutSeconds `
+            -Description "winget uninstall for ${FriendlyName} via id '$WingetId'" `
+            -ReturnResult
+        $exitCode = [int]$wingetResult.ExitCode
 
-        if ([int]$exitCode -eq 0) {
+        if ($exitCode -eq 0) {
             Write-Log "WinGet uninstall succeeded for $FriendlyName via id '$WingetId'." 'INFO'
             return $true
         }
 
-        Write-Log "WinGet uninstall for ${FriendlyName} via id '$WingetId' exited with code ${exitCode}." 'WARN'
+        $exitDetail = "WinGet uninstall for ${FriendlyName} via id '$WingetId' exited with code ${exitCode}."
+        if (-not [string]::IsNullOrWhiteSpace([string]$wingetResult.Output)) {
+            $exitDetail = "$exitDetail Output: $([string]$wingetResult.Output)"
+        }
+
+        Write-Log $exitDetail 'WARN'
         return $false
     } catch {
         Write-Log "Skipping WinGet uninstall for $FriendlyName via id '$WingetId': $($_.Exception.Message)" 'WARN'
