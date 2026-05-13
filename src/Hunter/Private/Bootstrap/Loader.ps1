@@ -55,7 +55,7 @@ function Get-HunterPrivateAssetManifest {
         [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Tasks\Tweaks\Hardware.ps1'; Sha256 = 'f1cd933928504e179706f2d910da7584447ed7bd917b7a92dc4e82af4957293c'; Order = 520; Kind = 'Script' }
         [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Tasks\Cleanup.ps1'; Sha256 = '3f2942d35000e5da88e7f23c7c91d904b6c9170e96207dccc40280870c1ef1ce'; Order = 530; Kind = 'Script' }
         [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Tasks\Catalog.ps1'; Sha256 = '88a9ee6beeeca2b6e993db3de5c7e319bc299a0107a08d909261866ec0801b5a'; Order = 540; Kind = 'Script' }
-        [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Execution\Engine.ps1'; Sha256 = 'd026cb6ef39d796bacfc3eb6dc87e5b9f1e0e7bd1d25c6f6df07f8213706e436'; Order = 550; Kind = 'Script' }
+        [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Execution\Engine.ps1'; Sha256 = '4db6b131eb56cc0f97ecd34e4185de2c7444e8112940298a594ce64b1d728f67'; Order = 550; Kind = 'Script' }
         [pscustomobject]@{ RelativePath = 'src\Hunter\Private\Execution\Resume.ps1'; Sha256 = '625205db7a1e2a0db04256542a1b2546f71a265d4b9e3c8971280d0f24ad7e2f'; Order = 560; Kind = 'Script' }
         [pscustomobject]@{ RelativePath = 'src\Hunter\Config\Apps.json'; Sha256 = '4ae47cb48a5d927245154ca92a4c9898aa076c3b244535cadf68668d92112cfc'; Order = 9000; Kind = 'Data' }
     )

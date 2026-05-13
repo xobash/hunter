@@ -25,7 +25,7 @@ $script:HunterReleaseVersion = '2.0.3-main'
 $script:HunterBootstrapRevision = 'main'
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = '1d6543b9b1be2029c552888b10ea66ce607a99e4210b040f262dc8a05c88d20c'
+$script:BootstrapLoaderSha256 = 'd34a9cd49d2f3cdcd2c549551c99ee4fba82687d384c5f93aabe3f8735c65d86'
 
 function Write-BootstrapStatus {
     param([Parameter(Mandatory)][string]$Message)

@@ -776,10 +776,7 @@ function Invoke-TaskExecution {
         $parallelPhaseKeys = @($phaseGroups.Keys | Where-Object { $_ -in $script:ParallelPhases })
         $hasWorkForPool = $false
         foreach ($pk in $parallelPhaseKeys) {
-            $pending = @($phaseGroups[$pk] | Where-Object {
-                -not (Test-TaskCompleted -TaskId $_.TaskId -Context $Context) -and
-                Test-HunterTaskCanRunInParallel -Task $_
-            })
+            $pending = @($phaseGroups[$pk] | Where-Object { (-not (Test-TaskCompleted -TaskId $_.TaskId -Context $Context)) -and (Test-HunterTaskCanRunInParallel -Task $_) })
             if ($pending.Count -gt 1) { $hasWorkForPool = $true; break }
         }
         if ($hasWorkForPool) {
