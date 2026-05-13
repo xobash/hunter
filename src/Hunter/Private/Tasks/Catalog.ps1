@@ -160,6 +160,28 @@ function Get-HunterTaskProfiles {
     return @($profiles.ToArray())
 }
 
+function Get-HunterTaskExecutionMode {
+    param(
+        [Parameter(Mandatory)][string]$TaskId,
+        [Parameter(Mandatory)][string]$Phase
+    )
+
+    $serializedTaskIds = @(
+        'cloud-edge-pins',
+        'tweaks-teredo'
+    )
+
+    if ($TaskId -in $serializedTaskIds) {
+        return 'Sequential'
+    }
+
+    if ($Phase -in @('3', '4', '5', '6', '7', '8')) {
+        return 'Parallel'
+    }
+
+    return 'Sequential'
+}
+
 function Get-HunterTaskCatalog {
     $catalog = @(
         [pscustomobject]@{ Id = 'preflight-driver-install-block'; Phase = '1'; Handler = { Invoke-BlockWindowsUpdateDriverInstallation }; Description = 'Block Windows Update driver installs and automatic driver search' }
@@ -247,6 +269,7 @@ function Get-HunterTaskCatalog {
     foreach ($task in @($catalog)) {
         $task | Add-Member -NotePropertyName RiskLevel -NotePropertyValue (Get-HunterTaskRiskLevel -TaskId ([string]$task.Id)) -Force
         $task | Add-Member -NotePropertyName Profiles -NotePropertyValue @(Get-HunterTaskProfiles -TaskId ([string]$task.Id)) -Force
+        $task | Add-Member -NotePropertyName ExecutionMode -NotePropertyValue (Get-HunterTaskExecutionMode -TaskId ([string]$task.Id) -Phase ([string]$task.Phase)) -Force
     }
 
     return $catalog

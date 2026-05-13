@@ -145,6 +145,11 @@ Describe 'Task catalog compatibility' {
         ).Count | Should -Be 0
     }
 
+    It 'keeps every task execution mode populated with a supported value' {
+        @($taskCatalog | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.ExecutionMode) }).Count | Should -Be 0
+        @($taskCatalog | Where-Object { [string]$_.ExecutionMode -notin @('Sequential', 'Parallel') }).Count | Should -Be 0
+    }
+
     It 'keeps the engine building tasks from the catalog function' {
         (Get-Content -Path $enginePath -Raw -ErrorAction Stop) | Should -Match 'Get-HunterTaskCatalog'
     }

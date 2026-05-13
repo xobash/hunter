@@ -184,7 +184,9 @@ function New-Task {
         [string]$Description = '',
         [ValidateSet('Safe', 'Moderate', 'Aggressive')]
         [string]$RiskLevel = 'Safe',
-        [string[]]$Profiles = @('Aggressive')
+        [string[]]$Profiles = @('Aggressive'),
+        [ValidateSet('Sequential', 'Parallel')]
+        [string]$ExecutionMode = 'Sequential'
     )
 
     return [pscustomobject]@{
@@ -194,6 +196,7 @@ function New-Task {
         Description  = $Description
         RiskLevel    = $RiskLevel
         Profiles     = @($Profiles)
+        ExecutionMode = $ExecutionMode
         Status       = 'Pending'
         Error        = $null
     }
@@ -218,9 +221,29 @@ function Test-HunterTaskIncludedInProfile {
 # PARALLEL EXECUTION INFRASTRUCTURE
 #=============================================================================
 
-# Phases whose tasks are independent and safe to run concurrently.
-# Phase 3 = Start/UI tweaks, Phase 4 = Explorer tweaks.
-$script:ParallelPhases = @('3', '4')
+# Phases that contain at least some parallel-safe tasks.
+# Per-task ExecutionMode still decides whether an individual task fans out
+# through the runspace pool or stays serialized inside the phase.
+$script:ParallelPhases = @('3', '4', '5', '6', '7', '8')
+
+function Test-HunterTaskCanRunInParallel {
+    param([Parameter(Mandatory)][object]$Task)
+
+    if ($null -eq $Task) {
+        return $false
+    }
+
+    $taskId = [string]$Task.TaskId
+    if ([string]::IsNullOrWhiteSpace($taskId)) {
+        return $false
+    }
+
+    if ($Task.PSObject.Properties['ExecutionMode'] -and [string]$Task.ExecutionMode -eq 'Parallel') {
+        return $true
+    }
+
+    return $false
+}
 
 function Get-HunterTaskRunspaceMaxConcurrency {
     <#
@@ -603,6 +626,89 @@ function Invoke-TaskPhaseParallel {
     }
 }
 
+function Invoke-HunterTaskSequential {
+    param(
+        [Parameter(Mandatory)][object]$Task,
+        [Parameter(Mandatory)][object[]]$AllTasks,
+        [string[]]$SkipTaskIds = @(),
+        [Parameter(Mandatory)][object]$Context,
+        [string]$PhaseLabel = ''
+    )
+
+    if (Test-TaskCompleted -TaskId $Task.TaskId -Context $Context) {
+        Write-Log "Task already completed (checkpoint): $($Task.TaskId)" 'INFO'
+        $Task.Status = 'Completed'
+        if (-not $script:TaskResults) { $script:TaskResults = @{} }
+        $script:TaskResults[$Task.TaskId] = @{ Status = 'Completed'; Error = $null }
+        return
+    }
+
+    if ($SkipTaskIds -contains [string]$Task.TaskId) {
+        Write-Log "Task skipped by user request: $($Task.TaskId)" 'INFO'
+        $Task.Status = 'Skipped'
+        $Task.Error = $null
+        if (-not $script:TaskResults) { $script:TaskResults = @{} }
+        $script:TaskResults[$Task.TaskId] = @{ Status = 'Skipped'; Error = $null }
+        return
+    }
+
+    $Task.Status = 'Running'
+    Update-ProgressState -Tasks $AllTasks
+    Write-Log "Executing task: $($Task.TaskId) [$PhaseLabel]" 'INFO'
+
+    try {
+        $taskResult = $null
+        Enable-HunterTaskIssueTracking
+        try {
+            $taskResult = & $Task.ApplyHandler
+        } finally {
+            Disable-HunterTaskIssueTracking
+        }
+
+        if (Test-TaskHandlerReturnedFailure -TaskResult $taskResult -LoggedError:$script:CurrentTaskLoggedError) {
+            throw "Task handler returned failure for $($Task.TaskId)"
+        }
+
+        $taskStatus = Get-TaskHandlerCompletionStatus -TaskResult $taskResult -LoggedWarning:$script:CurrentTaskLoggedWarning
+        $Task.Status = $taskStatus
+        $Task.Error = $null
+        if ($taskStatus -ne 'Skipped') {
+            Add-CompletedTask -TaskId $Task.TaskId -Context $Context
+        }
+
+        switch ($taskStatus) {
+            'CompletedWithWarnings' { Write-Log "Task completed with warnings: $($Task.TaskId)" 'WARN' }
+            'Skipped' { Write-Log "Task skipped: $($Task.TaskId)" 'INFO' }
+            default { Write-Log "Task completed: $($Task.TaskId)" 'SUCCESS' }
+        }
+
+        if (-not $script:TaskResults) { $script:TaskResults = @{} }
+        $script:TaskResults[$Task.TaskId] = @{ Status = $taskStatus; Error = $null }
+    } catch {
+        $Task.Status = 'Failed'
+        $Task.Error = $_.Exception.Message
+
+        if (-not $script:FailedTasks) { $script:FailedTasks = @() }
+        if ($script:FailedTasks -notcontains $Task.TaskId) {
+            $script:FailedTasks = @($script:FailedTasks) + @($Task.TaskId)
+        }
+
+        Write-Log "Task failed: $($Task.TaskId) - $($Task.Error)" 'ERROR'
+
+        if (-not $script:TaskResults) { $script:TaskResults = @{} }
+        $script:TaskResults[$Task.TaskId] = @{ Status = 'Failed'; Error = $Task.Error }
+
+        if ($script:StrictMode) {
+            Write-Log "STRICT MODE: Aborting run due to task failure: $($Task.TaskId)" 'ERROR'
+            throw "Strict mode abort: task '$($Task.TaskId)' failed - $($Task.Error)"
+        }
+    } finally {
+        Invoke-CollectCompletedParallelInstallJobs
+        Invoke-CollectCompletedExternalAssetPrefetchJobs
+        Reset-HunterTaskIssueState
+    }
+}
+
 #=============================================================================
 # TASK EXECUTION ENGINE
 #=============================================================================
@@ -614,11 +720,12 @@ function Invoke-TaskExecution {
         independent registry phases and checkpoint recovery.
 
     .DESCRIPTION
-        Groups tasks by phase number.  Phases listed in $script:ParallelPhases
-        (3, 4) run their tasks concurrently via a RunspacePool.  All other
-        phases execute sequentially.  The Default-user registry hive is kept
+        Groups tasks by phase number. Parallel-capable phases use a mixed
+        scheduler: prompt-heavy or shell-sensitive tasks stay serialized while
+        parallel-safe tasks fan out through a shared RunspacePool. All other
+        phases execute sequentially. The Default-user registry hive is kept
         loaded for the duration of each phase so that per-task load/unload
-        overhead is eliminated.  Checkpoints are saved once per phase rather
+        overhead is eliminated. Checkpoints are saved once per phase rather
         than per task to reduce I/O.
 
     .PARAMETER Tasks
@@ -670,7 +777,8 @@ function Invoke-TaskExecution {
         $hasWorkForPool = $false
         foreach ($pk in $parallelPhaseKeys) {
             $pending = @($phaseGroups[$pk] | Where-Object {
-                -not (Test-TaskCompleted -TaskId $_.TaskId -Context $Context)
+                -not (Test-TaskCompleted -TaskId $_.TaskId -Context $Context) -and
+                Test-HunterTaskCanRunInParallel -Task $_
             })
             if ($pending.Count -gt 1) { $hasWorkForPool = $true; break }
         }
@@ -699,99 +807,46 @@ function Invoke-TaskExecution {
                 }
 
                 try {
-                    $useParallel = (
-                        $phase -in $script:ParallelPhases -and
-                        $phaseTasks.Count -gt 1 -and
-                        $null -ne $pool
-                    )
+                    $parallelExecutionEnabled = ($phase -in $script:ParallelPhases -and $null -ne $pool)
+                    $parallelBatch = [System.Collections.Generic.List[object]]::new()
 
-                    if ($useParallel) {
-                        # ── Parallel path ──
-                        Write-Log "[$phaseLabel] Executing $($phaseTasks.Count) tasks in parallel..." 'INFO'
-                        Invoke-TaskPhaseParallel `
-                            -PhaseTasks $phaseTasks `
+                    $flushParallelBatch = {
+                        if ($parallelBatch.Count -gt 1) {
+                            Write-Log "[$phaseLabel] Executing $($parallelBatch.Count) queued parallel task(s)..." 'INFO'
+                            Invoke-TaskPhaseParallel `
+                                -PhaseTasks @($parallelBatch.ToArray()) `
+                                -AllTasks $Tasks `
+                                -SkipTaskIds $requestedSkipTaskIds `
+                                -RunspacePool $pool `
+                                -Context $Context
+                        } elseif ($parallelBatch.Count -eq 1) {
+                            Invoke-HunterTaskSequential `
+                                -Task $parallelBatch[0] `
+                                -AllTasks $Tasks `
+                                -SkipTaskIds $requestedSkipTaskIds `
+                                -Context $Context `
+                                -PhaseLabel $phaseLabel
+                        }
+
+                        $parallelBatch.Clear()
+                    }
+
+                    foreach ($task in $phaseTasks) {
+                        if ($parallelExecutionEnabled -and (Test-HunterTaskCanRunInParallel -Task $task)) {
+                            [void]$parallelBatch.Add($task)
+                            continue
+                        }
+
+                        & $flushParallelBatch
+                        Invoke-HunterTaskSequential `
+                            -Task $task `
                             -AllTasks $Tasks `
                             -SkipTaskIds $requestedSkipTaskIds `
-                            -RunspacePool $pool `
-                            -Context $Context
-                    } else {
-                        # ── Sequential path (unchanged logic, batched checkpoint) ──
-                        foreach ($task in $phaseTasks) {
-                            try {
-                                if (Test-TaskCompleted -TaskId $task.TaskId -Context $Context) {
-                                    Write-Log "Task already completed (checkpoint): $($task.TaskId)" 'INFO'
-                                    $task.Status = 'Completed'
-                                    if (-not $script:TaskResults) { $script:TaskResults = @{} }
-                                    $script:TaskResults[$task.TaskId] = @{ Status = 'Completed'; Error = $null }
-                                    continue
-                                }
-
-                                if ($requestedSkipTaskIds -contains [string]$task.TaskId) {
-                                    Write-Log "Task skipped by user request: $($task.TaskId)" 'INFO'
-                                    $task.Status = 'Skipped'
-                                    $task.Error = $null
-                                    if (-not $script:TaskResults) { $script:TaskResults = @{} }
-                                    $script:TaskResults[$task.TaskId] = @{ Status = 'Skipped'; Error = $null }
-                                    continue
-                                }
-
-                                $task.Status = 'Running'
-                                Update-ProgressState -Tasks $Tasks
-                                Write-Log "Executing task: $($task.TaskId) [$phaseLabel]" 'INFO'
-
-                                $taskResult = $null
-                                Enable-HunterTaskIssueTracking
-                                try {
-                                    $taskResult = & $task.ApplyHandler
-                                } finally {
-                                    Disable-HunterTaskIssueTracking
-                                }
-
-                                if (Test-TaskHandlerReturnedFailure -TaskResult $taskResult -LoggedError:$script:CurrentTaskLoggedError) {
-                                    throw "Task handler returned failure for $($task.TaskId)"
-                                }
-
-                                $taskStatus = Get-TaskHandlerCompletionStatus -TaskResult $taskResult -LoggedWarning:$script:CurrentTaskLoggedWarning
-                                $task.Status = $taskStatus
-                                $task.Error = $null
-                                if ($taskStatus -ne 'Skipped') {
-                                    Add-CompletedTask -TaskId $task.TaskId -Context $Context
-                                }
-
-                                switch ($taskStatus) {
-                                    'CompletedWithWarnings' { Write-Log "Task completed with warnings: $($task.TaskId)" 'WARN' }
-                                    'Skipped' { Write-Log "Task skipped: $($task.TaskId)" 'INFO' }
-                                    default { Write-Log "Task completed: $($task.TaskId)" 'SUCCESS' }
-                                }
-
-                                if (-not $script:TaskResults) { $script:TaskResults = @{} }
-                                $script:TaskResults[$task.TaskId] = @{ Status = $taskStatus; Error = $null }
-
-                            } catch {
-                                $task.Status = 'Failed'
-                                $task.Error = $_.Exception.Message
-
-                                if (-not $script:FailedTasks) { $script:FailedTasks = @() }
-                                if ($script:FailedTasks -notcontains $task.TaskId) {
-                                    $script:FailedTasks = @($script:FailedTasks) + @($task.TaskId)
-                                }
-
-                                Write-Log "Task failed: $($task.TaskId) - $($task.Error)" 'ERROR'
-
-                                if (-not $script:TaskResults) { $script:TaskResults = @{} }
-                                $script:TaskResults[$task.TaskId] = @{ Status = 'Failed'; Error = $task.Error }
-
-                                if ($script:StrictMode) {
-                                    Write-Log "STRICT MODE: Aborting run due to task failure: $($task.TaskId)" 'ERROR'
-                                    throw "Strict mode abort: task '$($task.TaskId)' failed - $($task.Error)"
-                                }
-                            } finally {
-                                Invoke-CollectCompletedParallelInstallJobs
-                                Invoke-CollectCompletedExternalAssetPrefetchJobs
-                                Reset-HunterTaskIssueState
-                            }
-                        }
+                            -Context $Context `
+                            -PhaseLabel $phaseLabel
                     }
+
+                    & $flushParallelBatch
 
                     # ── Phase-level bookkeeping (runs once per phase) ──
                     Invoke-CollectCompletedParallelInstallJobs
@@ -875,7 +930,8 @@ function Build-Tasks {
                 -ApplyHandler $taskDefinition.Handler `
                 -Description ([string]$taskDefinition.Description) `
                 -RiskLevel ([string]$taskDefinition.RiskLevel) `
-                -Profiles $taskProfiles
+                -Profiles $taskProfiles `
+                -ExecutionMode ([string]$taskDefinition.ExecutionMode)
         }
     )
 

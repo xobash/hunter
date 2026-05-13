@@ -158,60 +158,68 @@ function Invoke-WithOptionalFeatureServicingPrerequisites {
         return $false
     }
 
-    $serviceName = 'TrustedInstaller'
-    $serviceDisplayName = 'Windows Modules Installer'
-    $originalStartType = Get-ServiceRegistryStartType -ServiceName $serviceName
-    if ([string]::IsNullOrWhiteSpace($originalStartType)) {
-        Set-DismOptionalFeatureServicingUnavailable
-        throw "$serviceDisplayName service ($serviceName) is unavailable."
-    }
-
-    $startTypeChanged = $false
-    $serviceStarted = $false
-
-    try {
-        if ($originalStartType -eq 'Disabled') {
-            Write-Log "$serviceDisplayName service is disabled. Temporarily restoring it for Windows optional-feature servicing." 'INFO'
-            Set-ServiceStartType -Name $serviceName -StartType 'Manual'
-            $startTypeChanged = $true
-        }
-
-        $service = Get-Service -Name $serviceName -ErrorAction Stop
-        if ($service.Status -ne 'Running') {
-            Start-Service -Name $serviceName -ErrorAction Stop
-            $serviceStarted = $true
-            Write-Log "$serviceDisplayName service started for Windows optional-feature servicing." 'INFO'
-        }
-
-        return (& $ScriptBlock)
-    } catch {
-        if ($_.Exception.Message -match '(?i)class not registered|timed out|0x80040154|unavailable') {
+    $servicingAction = {
+        $serviceName = 'TrustedInstaller'
+        $serviceDisplayName = 'Windows Modules Installer'
+        $originalStartType = Get-ServiceRegistryStartType -ServiceName $serviceName
+        if ([string]::IsNullOrWhiteSpace($originalStartType)) {
             Set-DismOptionalFeatureServicingUnavailable
+            throw "$serviceDisplayName service ($serviceName) is unavailable."
         }
 
-        throw
-    } finally {
-        if ($serviceStarted) {
-            try {
-                $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-                if ($null -ne $service -and $service.Status -ne 'Stopped') {
-                    Stop-Service -Name $serviceName -Force -ErrorAction Stop
-                    Write-Log "$serviceDisplayName service stopped after Windows optional-feature servicing." 'INFO'
-                }
-            } catch {
-                Write-Log "Failed to stop $serviceDisplayName service after optional-feature servicing: $($_.Exception.Message)" 'WARN'
+        $startTypeChanged = $false
+        $serviceStarted = $false
+
+        try {
+            if ($originalStartType -eq 'Disabled') {
+                Write-Log "$serviceDisplayName service is disabled. Temporarily restoring it for Windows optional-feature servicing." 'INFO'
+                Set-ServiceStartType -Name $serviceName -StartType 'Manual'
+                $startTypeChanged = $true
             }
-        }
 
-        if ($startTypeChanged) {
-            try {
-                Set-ServiceStartType -Name $serviceName -StartType $originalStartType
-                Write-Log "$serviceDisplayName service startup type restored to $originalStartType after optional-feature servicing." 'INFO'
-            } catch {
-                Write-Log "Failed to restore $serviceDisplayName startup type after optional-feature servicing: $($_.Exception.Message)" 'WARN'
+            $service = Get-Service -Name $serviceName -ErrorAction Stop
+            if ($service.Status -ne 'Running') {
+                Start-Service -Name $serviceName -ErrorAction Stop
+                $serviceStarted = $true
+                Write-Log "$serviceDisplayName service started for Windows optional-feature servicing." 'INFO'
+            }
+
+            return (& $ScriptBlock)
+        } catch {
+            if ($_.Exception.Message -match '(?i)class not registered|timed out|0x80040154|unavailable') {
+                Set-DismOptionalFeatureServicingUnavailable
+            }
+
+            throw
+        } finally {
+            if ($serviceStarted) {
+                try {
+                    $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+                    if ($null -ne $service -and $service.Status -ne 'Stopped') {
+                        Stop-Service -Name $serviceName -Force -ErrorAction Stop
+                        Write-Log "$serviceDisplayName service stopped after Windows optional-feature servicing." 'INFO'
+                    }
+                } catch {
+                    Write-Log "Failed to stop $serviceDisplayName service after optional-feature servicing: $($_.Exception.Message)" 'WARN'
+                }
+            }
+
+            if ($startTypeChanged) {
+                try {
+                    Set-ServiceStartType -Name $serviceName -StartType $originalStartType
+                    Write-Log "$serviceDisplayName service startup type restored to $originalStartType after optional-feature servicing." 'INFO'
+                } catch {
+                    Write-Log "Failed to restore $serviceDisplayName startup type after optional-feature servicing: $($_.Exception.Message)" 'WARN'
+                }
             }
         }
     }
+
+    if ($null -ne (Get-Command -Name 'Invoke-WithNamedSemaphore' -ErrorAction SilentlyContinue)) {
+        return (Invoke-WithNamedSemaphore -Name 'Global\HunterOptionalFeatureServicing' -MaxConcurrency 1 -WaitTimeoutSeconds 1800 -Action $servicingAction)
+    }
+
+    return (& $servicingAction)
 }
 
 function Get-DismOptionalFeatureInfo {

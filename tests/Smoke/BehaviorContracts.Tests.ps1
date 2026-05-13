@@ -8,6 +8,7 @@ Describe 'Behavior contracts' {
         . (Join-Path $repoRoot 'src/Hunter/Private/Common/PathPolicy.ps1')
         . (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Catalog.ps1')
         $appRemovalSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Apps/AppRemoval.ps1') -Raw -ErrorAction Stop
+        $appxRemovalSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Apps/AppxRemoval.ps1') -Raw -ErrorAction Stop
         $commonSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Common/Common.ps1') -Raw -ErrorAction Stop
         $configSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Bootstrap/Config.ps1') -Raw -ErrorAction Stop
         $cleanupSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Cleanup.ps1') -Raw -ErrorAction Stop
@@ -243,13 +244,18 @@ Describe 'Behavior contracts' {
         $cleanupSource | Should -Match 'VALIDATION CHECKS'
     }
 
-    It 'keeps only safe UI and Explorer phases parallelized and defers rollback persistence to the main thread' {
-        $engineSource | Should -Match "\$script:ParallelPhases = @\('3', '4'\)"
+    It 'broadens safe task parallelism while serializing shared mutation backends and deferring rollback persistence to the main thread' {
+        $engineSource | Should -Match "\$script:ParallelPhases = @\('3', '4', '5', '6', '7', '8'\)"
+        $engineSource | Should -Match 'function Test-HunterTaskCanRunInParallel'
+        $engineSource | Should -Match 'function Invoke-HunterTaskSequential'
         $engineSource | Should -Match 'function Get-HunterTaskRunspaceMaxConcurrency'
         $engineSource | Should -Match 'HUNTER_TASK_MAX_CONCURRENCY'
         $engineSource | Should -Match '\$script:DeferRollbackPersistence = \$true'
+        $engineSource | Should -Match 'ExecutionMode'
         $rollbackSource | Should -Match 'function Save-HunterRollbackArtifacts'
         $rollbackSource | Should -Match 'Save-HunterRollbackArtifacts'
+        $appxRemovalSource | Should -Match 'Global\\HunterAppxMutation'
+        $nativeSystemSource | Should -Match 'Global\\HunterOptionalFeatureServicing'
         $serviceControlSource | Should -Match 'function Get-HunterScheduledTaskState'
         $serviceControlSource | Should -Match 'schtasks\.exe'
         $taskbarOpsSource | Should -Match "Hunter-TaskbarPolicyCleanup"
