@@ -919,6 +919,7 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
     try {
         Write-Log 'Applying memory and disk behavior tweaks...' 'INFO'
         $currentMemoryDiskStep = 'updating memory and Storage Sense registry values'
+        $hadWarnings = $false
         $mmAgentState = $null
         $fsutilPath = Get-NativeSystemExecutablePath -FileName 'fsutil.exe'
         $systemVolume = $env:SystemDrive.TrimEnd('\')
@@ -932,19 +933,24 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
         $prefetchPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters'
         $memoryManagementPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
 
-        if ($storageMediaContext.HasHardDiskDrives) {
-            Write-Log 'Detected at least one hard disk drive; preserving Prefetch and SysMain registry policy.' 'INFO'
-        } else {
-            Set-RegistryValue -Path $prefetchPath -Name 'EnablePrefetcher' -Value 0 -Type DWord
-            Set-RegistryValue -Path $prefetchPath -Name 'EnableSuperfetch' -Value 0 -Type DWord
+        try {
+            if ($storageMediaContext.HasHardDiskDrives) {
+                Write-Log 'Detected at least one hard disk drive; preserving Prefetch and SysMain registry policy.' 'INFO'
+            } else {
+                Set-RegistryValue -Path $prefetchPath -Name 'EnablePrefetcher' -Value 0 -Type DWord
+                Set-RegistryValue -Path $prefetchPath -Name 'EnableSuperfetch' -Value 0 -Type DWord
+            }
+            Set-LargeSystemCacheByRamPolicy -Path $memoryManagementPath | Out-Null
+            Set-RegistryValue -Path $memoryManagementPath -Name 'DisablePagingExecutive' -Value 1 -Type DWord
+            Set-FixedPageFileByRamPolicy | Out-Null
+            Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\StorageSense' -Name 'AllowStorageSenseGlobal' -Value 0 -Type DWord
+            Set-DwordBatchForAllUsers -Settings @(
+                @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy'; Name = '01'; Value = 0 }
+            )
+        } catch {
+            $hadWarnings = $true
+            Write-Log "Memory/disk baseline policy step encountered a build-specific error: $($_.Exception.Message)" 'WARN'
         }
-        Set-LargeSystemCacheByRamPolicy -Path $memoryManagementPath | Out-Null
-        Set-RegistryValue -Path $memoryManagementPath -Name 'DisablePagingExecutive' -Value 1 -Type DWord
-        Set-FixedPageFileByRamPolicy | Out-Null
-        Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\StorageSense' -Name 'AllowStorageSenseGlobal' -Value 0 -Type DWord
-        Set-DwordBatchForAllUsers -Settings @(
-            @{ SubPath = 'Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy'; Name = '01'; Value = 0 }
-        )
 
         $currentMemoryDiskStep = 'disabling 8.3 short-name creation'
         try {
@@ -1014,6 +1020,10 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
             Invoke-DisableDiskWriteCacheBufferFlushing | Out-Null
         }
 
+        if ($hadWarnings) {
+            Write-Log 'Memory and disk behavior tweaks completed with warnings.' 'WARN'
+            return (New-TaskWarningResult -Reason 'Memory and disk behavior tweaks completed with warnings')
+        }
         Write-Log 'Memory and disk behavior tweaks applied.' 'SUCCESS'
         return $true
     } catch {
@@ -1025,6 +1035,11 @@ function Invoke-ApplyMemoryDiskBehaviorTweaks {
         if ($message -match '(?i)access is denied') {
             Write-Log ("Memory and disk behavior tweaks completed with warnings during {0}: {1}" -f $currentMemoryDiskStep, $message) 'WARN'
             return $true
+        }
+
+        if ($message -match '(?i)argument types do not match') {
+            Write-Log ("Memory and disk behavior tweaks completed with warnings during {0}: {1}" -f $currentMemoryDiskStep, $message) 'WARN'
+            return (New-TaskWarningResult -Reason 'Memory and disk behavior tweaks completed with warnings')
         }
 
         Write-Log "Error applying memory and disk behavior tweaks: $_" 'ERROR'
@@ -1132,21 +1147,33 @@ function Invoke-ApplyInputAndMaintenanceTweaks {
     try {
         Write-Log 'Applying input latency and maintenance tweaks...' 'INFO'
         $maintenancePath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'
+        $hadWarnings = $false
         $ctfmonResult = Invoke-DisableCtfmonInterception
         $hpetDeviceResult = Invoke-DisableHpetDeviceBestEffort
 
-        Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseSpeed' -Value '0'
-        Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseThreshold1' -Value '0'
-        Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseThreshold2' -Value '0'
-        Set-StringForAllUsers -SubPath 'Control Panel\Accessibility\Keyboard Response' -Name 'Flags' -Value '0'
+        try {
+            Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseSpeed' -Value '0'
+            Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseThreshold1' -Value '0'
+            Set-StringForAllUsers -SubPath 'Control Panel\Mouse' -Name 'MouseThreshold2' -Value '0'
+            Set-StringForAllUsers -SubPath 'Control Panel\Accessibility\Keyboard Response' -Name 'Flags' -Value '0'
+        } catch {
+            $hadWarnings = $true
+            Write-Log "Mouse and keyboard-response policy step encountered a build-specific error: $($_.Exception.Message)" 'WARN'
+        }
 
-        Set-RegistryValue -Path $maintenancePath -Name 'MaintenanceDisabled' -Value 1 -Type DWord
-        Set-RegistryValue -Path $maintenancePath -Name 'MaintenanceStartTime' -Value 10800 -Type DWord
-        Set-RegistryValue -Path $maintenancePath -Name 'MaintenanceMaxCpuPercent' -Value 10 -Type DWord
+        try {
+            Set-RegistryValue -Path $maintenancePath -Name 'MaintenanceDisabled' -Value 1 -Type DWord
+            Set-RegistryValue -Path $maintenancePath -Name 'MaintenanceStartTime' -Value 10800 -Type DWord
+            Set-RegistryValue -Path $maintenancePath -Name 'MaintenanceMaxCpuPercent' -Value 10 -Type DWord
 
-        Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Regular Maintenance' -DisplayName 'Regular Maintenance' | Out-Null
-        Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Idle Maintenance' -DisplayName 'Idle Maintenance' | Out-Null
-        Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Maintenance Configurator' -DisplayName 'Maintenance Configurator' | Out-Null
+            Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Regular Maintenance' -DisplayName 'Regular Maintenance' | Out-Null
+            Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Idle Maintenance' -DisplayName 'Idle Maintenance' | Out-Null
+            Disable-ScheduledTaskIfPresent -TaskPath '\Microsoft\Windows\TaskScheduler\' -TaskName 'Maintenance Configurator' -DisplayName 'Maintenance Configurator' | Out-Null
+        } catch {
+            $hadWarnings = $true
+            Write-Log "Scheduled maintenance policy step encountered a build-specific error: $($_.Exception.Message)" 'WARN'
+        }
+
         $storageMediaContext = Get-HunterStorageMediaContext
         if ($storageMediaContext.HasHardDiskDrives) {
             Write-Log 'Detected at least one hard disk drive; preserving Scheduled Defrag for rotational-media optimization.' 'INFO'
@@ -1156,20 +1183,39 @@ function Invoke-ApplyInputAndMaintenanceTweaks {
             Write-Log 'Storage media type could not be determined; preserving Scheduled Defrag by default.' 'INFO'
         }
 
-        Invoke-BCDEditBestEffort -ArgumentList @('/timeout', '0') -Description 'Boot manager timeout set to 0 seconds.' | Out-Null
-        Invoke-BCDEditBestEffort -ArgumentList @('/deletevalue', 'useplatformclock') -Description 'HPET platform clock override removed.' | Out-Null
-        Invoke-BCDEditBestEffort -ArgumentList @('/set', 'tscsyncpolicy', 'Enhanced') -Description 'TSC sync policy set to Enhanced.' | Out-Null
+        try {
+            Invoke-BCDEditBestEffort -ArgumentList @('/timeout', '0') -Description 'Boot manager timeout set to 0 seconds.' | Out-Null
+            Invoke-BCDEditBestEffort -ArgumentList @('/deletevalue', 'useplatformclock') -Description 'HPET platform clock override removed.' | Out-Null
+            Invoke-BCDEditBestEffort -ArgumentList @('/set', 'tscsyncpolicy', 'Enhanced') -Description 'TSC sync policy set to Enhanced.' | Out-Null
 
-        if ($script:IsHyperVGuest) {
-            Write-Log 'Skipping useplatformtick/disabledynamictick on a Hyper-V guest.' 'INFO'
-        } else {
-            Invoke-BCDEditBestEffort -ArgumentList @('/set', 'useplatformtick', 'yes') -Description 'Platform tick forced to hardware timer resolution.' | Out-Null
-            Invoke-BCDEditBestEffort -ArgumentList @('/set', 'disabledynamictick', 'yes') -Description 'Dynamic ticks disabled.' | Out-Null
+            if ($script:IsHyperVGuest) {
+                Write-Log 'Skipping useplatformtick/disabledynamictick on a Hyper-V guest.' 'INFO'
+            } else {
+                Invoke-BCDEditBestEffort -ArgumentList @('/set', 'useplatformtick', 'yes') -Description 'Platform tick forced to hardware timer resolution.' | Out-Null
+                Invoke-BCDEditBestEffort -ArgumentList @('/set', 'disabledynamictick', 'yes') -Description 'Dynamic ticks disabled.' | Out-Null
+            }
+        } catch {
+            $hadWarnings = $true
+            Write-Log "Boot configuration tuning encountered a build-specific error: $($_.Exception.Message)" 'WARN'
         }
 
-        Write-Log 'Input latency and maintenance tweaks applied.' 'SUCCESS'
-        return (Join-TaskResults -TaskResults @($ctfmonResult, $hpetDeviceResult) -WarningReason 'Input latency and maintenance tweaks completed with warnings')
+        $taskResults = @($ctfmonResult, $hpetDeviceResult)
+        if ($hadWarnings) {
+            $taskResults += @(New-TaskWarningResult -Reason 'One or more input or maintenance policy steps were skipped')
+        }
+        $joinedTaskResult = Join-TaskResults -TaskResults $taskResults -WarningReason 'Input latency and maintenance tweaks completed with warnings'
+        if ((Get-TaskHandlerCompletionStatus -TaskResult $joinedTaskResult) -eq 'CompletedWithWarnings') {
+            Write-Log 'Input latency and maintenance tweaks completed with warnings.' 'WARN'
+        } else {
+            Write-Log 'Input latency and maintenance tweaks applied.' 'SUCCESS'
+        }
+        return $joinedTaskResult
     } catch {
+        if ([string]$_.Exception.Message -match '(?i)argument types do not match') {
+            Write-Log "Input latency and maintenance tweaks completed with warnings: $($_.Exception.Message)" 'WARN'
+            return (New-TaskWarningResult -Reason 'Input latency and maintenance tweaks completed with warnings')
+        }
+
         Write-Log "Error applying input and maintenance tweaks: $_" 'ERROR'
         return $false
     }

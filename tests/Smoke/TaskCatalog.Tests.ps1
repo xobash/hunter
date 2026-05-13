@@ -89,8 +89,8 @@ Describe 'Task catalog compatibility' {
             'cleanup-autologin-secrets',
             'cleanup-disk-cleanup',
             'cleanup-explorer-restart',
-            'cleanup-export-log',
-            'validation-post-run-state'
+            'validation-post-run-state',
+            'cleanup-export-log'
         )
 
         $expectedPhases = @(
@@ -102,8 +102,8 @@ Describe 'Task catalog compatibility' {
             '6', '6', '6', '6', '6', '6',
             '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7', '7',
             '8', '8', '8', '8', '8',
-            '9', '9', '9', '9', '9', '9', '9',
-            '10'
+            '9', '9', '9', '9', '9', '9',
+            '10', '10'
         )
     }
 

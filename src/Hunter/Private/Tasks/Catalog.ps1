@@ -262,8 +262,8 @@ function Get-HunterTaskCatalog {
         [pscustomobject]@{ Id = 'cleanup-autologin-secrets'; Phase = '9'; Handler = { Invoke-ClearAutologinSecrets }; Description = 'Remove autologin registry values and Hunter-managed secrets after setup completes' }
         [pscustomobject]@{ Id = 'cleanup-disk-cleanup'; Phase = '9'; Handler = { Invoke-RunDiskCleanup }; Description = 'Run Windows Disk Cleanup' }
         [pscustomobject]@{ Id = 'cleanup-explorer-restart'; Phase = '9'; Handler = { Invoke-DeferredExplorerRestart }; Description = 'Restart Explorer with pending changes' }
-        [pscustomobject]@{ Id = 'cleanup-export-log'; Phase = '9'; Handler = { Invoke-ExportDesktopOperationLog }; Description = 'Export operation report to desktop' }
         [pscustomobject]@{ Id = 'validation-post-run-state'; Phase = '10'; Handler = { Invoke-ValidateAppliedConfiguration }; Description = 'Validate critical registry, service, and power-plan changes after execution' }
+        [pscustomobject]@{ Id = 'cleanup-export-log'; Phase = '10'; Handler = { Invoke-ExportDesktopOperationLog }; Description = 'Export operation report to desktop' }
     )
 
     foreach ($task in @($catalog)) {

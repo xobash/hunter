@@ -233,6 +233,111 @@ function Get-HunterActivePowerSchemeGuid {
     return ''
 }
 
+function Normalize-HunterReportTaskStatus {
+    param(
+        [string]$TaskId,
+        [string]$Status
+    )
+
+    $normalizedStatus = [string]$Status
+    if ([string]::IsNullOrWhiteSpace($normalizedStatus)) {
+        return ''
+    }
+
+    if ($TaskId -eq 'cleanup-export-log' -and $normalizedStatus -in @('Pending', 'Running')) {
+        return 'Completed'
+    }
+
+    if ($normalizedStatus -in @('Completed', 'CompletedWithWarnings', 'Skipped', 'Failed')) {
+        return $normalizedStatus
+    }
+
+    return ''
+}
+
+function Get-HunterOperationReportEntries {
+    $entries = New-Object 'System.Collections.Generic.List[object]'
+    $seenTaskIds = @{}
+
+    foreach ($task in @($script:TaskList | Where-Object { $null -ne $_ })) {
+        $taskId = [string]$task.TaskId
+        if ([string]::IsNullOrWhiteSpace($taskId)) {
+            continue
+        }
+
+        $status = Normalize-HunterReportTaskStatus -TaskId $taskId -Status ([string]$task.Status)
+        if ([string]::IsNullOrWhiteSpace($status)) {
+            continue
+        }
+
+        $errorMessage = [string]$task.Error
+        if ([string]::IsNullOrWhiteSpace($errorMessage) -and $script:TaskResults.ContainsKey($taskId)) {
+            $errorMessage = [string]$script:TaskResults[$taskId].Error
+        }
+
+        [void]$entries.Add([pscustomobject]@{
+            TaskId = $taskId
+            Status = $status
+            Error  = $errorMessage
+        })
+        $seenTaskIds[$taskId] = $true
+    }
+
+    if ($entries.Count -eq 0 -and $script:TaskResults.Count -gt 0) {
+        foreach ($entry in @($script:TaskResults.GetEnumerator() | Sort-Object Name)) {
+            $taskId = [string]$entry.Name
+            $status = Normalize-HunterReportTaskStatus -TaskId $taskId -Status ([string]$entry.Value.Status)
+            if ([string]::IsNullOrWhiteSpace($status)) {
+                continue
+            }
+
+            [void]$entries.Add([pscustomobject]@{
+                TaskId = $taskId
+                Status = $status
+                Error  = [string]$entry.Value.Error
+            })
+        }
+    } elseif ($script:TaskResults.Count -gt 0) {
+        foreach ($entry in @($script:TaskResults.GetEnumerator() | Sort-Object Name)) {
+            $taskId = [string]$entry.Name
+            if ($seenTaskIds.ContainsKey($taskId)) {
+                continue
+            }
+
+            $status = Normalize-HunterReportTaskStatus -TaskId $taskId -Status ([string]$entry.Value.Status)
+            if ([string]::IsNullOrWhiteSpace($status)) {
+                continue
+            }
+
+            [void]$entries.Add([pscustomobject]@{
+                TaskId = $taskId
+                Status = $status
+                Error  = [string]$entry.Value.Error
+            })
+        }
+    }
+
+    if ($entries.Count -eq 0) {
+        foreach ($taskId in @($script:CompletedTasks | Sort-Object -Unique)) {
+            [void]$entries.Add([pscustomobject]@{
+                TaskId = [string]$taskId
+                Status = 'Completed'
+                Error  = ''
+            })
+        }
+
+        foreach ($taskId in @($script:FailedTasks | Sort-Object -Unique)) {
+            [void]$entries.Add([pscustomobject]@{
+                TaskId = [string]$taskId
+                Status = 'Failed'
+                Error  = ''
+            })
+        }
+    }
+
+    return @($entries | Sort-Object TaskId)
+}
+
 function Invoke-ValidateAppliedConfiguration {
     try {
         Write-Log 'Running post-run validation checks...' 'INFO'
@@ -337,23 +442,19 @@ function Invoke-ExportDesktopOperationLog {
         $warningTasks = @()
         $skippedTasks = @()
         $failedTasks = @()
+        $taskEntries = @(Get-HunterOperationReportEntries)
 
-        if ($script:TaskResults.Count -gt 0) {
-            foreach ($entry in @($script:TaskResults.GetEnumerator() | Sort-Object Name)) {
-                switch ([string]$entry.Value.Status) {
-                    'Completed' { $completedTasks += $entry.Name }
-                    'CompletedWithWarnings' { $warningTasks += $entry.Name }
-                    'Skipped' { $skippedTasks += $entry.Name }
-                    'Failed' { $failedTasks += $entry.Name }
-                }
+        foreach ($taskEntry in $taskEntries) {
+            switch ([string]$taskEntry.Status) {
+                'Completed' { $completedTasks += [string]$taskEntry.TaskId }
+                'CompletedWithWarnings' { $warningTasks += [string]$taskEntry.TaskId }
+                'Skipped' { $skippedTasks += [string]$taskEntry.TaskId }
+                'Failed' { $failedTasks += [string]$taskEntry.TaskId }
             }
-        } else {
-            $completedTasks = @($script:CompletedTasks)
-            $failedTasks = @($script:FailedTasks)
         }
 
         # Gather statistics
-        $totalTasks = $completedTasks.Count + $warningTasks.Count + $skippedTasks.Count + $failedTasks.Count
+        $totalTasks = $taskEntries.Count
         $completedCount = $completedTasks.Count
         $warningCount = $warningTasks.Count
         $skippedCount = $skippedTasks.Count
@@ -404,11 +505,9 @@ function Invoke-ExportDesktopOperationLog {
 
             foreach ($warningTaskId in $warningTasks) {
                 $reportContent += "  [!] $warningTaskId"
-                if ($script:TaskResults.ContainsKey($warningTaskId)) {
-                    $result = $script:TaskResults[$warningTaskId]
-                    if ($result.Error) {
-                        $reportContent += "    Detail: $($result.Error)"
-                    }
+                $warningEntry = @($taskEntries | Where-Object { $_.TaskId -eq $warningTaskId } | Select-Object -First 1)
+                if ($warningEntry.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$warningEntry[0].Error)) {
+                    $reportContent += "    Detail: $($warningEntry[0].Error)"
                 }
             }
 
@@ -433,12 +532,9 @@ function Invoke-ExportDesktopOperationLog {
 
             foreach ($failedTaskId in $failedTasks) {
                 $reportContent += "  [X] $failedTaskId"
-
-                if ($script:TaskResults.ContainsKey($failedTaskId)) {
-                    $result = $script:TaskResults[$failedTaskId]
-                    if ($result.Error) {
-                        $reportContent += "    Error: $($result.Error)"
-                    }
+                $failedEntry = @($taskEntries | Where-Object { $_.TaskId -eq $failedTaskId } | Select-Object -First 1)
+                if ($failedEntry.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$failedEntry[0].Error)) {
+                    $reportContent += "    Error: $($failedEntry[0].Error)"
                 }
             }
 

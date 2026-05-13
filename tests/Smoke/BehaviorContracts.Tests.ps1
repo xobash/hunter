@@ -242,6 +242,8 @@ Describe 'Behavior contracts' {
         $cleanupSource | Should -Match 'function Invoke-ValidateAppliedConfiguration'
         $cleanupSource | Should -Match '\[VERIFY\] PASS'
         $cleanupSource | Should -Match 'VALIDATION CHECKS'
+        $cleanupSource | Should -Match 'function Get-HunterOperationReportEntries'
+        $cleanupSource | Should -Match "cleanup-export-log' -and \\$normalizedStatus -in @\\('Pending', 'Running'\\)"
     }
 
     It 'broadens safe task parallelism while serializing shared mutation backends and deferring rollback persistence to the main thread' {
@@ -260,5 +262,7 @@ Describe 'Behavior contracts' {
         $serviceControlSource | Should -Match 'schtasks\.exe'
         $taskbarOpsSource | Should -Match "Hunter-TaskbarPolicyCleanup"
         $taskbarOpsSource | Should -Not -Match "Get-ScheduledTask -TaskName 'Hunter-TaskbarPolicyCleanup'"
+        $taskbarOpsSource | Should -Match 'Stale taskbar cleanup task was already absent'
+        $edgeSource | Should -Match "GetEnvironmentVariable\('ProgramFiles\(x86\)'\)"
     }
 }

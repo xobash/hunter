@@ -95,5 +95,5 @@ Risk labels:
 | 9 | `cleanup-autologin-secrets` | Moderate | Minimal, Balanced, Aggressive, VMReset | Remove autologin registry values and Hunter-managed secrets after setup completes |
 | 9 | `cleanup-disk-cleanup` | Safe | Minimal, Balanced, Aggressive, VMReset | Run Windows Disk Cleanup |
 | 9 | `cleanup-explorer-restart` | Safe | Minimal, Balanced, Aggressive, VMReset | Restart Explorer with pending changes |
-| 9 | `cleanup-export-log` | Safe | Minimal, Balanced, Aggressive, VMReset | Export operation report to desktop |
 | 10 | `validation-post-run-state` | Safe | Minimal, Balanced, Aggressive, VMReset | Validate critical registry, service, and power-plan changes after execution |
+| 10 | `cleanup-export-log` | Safe | Minimal, Balanced, Aggressive, VMReset | Export operation report to desktop |

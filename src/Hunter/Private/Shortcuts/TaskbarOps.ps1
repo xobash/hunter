@@ -174,8 +174,20 @@ function Clear-StaleStartCustomizationPolicies {
             $cleanupTaskFullName = Get-HunterScheduledTaskFullName -TaskPath '\' -TaskName 'Hunter-TaskbarPolicyCleanup'
             & $schtasksPath /Query /TN $cleanupTaskFullName *> $null
             if ([int]$LASTEXITCODE -eq 0) {
-                Invoke-NativeCommandChecked -FilePath $schtasksPath -ArgumentList @('/Delete', '/TN', $cleanupTaskFullName, '/F') | Out-Null
-                Write-Log "Removed stale scheduled task 'Hunter-TaskbarPolicyCleanup'." 'INFO'
+                $deleteResult = Invoke-NativeCommandWithTimeout `
+                    -FilePath $schtasksPath `
+                    -ArgumentList @('/Delete', '/TN', $cleanupTaskFullName, '/F') `
+                    -TimeoutSeconds 15 `
+                    -Description "stale taskbar cleanup task deletion for $cleanupTaskFullName"
+
+                if ([int]$deleteResult.ExitCode -eq 0) {
+                    Write-Log "Removed stale scheduled task 'Hunter-TaskbarPolicyCleanup'." 'INFO'
+                } elseif ([string]$deleteResult.Output -match '(?i)cannot find|file specified') {
+                    Write-Log "Stale taskbar cleanup task was already absent: $cleanupTaskFullName" 'INFO'
+                } else {
+                    $hadFailure = $true
+                    Write-Log "Failed to remove stale taskbar cleanup task: $($deleteResult.Output)" 'ERROR'
+                }
             }
         } catch {
             $hadFailure = $true

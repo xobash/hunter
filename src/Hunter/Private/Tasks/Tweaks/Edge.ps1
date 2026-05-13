@@ -142,10 +142,16 @@ function Invoke-DisableEdgeUpdateInfrastructure {
             }
         }
 
-        $edgeUpdatePaths = @(
-            (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\EdgeUpdate'),
-            (Join-Path $script:ProgramFilesRoot 'Microsoft\EdgeUpdate')
+        $programFilesRoots = @(
+            [Environment]::GetEnvironmentVariable('ProgramFiles(x86)'),
+            $script:ProgramFilesRoot
         ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique
+
+        $edgeUpdatePaths = @(
+            foreach ($programFilesRoot in $programFilesRoots) {
+                Join-Path $programFilesRoot 'Microsoft\EdgeUpdate'
+            }
+        ) | Select-Object -Unique
 
         foreach ($edgeUpdatePath in $edgeUpdatePaths) {
             if (-not (Test-Path $edgeUpdatePath)) {
