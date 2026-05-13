@@ -22,6 +22,9 @@ Describe 'Module scaffold compatibility' {
     It 'loads the private source tree through the loader' {
         $moduleText | Should -Match 'Bootstrap\\Loader\.ps1'
         $moduleText | Should -Match 'foreach \(\$privateScript in @\(Get-HunterPrivateScriptManifest\)\)'
-        $moduleText | Should -Match '\. \(Join-Path \$repoRoot \(\[string\]\$privateScript\.RelativePath\)\)'
+        $moduleText | Should -Match '\. \(\[scriptblock\]::Create\(\(Get-Content -Path \$loaderPath -Raw -Encoding UTF8\)\)\)'
+        $moduleText | Should -Match '\$privateScriptPath = Join-Path \$repoRoot \(\[string\]\$privateScript\.RelativePath\)'
+        $moduleText | Should -Match '\. \(\[scriptblock\]::Create\(\(Get-Content -Path \$privateScriptPath -Raw -Encoding UTF8\)\)\)'
+        $moduleText | Should -Not -Match '(?m)^\.\s+\$loaderPath\s*$'
     }
 }
