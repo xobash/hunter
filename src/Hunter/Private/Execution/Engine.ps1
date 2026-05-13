@@ -187,7 +187,7 @@ function New-Task {
         [string[]]$Profiles = @('Aggressive')
     )
 
-    return @{
+    return [pscustomobject]@{
         TaskId       = $TaskId
         Phase        = $Phase
         ApplyHandler = $ApplyHandler
@@ -219,9 +219,8 @@ function Test-HunterTaskIncludedInProfile {
 #=============================================================================
 
 # Phases whose tasks are independent and safe to run concurrently.
-# Phase 3 = Start/UI tweaks, Phase 4 = Explorer tweaks,
-# Phase 6 = privacy/app feature policy tasks, Phase 7 = system tweaks.
-$script:ParallelPhases = @('3', '4', '6', '7')
+# Phase 3 = Start/UI tweaks, Phase 4 = Explorer tweaks.
+$script:ParallelPhases = @('3', '4')
 
 function Get-HunterTaskRunspaceMaxConcurrency {
     <#
@@ -397,6 +396,10 @@ function Invoke-TaskPhaseParallel {
             try { Set-Variable -Scope Script -Name $kv.Key -Value $kv.Value -Force -ErrorAction SilentlyContinue } catch {}
         }
 
+        # Worker runspaces buffer rollback entries locally. The main thread
+        # persists merged rollback state once after collection.
+        $script:DeferRollbackPersistence = $true
+
         # ── Override Write-Log to use the concurrent buffer ──
         function Write-Log {
             param(
@@ -486,6 +489,7 @@ function Invoke-TaskPhaseParallel {
     }
 
     # ── Collect results ──
+    $rollbackEntriesMerged = $false
     foreach ($job in $jobs) {
         try {
             $output = @($job.PS.EndInvoke($job.Handle))
@@ -556,6 +560,7 @@ function Invoke-TaskPhaseParallel {
                     if (-not [string]::IsNullOrWhiteSpace($entryKey) -and -not $script:RollbackEntryIndex.ContainsKey($entryKey)) {
                         $script:RollbackEntries += $entry
                         $script:RollbackEntryIndex[$entryKey] = $true
+                        $rollbackEntriesMerged = $true
                     }
                 }
             }
@@ -577,6 +582,10 @@ function Invoke-TaskPhaseParallel {
     if ($sharedFlags.ExplorerRestartPending)     { $script:ExplorerRestartPending     = $true }
     if ($sharedFlags.StartSurfaceRestartPending) { $script:StartSurfaceRestartPending = $true }
     if ($sharedFlags.TaskbarReconcilePending)    { $script:TaskbarReconcilePending    = $true }
+
+    if ($rollbackEntriesMerged) {
+        Save-HunterRollbackArtifacts
+    }
 
     # ── Flush log buffer to the log file ──
     $logLine = $null
@@ -606,7 +615,7 @@ function Invoke-TaskExecution {
 
     .DESCRIPTION
         Groups tasks by phase number.  Phases listed in $script:ParallelPhases
-        (3, 4, 6, 7) run their tasks concurrently via a RunspacePool.  All other
+        (3, 4) run their tasks concurrently via a RunspacePool.  All other
         phases execute sequentially.  The Default-user registry hive is kept
         loaded for the duration of each phase so that per-task load/unload
         overhead is eliminated.  Checkpoints are saved once per phase rather

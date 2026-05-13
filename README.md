@@ -33,7 +33,7 @@ $ProgressPreference='SilentlyContinue'; irm https://raw.githubusercontent.com/xo
 ```
 
 The quick-start command sets `$ProgressPreference` first so Windows PowerShell does not render the legacy blue download progress header while it fetches `hunter.ps1`.
-On first remote bootstrap, Hunter stages its private scripts under `%TEMP%\HunterBootstrap` before the normal Hunter banner appears.
+On first remote bootstrap, Hunter stages its internal scripts under `%TEMP%\HunterBootstrap` before the normal Hunter banner appears.
 
 Pinned release:
 
@@ -61,6 +61,7 @@ powershell -ExecutionPolicy Bypass -File .\hunter.ps1
 ## What It Does
 
 - Builds a fixed task catalog and executes it with checkpoint and resume support.
+- Parallelizes only the independent Start/UI and Explorer phases; stateful privacy, app-removal, and system-tuning phases stay serialized so rollback capture and Default-user hive access remain stable.
 - Logs a pre-run execution plan with per-task risk labels before mutation begins.
 - Supports no-mutation `-WhatIf` previews for every execution profile.
 - Applies Windows build-aware UI, privacy, Explorer, cloud, app, and hardware changes, including Recall suppression on supported Windows 11 24H2 builds.
@@ -160,7 +161,7 @@ powershell -ExecutionPolicy Bypass -File .\hunter.ps1 -RunTcpOptimizer -RunOOSU
 | `HUNTER_DISABLE_AUDIO_ENHANCEMENTS=1` | Opt in to disabling Windows audio enhancements. |
 | `HUNTER_DISABLE_SYSTEM_SOUNDS=1` | Opt in to Hunter's silent system sound-scheme change. |
 | `HUNTER_FORCE_TEXT_INPUT_SERVICE_REDIRECT=1` | Opt in to the advanced text-input service redirect. |
-| `HUNTER_TASK_MAX_CONCURRENCY=<n>` | Override Hunter's task runspace-pool ceiling when you want more or less parallelism. |
+| `HUNTER_TASK_MAX_CONCURRENCY=<n>` | Override Hunter's runspace-pool ceiling for the safe parallel phases when you want more or less concurrency. |
 | `HUNTER_LOCAL_USER_PASSWORD=<value>` | Override the managed local-user password if that path is used. |
 
 ### Profiles
@@ -226,7 +227,7 @@ Hunter uses `main` as its single branch bootstrap source:
 $ProgressPreference='SilentlyContinue'; irm https://raw.githubusercontent.com/xobash/hunter/main/hunter.ps1 | iex
 ```
 
-If you create version tags, you can still use those as pinned snapshots. The wrapper logs its release channel and version at startup, and the bootstrap loader still verifies the private asset hashes it downloads.
+If you create version tags, you can still use those as pinned snapshots. The wrapper logs its release channel and version at startup, and the bootstrap loader still verifies the internal script hashes it downloads.
 
 ## Development
 

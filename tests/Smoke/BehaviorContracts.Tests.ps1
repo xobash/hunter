@@ -27,6 +27,9 @@ Describe 'Behavior contracts' {
         $preflightSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Preflight.ps1') -Raw -ErrorAction Stop
         $readmeSource = Get-Content -Path (Join-Path $repoRoot 'README.md') -Raw -ErrorAction Stop
         $registryOpsSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Registry/Operations.ps1') -Raw -ErrorAction Stop
+        $rollbackSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/State/Rollback.ps1') -Raw -ErrorAction Stop
+        $serviceControlSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Services/ServiceControl.ps1') -Raw -ErrorAction Stop
+        $taskbarOpsSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Shortcuts/TaskbarOps.ps1') -Raw -ErrorAction Stop
         $uiSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Tweaks/UI.ps1') -Raw -ErrorAction Stop
         $userSetupSource = Get-Content -Path (Join-Path $repoRoot 'src/Hunter/Private/Tasks/Core/UserSetup.ps1') -Raw -ErrorAction Stop
     }
@@ -203,6 +206,8 @@ Describe 'Behavior contracts' {
     It 'creates restore points automatically in interactive runs and logs a full execution plan with profile-aware risk levels' {
         $preflightSource | Should -Not -Match 'Show-YesNoDialog'
         $preflightSource | Should -Match 'Interactive run detected; creating a restore point before Hunter continues.'
+        $preflightSource | Should -Match "Get-HunterRegistryValueSnapshot -Path \\$systemRestorePath -Name 'SystemRestorePointCreationFrequency'"
+        $preflightSource | Should -Not -Match "Get-ItemProperty -Path \\$systemRestorePath -Name 'SystemRestorePointCreationFrequency'"
         $hunterSource | Should -Match 'function Write-HunterExecutionPlan'
         $hunterSource | Should -Match 'PLANNED EXECUTION SUMMARY:'
         $hunterSource | Should -Match 'Dry-run preview complete\. Re-run without -WhatIf to execute the selected profile\.'
@@ -210,6 +215,7 @@ Describe 'Behavior contracts' {
         $hunterSource | Should -Match 'Profile:\s+\$\(\$script:SelectedProfile\)'
         $hunterSource | Should -Match "'Aggressive', 'Moderate', 'Safe'"
         $hunterSource | Should -Match '\[\{0\}\] \{1\} - \{2\}'
+        $engineSource | Should -Match 'return \[pscustomobject\]@{'
     }
 
     It 'publishes a no-progress bootstrap command and bounds cloud app removal waits' {
@@ -237,9 +243,16 @@ Describe 'Behavior contracts' {
         $cleanupSource | Should -Match 'VALIDATION CHECKS'
     }
 
-    It 'keeps privacy and tweak phases parallelized and exposes a task concurrency override' {
-        $engineSource | Should -Match "\$script:ParallelPhases = @\('3', '4', '6', '7'\)"
+    It 'keeps only safe UI and Explorer phases parallelized and defers rollback persistence to the main thread' {
+        $engineSource | Should -Match "\$script:ParallelPhases = @\('3', '4'\)"
         $engineSource | Should -Match 'function Get-HunterTaskRunspaceMaxConcurrency'
         $engineSource | Should -Match 'HUNTER_TASK_MAX_CONCURRENCY'
+        $engineSource | Should -Match '\$script:DeferRollbackPersistence = \$true'
+        $rollbackSource | Should -Match 'function Save-HunterRollbackArtifacts'
+        $rollbackSource | Should -Match 'Save-HunterRollbackArtifacts'
+        $serviceControlSource | Should -Match 'function Get-HunterScheduledTaskState'
+        $serviceControlSource | Should -Match 'schtasks\.exe'
+        $taskbarOpsSource | Should -Match "Hunter-TaskbarPolicyCleanup"
+        $taskbarOpsSource | Should -Not -Match "Get-ScheduledTask -TaskName 'Hunter-TaskbarPolicyCleanup'"
     }
 }

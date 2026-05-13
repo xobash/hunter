@@ -25,7 +25,7 @@ $script:HunterReleaseVersion = '2.0.3-main'
 $script:HunterBootstrapRevision = 'main'
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = '874dff853e613bef1dd6bea2d3f3b769ac0a34bc17b54a80d25938dc6b9c6c25'
+$script:BootstrapLoaderSha256 = '5822ae2b3d310535d70530ec3af6bbf564055c52b129bc3fa029ff29c614b255'
 
 function Write-BootstrapStatus {
     param([Parameter(Mandatory)][string]$Message)
@@ -52,7 +52,7 @@ if ([string]::IsNullOrWhiteSpace($bootstrapLoaderPath)) {
     $bootstrapLoaderPath = Join-Path $script:HunterSourceRoot $script:BootstrapLoaderRelativePath
     $bootstrapLoaderUri = '{0}/{1}' -f $script:HunterRemoteRoot.TrimEnd('/'), ($script:BootstrapLoaderRelativePath -replace '\\', '/')
     $bootstrapLoaderDirectory = Split-Path -Parent $bootstrapLoaderPath
-    Write-BootstrapStatus ("Bootstrapping Hunter private scripts into {0}" -f $script:HunterSourceRoot)
+    Write-BootstrapStatus ("Bootstrapping Hunter internal scripts into {0}" -f $script:HunterSourceRoot)
     if (-not (Test-Path $bootstrapLoaderDirectory)) {
         New-Item -ItemType Directory -Path $bootstrapLoaderDirectory -Force | Out-Null
     }
@@ -82,11 +82,11 @@ if ([string]::IsNullOrWhiteSpace($bootstrapLoaderPath)) {
 }
 
 . ([scriptblock]::Create((Get-Content -Path $bootstrapLoaderPath -Raw -Encoding UTF8)))
-Write-BootstrapStatus 'Syncing Hunter private assets...'
+Write-BootstrapStatus 'Syncing Hunter internal scripts...'
 Initialize-HunterPrivateSourceTree `
     -SourceRoot $script:HunterSourceRoot `
     -RemoteRoot $(if ($canUseLocalHunterPrivateLayers) { '' } else { $script:HunterRemoteRoot })
-Write-BootstrapStatus 'Loading Hunter private scripts...'
+Write-BootstrapStatus 'Loading Hunter internal scripts...'
 foreach ($privateScript in @(Get-HunterPrivateScriptManifest)) {
     $privateScriptPath = Join-Path $script:HunterSourceRoot ([string]$privateScript.RelativePath)
     . ([scriptblock]::Create((Get-Content -Path $privateScriptPath -Raw -Encoding UTF8)))

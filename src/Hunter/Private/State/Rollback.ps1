@@ -1,6 +1,7 @@
 $script:RollbackManifestSchemaVersion = 1
 $script:RollbackEntries = @()
 $script:RollbackEntryIndex = @{}
+$script:DeferRollbackPersistence = $false
 
 function ConvertTo-HunterPowerShellLiteral {
     param([object]$Value)
@@ -101,6 +102,15 @@ function Save-HunterRollbackManifest {
     Initialize-HunterDirectory $script:RollbackRoot
     $payload = Get-HunterRollbackManifestPayload
     $payload | ConvertTo-Json -Depth 8 | Set-Content -Path $script:RollbackManifestPath -Encoding UTF8 -Force
+}
+
+function Save-HunterRollbackArtifacts {
+    if ($script:DeferRollbackPersistence) {
+        return
+    }
+
+    Save-HunterRollbackManifest
+    Export-HunterRollbackScript
 }
 
 function Export-HunterRollbackScript {
@@ -296,6 +306,20 @@ function Export-HunterRollbackScript {
         '    Set-ItemProperty -Path $serviceKeyPath -Name ''Start'' -Value $startValue -Force',
         '}',
         '',
+        'function Get-HunterScheduledTaskFullName {',
+        '    param(',
+        '        [Parameter(Mandatory)][string]$TaskPath,',
+        '        [Parameter(Mandatory)][string]$TaskName',
+        '    )',
+        '',
+        '    $normalizedTaskPath = if ($TaskPath.StartsWith(''\'\'')) { $TaskPath } else { ''\'' + $TaskPath }',
+        '    if (-not $normalizedTaskPath.EndsWith(''\'\'')) {',
+        '        $normalizedTaskPath += ''\''',
+        '    }',
+        '',
+        '    return ($normalizedTaskPath + $TaskName)',
+        '}',
+        '',
         'function Restore-HunterScheduledTaskState {',
         '    param(',
         '        [Parameter(Mandatory)][string]$TaskPath,',
@@ -303,15 +327,16 @@ function Export-HunterRollbackScript {
         '        [Parameter(Mandatory)][bool]$Disabled',
         '    )',
         '',
-        '    $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue',
-        '    if ($null -eq $task) {',
+        '    $taskFullName = Get-HunterScheduledTaskFullName -TaskPath $TaskPath -TaskName $TaskName',
+        '    & schtasks.exe /Query /TN $taskFullName *> $null',
+        '    if ([int]$LASTEXITCODE -ne 0) {',
         '        return',
         '    }',
         '',
         '    if ($Disabled) {',
-        '        Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null',
+        '        & schtasks.exe /Change /TN $taskFullName /Disable *> $null',
         '    } else {',
-        '        Enable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null',
+        '        & schtasks.exe /Change /TN $taskFullName /Enable *> $null',
         '    }',
         '}',
         '',
@@ -362,15 +387,14 @@ function Initialize-HunterRollbackState {
                 $script:RollbackEntryIndex[[string]$entry.Key] = $true
             }
 
-            Export-HunterRollbackScript
+            Save-HunterRollbackArtifacts
             return
         } catch {
             Write-Log "Failed to load persisted rollback manifest: $($_.Exception.Message)" 'WARN'
         }
     }
 
-    Save-HunterRollbackManifest
-    Export-HunterRollbackScript
+    Save-HunterRollbackArtifacts
 }
 
 function Register-HunterRollbackEntry {
@@ -394,8 +418,7 @@ function Register-HunterRollbackEntry {
 
     $script:RollbackEntries += $entry
     $script:RollbackEntryIndex[$Key] = $true
-    Save-HunterRollbackManifest
-    Export-HunterRollbackScript
+    Save-HunterRollbackArtifacts
 }
 
 function Register-HunterManualRestoreNote {
@@ -491,23 +514,30 @@ function Get-HunterDefaultUserRegistryValueSnapshot {
         [Parameter(Mandatory)][string]$Name
     )
 
-    $defaultHive = Resolve-HunterRollbackDefaultUserHivePath
-    if ([string]::IsNullOrWhiteSpace([string]$defaultHive) -or -not (Test-Path $defaultHive)) {
-        return [pscustomobject]@{
-            Exists = $false
-            Value  = $null
-            Type   = $null
-        }
-    }
-
-    $hiveName = 'HKU\HunterRollbackDefault'
     try {
-        if (-not (Invoke-RegHiveCommandWithRetry -Action Load -HiveName $hiveName -HivePath $defaultHive)) {
-            throw 'Failed to load the Default user hive.'
+        $activeHiveRoot = $null
+        if ($script:DefaultUserHiveSessionActive -and $script:DefaultUserHiveSessionHiveName -eq 'HKU\HunterDefault') {
+            $activeHiveRoot = Resolve-RegistryHivePath -HiveName $script:DefaultUserHiveSessionHiveName
         }
 
-        $hiveRoot = Resolve-RegistryHivePath -HiveName $hiveName
-        return (Get-HunterRegistryValueSnapshot -Path "$hiveRoot\$SubPath" -Name $Name)
+        if (-not [string]::IsNullOrWhiteSpace([string]$activeHiveRoot) -and (Test-Path $activeHiveRoot)) {
+            return (Get-HunterRegistryValueSnapshot -Path "$activeHiveRoot\$SubPath" -Name $Name)
+        }
+
+        $defaultHive = Resolve-HunterRollbackDefaultUserHivePath
+        if ([string]::IsNullOrWhiteSpace([string]$defaultHive) -or -not (Test-Path $defaultHive)) {
+            return [pscustomobject]@{
+                Exists = $false
+                Value  = $null
+                Type   = $null
+            }
+        }
+
+        return (Invoke-WithUserHive -HiveName 'HKU\HunterRollbackDefault' -HivePath $defaultHive -Action {
+            param($HiveRoot)
+
+            Get-HunterRegistryValueSnapshot -Path "$HiveRoot\$SubPath" -Name $Name
+        })
     } catch {
         Write-Log "Failed to capture Default user registry rollback snapshot for $SubPath\$Name : $($_.Exception.Message)" 'WARN'
         return [pscustomobject]@{
@@ -515,40 +545,41 @@ function Get-HunterDefaultUserRegistryValueSnapshot {
             Value  = $null
             Type   = $null
         }
-    } finally {
-        [GC]::Collect()
-        Invoke-RegHiveCommandWithRetry -Action Unload -HiveName $hiveName | Out-Null
     }
 }
 
 function Get-HunterDefaultUserRegistryDefaultValueSnapshot {
     param([Parameter(Mandatory)][string]$SubPath)
 
-    $defaultHive = Resolve-HunterRollbackDefaultUserHivePath
-    if ([string]::IsNullOrWhiteSpace([string]$defaultHive) -or -not (Test-Path $defaultHive)) {
-        return [pscustomobject]@{
-            Exists = $false
-            Value  = $null
-        }
-    }
-
-    $hiveName = 'HKU\HunterRollbackDefault'
     try {
-        if (-not (Invoke-RegHiveCommandWithRetry -Action Load -HiveName $hiveName -HivePath $defaultHive)) {
-            throw 'Failed to load the Default user hive.'
+        $activeHiveRoot = $null
+        if ($script:DefaultUserHiveSessionActive -and $script:DefaultUserHiveSessionHiveName -eq 'HKU\HunterDefault') {
+            $activeHiveRoot = Resolve-RegistryHivePath -HiveName $script:DefaultUserHiveSessionHiveName
         }
 
-        $hiveRoot = Resolve-RegistryHivePath -HiveName $hiveName
-        return (Get-HunterRegistryDefaultValueSnapshot -Path "$hiveRoot\$SubPath")
+        if (-not [string]::IsNullOrWhiteSpace([string]$activeHiveRoot) -and (Test-Path $activeHiveRoot)) {
+            return (Get-HunterRegistryDefaultValueSnapshot -Path "$activeHiveRoot\$SubPath")
+        }
+
+        $defaultHive = Resolve-HunterRollbackDefaultUserHivePath
+        if ([string]::IsNullOrWhiteSpace([string]$defaultHive) -or -not (Test-Path $defaultHive)) {
+            return [pscustomobject]@{
+                Exists = $false
+                Value  = $null
+            }
+        }
+
+        return (Invoke-WithUserHive -HiveName 'HKU\HunterRollbackDefault' -HivePath $defaultHive -Action {
+            param($HiveRoot)
+
+            Get-HunterRegistryDefaultValueSnapshot -Path "$HiveRoot\$SubPath"
+        })
     } catch {
         Write-Log "Failed to capture Default user registry default-value rollback snapshot for $SubPath : $($_.Exception.Message)" 'WARN'
         return [pscustomobject]@{
             Exists = $false
             Value  = $null
         }
-    } finally {
-        [GC]::Collect()
-        Invoke-RegHiveCommandWithRetry -Action Unload -HiveName $hiveName | Out-Null
     }
 }
 
@@ -726,12 +757,12 @@ function Get-HunterScheduledTaskDisabledSnapshot {
     )
 
     try {
-        $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
-        if ($null -eq $task) {
+        $taskState = Get-HunterScheduledTaskState -TaskPath $TaskPath -TaskName $TaskName
+        if ([string]::IsNullOrWhiteSpace($taskState)) {
             return $null
         }
 
-        return ([string]$task.State -eq 'Disabled')
+        return ($taskState -eq 'Disabled')
     } catch {
         Write-Log "Failed to capture scheduled-task rollback snapshot for ${TaskPath}${TaskName}: $($_.Exception.Message)" 'WARN'
         return $null

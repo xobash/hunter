@@ -131,6 +131,52 @@ function Test-ShouldDisablePrintSpooler {
     }
 }
 
+function Get-HunterScheduledTaskFullName {
+    param(
+        [Parameter(Mandatory)][string]$TaskPath,
+        [Parameter(Mandatory)][string]$TaskName
+    )
+
+    $normalizedTaskPath = if ($TaskPath.StartsWith('\')) { $TaskPath } else { "\" + $TaskPath }
+    if (-not $normalizedTaskPath.EndsWith('\')) {
+        $normalizedTaskPath += '\'
+    }
+
+    return ($normalizedTaskPath + $TaskName)
+}
+
+function Get-HunterScheduledTaskState {
+    param(
+        [Parameter(Mandatory)][string]$TaskPath,
+        [Parameter(Mandatory)][string]$TaskName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($TaskPath) -or [string]::IsNullOrWhiteSpace($TaskName)) {
+        return ''
+    }
+
+    try {
+        $schtasksPath = Get-NativeSystemExecutablePath -FileName 'schtasks.exe'
+        $taskFullName = Get-HunterScheduledTaskFullName -TaskPath $TaskPath -TaskName $TaskName
+        $queryOutput = @(& $schtasksPath /Query /TN $taskFullName /FO LIST /V 2>$null)
+        if ([int]$LASTEXITCODE -ne 0) {
+            return ''
+        }
+
+        foreach ($line in $queryOutput) {
+            $lineText = [string]$line
+            if ($lineText -match '^\s*(Scheduled Task State|Status):\s*(.+?)\s*$') {
+                return $Matches[2].Trim()
+            }
+        }
+
+        return 'Ready'
+    } catch {
+        Write-Log "Failed to query scheduled task state ${TaskPath}${TaskName}: $($_.Exception.Message)" 'WARN'
+        return ''
+    }
+}
+
 
 function Disable-ScheduledTaskIfPresent {
     param(
@@ -144,19 +190,21 @@ function Disable-ScheduledTaskIfPresent {
     }
 
     try {
-        $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
-        if ($null -eq $task) {
+        $schtasksPath = Get-NativeSystemExecutablePath -FileName 'schtasks.exe'
+        $taskFullName = Get-HunterScheduledTaskFullName -TaskPath $TaskPath -TaskName $TaskName
+        $taskState = Get-HunterScheduledTaskState -TaskPath $TaskPath -TaskName $TaskName
+        if ([string]::IsNullOrWhiteSpace($taskState)) {
             return $false
         }
 
         Register-HunterScheduledTaskRollback -TaskPath $TaskPath -TaskName $TaskName
 
-        if ($task.State -eq 'Disabled') {
+        if ($taskState -eq 'Disabled') {
             Write-Log "Scheduled task already disabled: $DisplayName" 'INFO'
             return $true
         }
 
-        Disable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
+        Invoke-NativeCommandChecked -FilePath $schtasksPath -ArgumentList @('/Change', '/TN', $taskFullName, '/Disable') | Out-Null
         Write-Log "Scheduled task disabled: $DisplayName" 'INFO'
         return $true
     } catch {
@@ -177,19 +225,21 @@ function Enable-ScheduledTaskIfPresent {
     }
 
     try {
-        $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
-        if ($null -eq $task) {
+        $schtasksPath = Get-NativeSystemExecutablePath -FileName 'schtasks.exe'
+        $taskFullName = Get-HunterScheduledTaskFullName -TaskPath $TaskPath -TaskName $TaskName
+        $taskState = Get-HunterScheduledTaskState -TaskPath $TaskPath -TaskName $TaskName
+        if ([string]::IsNullOrWhiteSpace($taskState)) {
             return $false
         }
 
         Register-HunterScheduledTaskRollback -TaskPath $TaskPath -TaskName $TaskName
 
-        if ($task.State -ne 'Disabled') {
+        if ($taskState -ne 'Disabled') {
             Write-Log "Scheduled task already enabled: $DisplayName" 'INFO'
             return $true
         }
 
-        Enable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop | Out-Null
+        Invoke-NativeCommandChecked -FilePath $schtasksPath -ArgumentList @('/Change', '/TN', $taskFullName, '/Enable') | Out-Null
         Write-Log "Scheduled task enabled: $DisplayName" 'INFO'
         return $true
     } catch {
@@ -236,8 +286,8 @@ function Test-ScheduledTaskDisabledOrMissing {
     }
 
     try {
-        $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
-        return ($null -eq $task -or $task.State -eq 'Disabled')
+        $taskState = Get-HunterScheduledTaskState -TaskPath $TaskPath -TaskName $TaskName
+        return ([string]::IsNullOrWhiteSpace($taskState) -or $taskState -eq 'Disabled')
     } catch {
         Write-Log "Failed to query scheduled task ${TaskPath}${TaskName}: $($_.Exception.Message)" 'WARN'
         return $false

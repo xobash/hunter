@@ -13,16 +13,16 @@ function Invoke-CreateRestorePoint {
     $restorePointJob = $null
     $restorePointTimeoutSeconds = 300
     $systemRestorePath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
+    $originalFrequencySnapshot = $null
     $originalFrequencyExists = $false
     $originalFrequencyValue = $null
 
     try {
         if (Test-Path $systemRestorePath) {
-            try {
-                $existingFrequency = Get-ItemProperty -Path $systemRestorePath -Name 'SystemRestorePointCreationFrequency' -ErrorAction Stop
-                $originalFrequencyValue = [int]$existingFrequency.SystemRestorePointCreationFrequency
-                $originalFrequencyExists = $true
-            } catch [System.Management.Automation.ItemNotFoundException] {
+            $originalFrequencySnapshot = Get-HunterRegistryValueSnapshot -Path $systemRestorePath -Name 'SystemRestorePointCreationFrequency'
+            $originalFrequencyExists = [bool]$originalFrequencySnapshot.Exists
+            if ($originalFrequencyExists -and $null -ne $originalFrequencySnapshot.Value) {
+                $originalFrequencyValue = [int]$originalFrequencySnapshot.Value
             }
         }
 
@@ -80,14 +80,9 @@ function Invoke-CreateRestorePoint {
         } else {
             Remove-RegistryValueIfPresent -Path $systemRestorePath -Name 'SystemRestorePointCreationFrequency'
             if (Test-Path $systemRestorePath) {
-                try {
-                    $leftoverFrequency = Get-ItemProperty -Path $systemRestorePath -Name 'SystemRestorePointCreationFrequency' -ErrorAction Stop
-                    if ($null -ne $leftoverFrequency) {
-                        Write-Log 'Failed to remove the temporary SystemRestorePointCreationFrequency override.' 'ERROR'
-                    }
-                } catch [System.Management.Automation.ItemNotFoundException] {
-                } catch {
-                    Write-Log "Failed to verify cleanup of SystemRestorePointCreationFrequency: $($_.Exception.Message)" 'ERROR'
+                $cleanupSnapshot = Get-HunterRegistryValueSnapshot -Path $systemRestorePath -Name 'SystemRestorePointCreationFrequency'
+                if ([bool]$cleanupSnapshot.Exists) {
+                    Write-Log 'Failed to remove the temporary SystemRestorePointCreationFrequency override.' 'ERROR'
                 }
             }
         }

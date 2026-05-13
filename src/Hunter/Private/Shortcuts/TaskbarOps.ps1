@@ -170,9 +170,11 @@ function Clear-StaleStartCustomizationPolicies {
         Remove-RegistryValueIfPresent -Path $policyPath -Name 'LockedStartLayout'
 
         try {
-            $cleanupTask = Get-ScheduledTask -TaskName 'Hunter-TaskbarPolicyCleanup' -ErrorAction SilentlyContinue
-            if ($null -ne $cleanupTask) {
-                Unregister-ScheduledTask -TaskName 'Hunter-TaskbarPolicyCleanup' -Confirm:$false -ErrorAction Stop | Out-Null
+            $schtasksPath = Get-NativeSystemExecutablePath -FileName 'schtasks.exe'
+            $cleanupTaskFullName = Get-HunterScheduledTaskFullName -TaskPath '\' -TaskName 'Hunter-TaskbarPolicyCleanup'
+            & $schtasksPath /Query /TN $cleanupTaskFullName *> $null
+            if ([int]$LASTEXITCODE -eq 0) {
+                Invoke-NativeCommandChecked -FilePath $schtasksPath -ArgumentList @('/Delete', '/TN', $cleanupTaskFullName, '/F') | Out-Null
                 Write-Log "Removed stale scheduled task 'Hunter-TaskbarPolicyCleanup'." 'INFO'
             }
         } catch {
