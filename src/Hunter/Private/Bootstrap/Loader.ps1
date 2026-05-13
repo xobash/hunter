@@ -102,6 +102,62 @@ function Test-HunterBootstrapAssetIntegrity {
     return ($actualHash -eq $ExpectedSha256.ToLowerInvariant())
 }
 
+function Write-HunterBootstrapStatusMessage {
+    param([Parameter(Mandatory)][string]$Message)
+
+    try {
+        [Console]::WriteLine("[Hunter] $Message")
+    } catch {
+    }
+}
+
+function Invoke-HunterBootstrapDownload {
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][string]$Description,
+        [int]$TimeoutSeconds = 300,
+        [int]$MaxAttempts = 4
+    )
+
+    $attempt = 0
+    $lastError = $null
+
+    while ($attempt -lt $MaxAttempts) {
+        $attempt++
+
+        try {
+            if ($attempt -gt 1) {
+                Write-HunterBootstrapStatusMessage ("Retrying {0} ({1}/{2})..." -f $Description, $attempt, $MaxAttempts)
+            }
+
+            return (Invoke-WebRequest `
+                -Uri $Uri `
+                -UseBasicParsing `
+                -MaximumRedirection 10 `
+                -TimeoutSec $TimeoutSeconds `
+                -Headers @{ 'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Hunter/2.0' } `
+                -ErrorAction Stop)
+        } catch {
+            $lastError = $_
+            if ($attempt -ge $MaxAttempts) {
+                break
+            }
+
+            $delaySeconds = switch ($attempt) {
+                1 { 3 }
+                2 { 8 }
+                3 { 15 }
+                default { 20 }
+            }
+
+            Write-HunterBootstrapStatusMessage ("{0} failed on attempt {1}/{2}: {3}. Waiting {4}s before retry." -f $Description, $attempt, $MaxAttempts, $_.Exception.Message, $delaySeconds)
+            Start-Sleep -Seconds $delaySeconds
+        }
+    }
+
+    throw $lastError
+}
+
 function Save-HunterBootstrapAsset {
     param(
         [Parameter(Mandatory)][string]$SourceRoot,
@@ -117,26 +173,28 @@ function Save-HunterBootstrapAsset {
     }
 
     $downloadUri = '{0}/{1}' -f $RemoteRoot.TrimEnd('/'), ($RelativePath -replace '\\', '/')
-    $response = Invoke-WebRequest `
-        -Uri $downloadUri `
-        -UseBasicParsing `
-        -MaximumRedirection 10 `
-        -TimeoutSec 120 `
-        -Headers @{ 'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Hunter/2.0' } `
-        -ErrorAction Stop
+    $temporaryPath = '{0}.download' -f $destinationPath
 
-    if ($response.Content -is [byte[]]) {
-        [System.IO.File]::WriteAllBytes($destinationPath, $response.Content)
-    } else {
-        $utf8NoBomEncoding = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($destinationPath, [string]$response.Content, $utf8NoBomEncoding)
-    }
+    try {
+        $response = Invoke-HunterBootstrapDownload -Uri $downloadUri -Description $RelativePath
 
-    if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
-        $actualHash = (Get-FileHash -Path $destinationPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
-        if ($actualHash -ne $ExpectedSha256.ToLowerInvariant()) {
-            throw "Integrity check failed for ${RelativePath}. Expected ${ExpectedSha256}, got ${actualHash}"
+        if ($response.Content -is [byte[]]) {
+            [System.IO.File]::WriteAllBytes($temporaryPath, $response.Content)
+        } else {
+            $utf8NoBomEncoding = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($temporaryPath, [string]$response.Content, $utf8NoBomEncoding)
         }
+
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
+            $actualHash = (Get-FileHash -Path $temporaryPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+            if ($actualHash -ne $ExpectedSha256.ToLowerInvariant()) {
+                throw "Integrity check failed for ${RelativePath}. Expected ${ExpectedSha256}, got ${actualHash}"
+            }
+        }
+
+        Move-Item -Path $temporaryPath -Destination $destinationPath -Force
+    } finally {
+        Remove-Item -Path $temporaryPath -Force -ErrorAction SilentlyContinue
     }
 }
 

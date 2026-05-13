@@ -25,7 +25,7 @@ $script:HunterReleaseVersion = '2.0.3-main'
 $script:HunterBootstrapRevision = 'main'
 $script:HunterRemoteRoot = 'https://raw.githubusercontent.com/xobash/hunter/{0}' -f $script:HunterBootstrapRevision
 $script:BootstrapLoaderRelativePath = 'src\Hunter\Private\Bootstrap\Loader.ps1'
-$script:BootstrapLoaderSha256 = '6b55cb92d3ec981e1552694594e979756968af7c71946ab43d91b1b0d6eaf3b1'
+$script:BootstrapLoaderSha256 = '1d6543b9b1be2029c552888b10ea66ce607a99e4210b040f262dc8a05c88d20c'
 
 function Write-BootstrapStatus {
     param([Parameter(Mandatory)][string]$Message)
@@ -34,6 +34,53 @@ function Write-BootstrapStatus {
         [Console]::WriteLine("[Hunter] $Message")
     } catch {
     }
+}
+
+function Invoke-BootstrapWebRequest {
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][string]$Description,
+        [int]$TimeoutSeconds = 300,
+        [int]$MaxAttempts = 4
+    )
+
+    $attempt = 0
+    $lastError = $null
+
+    while ($attempt -lt $MaxAttempts) {
+        $attempt++
+
+        try {
+            if ($attempt -gt 1) {
+                Write-BootstrapStatus ("Retrying {0} ({1}/{2})..." -f $Description, $attempt, $MaxAttempts)
+            }
+
+            return (Invoke-WebRequest `
+                -Uri $Uri `
+                -UseBasicParsing `
+                -MaximumRedirection 10 `
+                -TimeoutSec $TimeoutSeconds `
+                -Headers @{ 'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Hunter/2.0' } `
+                -ErrorAction Stop)
+        } catch {
+            $lastError = $_
+            if ($attempt -ge $MaxAttempts) {
+                break
+            }
+
+            $delaySeconds = switch ($attempt) {
+                1 { 3 }
+                2 { 8 }
+                3 { 15 }
+                default { 20 }
+            }
+
+            Write-BootstrapStatus ("{0} failed on attempt {1}/{2}: {3}. Waiting {4}s before retry." -f $Description, $attempt, $MaxAttempts, $_.Exception.Message, $delaySeconds)
+            Start-Sleep -Seconds $delaySeconds
+        }
+    }
+
+    throw $lastError
 }
 
 $bootstrapLoaderPath = $null
@@ -58,13 +105,7 @@ if ([string]::IsNullOrWhiteSpace($bootstrapLoaderPath)) {
     }
 
     Write-BootstrapStatus 'Downloading bootstrap loader...'
-    $bootstrapLoaderResponse = Invoke-WebRequest `
-        -Uri $bootstrapLoaderUri `
-        -UseBasicParsing `
-        -MaximumRedirection 10 `
-        -TimeoutSec 120 `
-        -Headers @{ 'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Hunter/2.0' } `
-        -ErrorAction Stop
+    $bootstrapLoaderResponse = Invoke-BootstrapWebRequest -Uri $bootstrapLoaderUri -Description $script:BootstrapLoaderRelativePath
     $bootstrapLoaderContent = $bootstrapLoaderResponse.Content
     if ($bootstrapLoaderContent -is [byte[]]) {
         [System.IO.File]::WriteAllBytes($bootstrapLoaderPath, $bootstrapLoaderContent)
